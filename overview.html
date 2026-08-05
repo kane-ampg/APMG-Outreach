@@ -1,0 +1,830 @@
+<title>APMG Lead Desk — Overview</title>
+<meta name="description" content="Command-dossier lead-generation telemetry dashboard for APMG Property Maintenance Services.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   APMG LEAD DESK — "DISPATCH DOSSIER"
+   Command-dossier / editorial direction. Black + red, dark default.
+   ============================================================ */
+
+:root{
+  /* ---- Type ---- */
+  --font-display: "Archivo", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --font-body:    "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-data:    "IBM Plex Mono", ui-monospace, "SFMono-Regular", "Consolas", monospace;
+
+  /* ---- DARK THEME (default) ---- */
+  --canvas:      #0a0908;   /* near-black, warm carbon (not blue-black) */
+  --surface:     #131110;   /* card field */
+  --surface-2:   #1b1817;   /* raised / header strip */
+  --line:        #2a2624;   /* hairline rule */
+  --line-strong: #3a3431;
+  --ink:         #f4f1ee;   /* primary text, warm bone */
+  --ink-muted:   #a39c96;   /* secondary */
+  --ink-faint:   #6f6862;   /* tertiary / captions */
+
+  --signal:      #ff2b1c;   /* SIGNAL RED — live telemetry only, LED-bright */
+  --signal-deep: #e10600;   /* APMG brand red — primary accent, fills */
+  --oxblood:     #5e0c10;   /* structural red — banners, meaningful surfaces */
+  --oxblood-2:   #7a0f14;
+
+  --pos:         #43d17a;   /* qualified / positive delta */
+  --neg:         #ff5a4d;   /* drop / negative delta (red-leaning, on-brand) */
+
+  --focus:       #ff6a5e;
+
+  --shadow: 0 1px 0 rgba(255,255,255,.02), 0 18px 40px -28px rgba(0,0,0,.9);
+
+  --maxw: 1320px;
+  --rail: 256px;
+}
+
+:root[data-theme="light"]{
+  /* ---- LIGHT THEME (first-class, not a wash-out) ----
+     Reinterpreted as "printed dossier on warm paper", not inverted dark. */
+  --canvas:      #ece7e0;   /* warm manila paper */
+  --surface:     #f6f3ee;   /* card stock */
+  --surface-2:   #11100f;   /* INK STRIP — dark furniture stays dark in light mode */
+  --line:        #d6cec3;
+  --line-strong: #b9ad9d;
+  --ink:         #1a1613;   /* near-black ink */
+  --ink-muted:   #5b524a;
+  --ink-faint:   #8a7f74;
+
+  --signal:      #d6160a;   /* slightly deepened so it hits AA on paper */
+  --signal-deep: #b91000;
+  --oxblood:     #7a0f14;
+  --oxblood-2:   #5e0c10;
+
+  --pos:         #1f7a45;
+  --neg:         #c01d12;
+
+  --focus:       #b91000;
+
+  --shadow: 0 1px 0 rgba(255,255,255,.6), 0 12px 30px -24px rgba(60,40,30,.55);
+}
+
+*{ box-sizing:border-box; }
+html{ -webkit-text-size-adjust:100%; }
+body{
+  margin:0;
+  background:var(--canvas);
+  color:var(--ink);
+  font-family:var(--font-body);
+  font-size:15px;
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+}
+
+/* Carbon grain: barely-there diagonal texture so black isn't flat void */
+body::before{
+  content:"";
+  position:fixed; inset:0; pointer-events:none; z-index:0;
+  background-image:repeating-linear-gradient(135deg,
+     rgba(255,255,255,.012) 0 1px, transparent 1px 7px);
+  opacity:.7;
+}
+:root[data-theme="light"] body::before{
+  background-image:repeating-linear-gradient(135deg,
+     rgba(40,30,20,.022) 0 1px, transparent 1px 7px);
+}
+
+/* ---------- Accessibility ---------- */
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible{
+  outline:2px solid var(--focus);
+  outline-offset:2px;
+}
+.skip{
+  position:absolute; left:8px; top:-44px; z-index:50;
+  background:var(--signal-deep); color:#fff; padding:8px 14px;
+  font:600 12px/1 var(--font-data); letter-spacing:.08em; text-transform:uppercase;
+  transition:top .15s;
+}
+.skip:focus{ top:8px; }
+
+/* ============================================================ LAYOUT */
+.app{
+  position:relative; z-index:1;
+  display:grid;
+  grid-template-columns:var(--rail) 1fr;
+  min-height:100vh;
+}
+
+/* ---------------- SIDEBAR ---------------- */
+.rail{
+  position:sticky; top:0; align-self:start;
+  height:100vh; overflow-y:auto;
+  background:var(--surface-2);
+  border-right:1px solid var(--line);
+  display:flex; flex-direction:column;
+}
+:root[data-theme="light"] .rail{ color:#ece7e0; }
+
+.brand{
+  display:flex; align-items:center; gap:10px;
+  padding:22px 20px 18px;
+  border-bottom:1px solid rgba(255,255,255,.07);
+}
+.brand .mark{
+  font-family:var(--font-display);
+  font-weight:900; font-size:21px; letter-spacing:.04em;
+  color:#f4f1ee; line-height:1;
+}
+.brand .mark b{ color:var(--signal); font-weight:900; }
+.brand .sub{
+  font-family:var(--font-data); font-size:9.5px; letter-spacing:.22em;
+  text-transform:uppercase; color:#8c8580; margin-top:5px;
+}
+
+/* dossier file tab on the rail header */
+.filetab{
+  font-family:var(--font-data); font-size:9px; letter-spacing:.2em;
+  color:#cdb5b3; background:var(--oxblood);
+  padding:3px 8px; display:inline-block; margin-left:auto;
+  border:1px solid rgba(255,255,255,.08);
+}
+
+.navwrap{ padding:16px 12px; flex:1; }
+.navlabel{
+  font-family:var(--font-data); font-size:9.5px; letter-spacing:.22em;
+  text-transform:uppercase; color:#6f6862; padding:0 10px; margin:14px 0 8px;
+}
+.navlabel:first-child{ margin-top:0; }
+.nav{ list-style:none; margin:0; padding:0; }
+.nav a{
+  display:flex; align-items:center; gap:11px;
+  padding:9px 10px; margin-bottom:2px;
+  color:#b8b1ab; text-decoration:none;
+  font-size:13.5px; font-weight:500;
+  border-left:2px solid transparent;
+  transition:background .14s, color .14s, border-color .14s;
+}
+.nav a .ic{
+  width:16px; height:16px; flex:none; opacity:.7;
+  display:grid; place-items:center;
+}
+.nav a:hover{ background:rgba(255,255,255,.04); color:#f4f1ee; }
+.nav a[aria-current="page"]{
+  background:linear-gradient(90deg, rgba(225,6,0,.16), transparent 80%);
+  color:#fff; font-weight:600;
+  border-left-color:var(--signal);
+}
+.nav a[aria-current="page"] .ic{ opacity:1; color:var(--signal); }
+.nav .count{
+  margin-left:auto; font-family:var(--font-data); font-size:10.5px;
+  color:#8c8580; letter-spacing:.04em;
+}
+
+.railfoot{
+  padding:14px 16px; border-top:1px solid rgba(255,255,255,.07);
+  font-family:var(--font-data); font-size:10px; letter-spacing:.04em;
+  color:#7a736d; line-height:1.7;
+}
+.railfoot .op{ color:#cdb5b3; }
+
+/* ---------------- MAIN ---------------- */
+.main{ display:flex; flex-direction:column; min-width:0; }
+
+/* Top command bar */
+.topbar{
+  display:flex; align-items:center; gap:16px;
+  padding:14px 28px;
+  background:var(--surface);
+  border-bottom:1px solid var(--line);
+  position:sticky; top:0; z-index:20;
+}
+.hamb{
+  display:none; background:none; border:1px solid var(--line-strong);
+  color:var(--ink); width:38px; height:38px; cursor:pointer;
+}
+.crumbs{
+  font-family:var(--font-data); font-size:11px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-faint);
+}
+.crumbs b{ color:var(--ink); font-weight:600; }
+
+/* SIGNATURE: live telemetry ticker */
+.signal{
+  margin-left:auto;
+  display:flex; align-items:center; gap:10px;
+  font-family:var(--font-data); font-size:11px; letter-spacing:.08em;
+  color:var(--ink-muted);
+  padding:6px 12px;
+  border:1px solid var(--line);
+  background:linear-gradient(90deg, rgba(255,43,28,.06), transparent);
+}
+.signal .dot{
+  width:8px; height:8px; border-radius:50%;
+  background:var(--signal); flex:none;
+  box-shadow:0 0 0 0 rgba(255,43,28,.6);
+  animation:pulse 2.4s infinite;
+}
+@keyframes pulse{
+  0%{ box-shadow:0 0 0 0 rgba(255,43,28,.55); }
+  70%{ box-shadow:0 0 0 7px rgba(255,43,28,0); }
+  100%{ box-shadow:0 0 0 0 rgba(255,43,28,0); }
+}
+.signal .live{ color:var(--signal); font-weight:600; }
+.signal .sep{ color:var(--ink-faint); }
+
+.themebtn{
+  background:none; border:1px solid var(--line-strong);
+  color:var(--ink); cursor:pointer;
+  font-family:var(--font-data); font-size:10.5px; letter-spacing:.1em;
+  text-transform:uppercase; padding:8px 12px;
+  display:flex; align-items:center; gap:7px;
+  transition:border-color .14s, color .14s;
+}
+.themebtn:hover{ border-color:var(--signal); color:var(--signal); }
+
+/* Page scroll region */
+.content{ padding:28px; max-width:var(--maxw); width:100%; }
+
+/* Page masthead — the dossier header block */
+.masthead{
+  display:flex; align-items:flex-end; justify-content:space-between;
+  gap:20px; flex-wrap:wrap;
+  padding-bottom:18px; margin-bottom:24px;
+  border-bottom:2px solid var(--ink);
+  position:relative;
+}
+.masthead::after{ /* red underscore tick at the rule's start */
+  content:""; position:absolute; left:0; bottom:-2px;
+  width:64px; height:2px; background:var(--signal);
+}
+.masthead h1{
+  font-family:var(--font-display);
+  font-weight:800; font-size:clamp(26px,3.4vw,40px);
+  letter-spacing:-.015em; line-height:.98; margin:0;
+  text-transform:uppercase;
+}
+.masthead .lede{
+  font-family:var(--font-data); font-size:11px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--ink-faint); margin-top:9px;
+}
+.masthead .lede b{ color:var(--signal); }
+.period{
+  text-align:right; font-family:var(--font-data);
+  font-size:11px; letter-spacing:.08em; color:var(--ink-muted);
+  line-height:1.7;
+}
+.period .big{
+  display:block; font-family:var(--font-display); font-weight:700;
+  font-size:15px; letter-spacing:.02em; color:var(--ink); text-transform:none;
+}
+
+/* ---- Dossier field label (the recurring structural device) ---- */
+.field-tag{
+  display:flex; align-items:center; gap:10px;
+  font-family:var(--font-data); font-size:10px; letter-spacing:.2em;
+  text-transform:uppercase; color:var(--ink-faint);
+  margin-bottom:11px;
+}
+.field-tag .no{
+  color:var(--signal); font-weight:600;
+}
+.field-tag .ln{
+  flex:1; height:1px; background:var(--line); margin-left:2px;
+}
+
+/* ============================================================ KPI ROW */
+.kpis{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:0;
+  border:1px solid var(--line);
+  background:var(--surface);
+  margin-bottom:34px;
+}
+.kpi{
+  padding:20px 22px 22px;
+  border-left:1px solid var(--line);
+  position:relative;
+}
+.kpi:first-child{ border-left:none; }
+.kpi::before{ /* top signal hairline that fills on hover */
+  content:""; position:absolute; top:-1px; left:-1px; right:-1px; height:2px;
+  background:var(--signal); transform:scaleX(0); transform-origin:left;
+  transition:transform .4s cubic-bezier(.2,.8,.2,1);
+}
+.kpi:hover::before{ transform:scaleX(1); }
+.kpi .klabel{
+  font-family:var(--font-data); font-size:10px; letter-spacing:.16em;
+  text-transform:uppercase; color:var(--ink-muted);
+  display:flex; align-items:center; gap:7px;
+}
+.kpi .klabel .idx{ color:var(--ink-faint); }
+.kpi .kval{
+  font-family:var(--font-display); font-weight:800;
+  font-size:clamp(34px,4.4vw,52px); line-height:1; letter-spacing:-.02em;
+  margin:14px 0 4px; font-variant-numeric:tabular-nums;
+}
+.kpi .kval .unit{
+  font-size:.42em; font-weight:600; color:var(--ink-muted);
+  letter-spacing:0; margin-left:4px;
+}
+.kpi .kmeta{
+  display:flex; align-items:center; gap:10px; margin-top:8px;
+  font-family:var(--font-data); font-size:11px; letter-spacing:.03em;
+}
+.delta{
+  display:inline-flex; align-items:center; gap:4px;
+  font-weight:600;
+  padding:1px 0;
+}
+.delta.up{ color:var(--pos); }
+.delta.down{ color:var(--neg); }
+.kmeta .vs{ color:var(--ink-faint); letter-spacing:.06em; }
+
+/* mini sparkline cell */
+.spark{ display:block; width:100%; height:26px; margin-top:14px; opacity:.85; }
+
+/* ============================================================ ANALYSIS ROW */
+.analysis{
+  display:grid; grid-template-columns:1.55fr 1fr; gap:22px;
+  margin-bottom:34px;
+}
+.panel{
+  background:var(--surface);
+  border:1px solid var(--line);
+  padding:20px 22px 22px;
+  min-width:0;
+}
+.panel-head{
+  display:flex; align-items:baseline; justify-content:space-between;
+  gap:14px; margin-bottom:6px;
+}
+.panel-head h2{
+  font-family:var(--font-display); font-weight:700;
+  font-size:18px; letter-spacing:-.01em; margin:0; text-transform:uppercase;
+}
+.panel-head .meta{
+  font-family:var(--font-data); font-size:10.5px; letter-spacing:.08em;
+  color:var(--ink-faint);
+}
+
+/* ---- HISTOGRAM (hand-rolled, CSS bars) ---- */
+.legend{
+  display:flex; gap:16px; margin:10px 0 18px;
+  font-family:var(--font-data); font-size:10.5px; letter-spacing:.06em;
+  color:var(--ink-muted); text-transform:uppercase;
+}
+.legend i{ width:10px; height:10px; display:inline-block; margin-right:6px; vertical-align:-1px; }
+.swatch-sent{ background:var(--oxblood-2); }
+.swatch-qual{ background:var(--signal); }
+
+.chart{
+  display:grid;
+  grid-template-columns:repeat(8,1fr);
+  align-items:end; gap:14px;
+  height:210px;
+  padding-top:8px;
+  border-bottom:1px solid var(--line-strong);
+  position:relative;
+}
+/* baseline gridlines */
+.chart::before{
+  content:""; position:absolute; inset:0 0 0 0; z-index:0;
+  background-image:repeating-linear-gradient(to top,
+    transparent 0, transparent calc(25% - 1px),
+    var(--line) calc(25% - 1px), var(--line) 25%);
+  opacity:.5;
+}
+.bar{
+  position:relative; z-index:1;
+  display:flex; flex-direction:column; justify-content:flex-end;
+  gap:3px; height:100%;
+}
+.bar .seg{ width:100%; transform-origin:bottom; }
+.bar .seg.sent{ background:var(--oxblood-2); }
+.bar .seg.qual{ background:var(--signal); }
+.bar:hover .seg.qual{ filter:brightness(1.15); }
+.bar:hover .seg.sent{ filter:brightness(1.2); }
+.bar .tip{
+  position:absolute; left:50%; bottom:calc(100% + 6px); transform:translateX(-50%);
+  background:var(--surface-2); color:var(--ink);
+  border:1px solid var(--line-strong);
+  font-family:var(--font-data); font-size:10.5px; letter-spacing:.04em;
+  padding:5px 8px; white-space:nowrap; opacity:0; pointer-events:none;
+  transition:opacity .12s; z-index:5;
+}
+:root[data-theme="light"] .bar .tip{ color:#ece7e0; }
+.bar:hover .tip, .bar:focus-within .tip{ opacity:1; }
+.xaxis{
+  display:grid; grid-template-columns:repeat(8,1fr); gap:14px;
+  margin-top:9px;
+  font-family:var(--font-data); font-size:10px; letter-spacing:.06em;
+  color:var(--ink-faint); text-align:center; text-transform:uppercase;
+}
+
+/* page-load bar grow */
+@keyframes grow{ from{ transform:scaleY(0); } to{ transform:scaleY(1); } }
+
+/* ---- TABLE (top sources) ---- */
+.tbl{ width:100%; border-collapse:collapse; font-size:13px; }
+.tbl thead th{
+  text-align:left; padding:8px 8px 9px;
+  font-family:var(--font-data); font-size:9.5px; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--ink-faint);
+  border-bottom:1px solid var(--line-strong);
+  font-weight:600;
+}
+.tbl thead th.num{ text-align:right; }
+.tbl tbody td{
+  padding:11px 8px; border-bottom:1px solid var(--line);
+  vertical-align:middle;
+}
+.tbl tbody tr{ transition:background .12s; cursor:default; }
+.tbl tbody tr:hover{ background:rgba(255,43,28,.05); }
+.tbl tbody tr:last-child td{ border-bottom:none; }
+.tbl .src{ font-weight:600; color:var(--ink); }
+.tbl .reg{
+  font-family:var(--font-data); font-size:10.5px; color:var(--ink-faint);
+  letter-spacing:.04em; display:block; margin-top:1px;
+}
+.tbl .num{
+  text-align:right; font-family:var(--font-data); font-variant-numeric:tabular-nums;
+  letter-spacing:.02em;
+}
+.tbl .rate{ color:var(--pos); font-weight:600; }
+/* inline yield mini-bar in the rate cell */
+.yield{
+  display:inline-block; width:46px; height:5px; margin-left:8px;
+  background:var(--line-strong); vertical-align:middle; position:relative;
+}
+.yield i{ position:absolute; left:0; top:0; bottom:0; background:var(--signal); }
+
+/* ============================================================ FOOTER */
+.footer{
+  margin-top:8px; padding:20px 0 36px;
+  border-top:1px solid var(--line);
+  display:flex; align-items:center; justify-content:space-between;
+  gap:14px; flex-wrap:wrap;
+  font-family:var(--font-data); font-size:11px; letter-spacing:.1em;
+  color:var(--ink-faint); text-transform:uppercase;
+}
+.footer .dev b{ color:var(--ink-muted); font-weight:600; }
+.footer .dev .r{ color:var(--signal); }
+.footer .stamp{ letter-spacing:.06em; }
+
+/* ============================================================ RESPONSIVE */
+.backdrop{ display:none; }
+@media (max-width:980px){
+  .analysis{ grid-template-columns:1fr; }
+}
+@media (max-width:760px){
+  :root{ --rail:0px; }
+  .app{ grid-template-columns:1fr; }
+  .rail{
+    position:fixed; left:0; top:0; width:266px; z-index:60;
+    transform:translateX(-100%); transition:transform .22s ease;
+  }
+  .app.nav-open .rail{ transform:none; }
+  .app.nav-open .backdrop{
+    display:block; position:fixed; inset:0; z-index:55;
+    background:rgba(0,0,0,.6);
+  }
+  .hamb{ display:grid; place-items:center; }
+  .kpis{ grid-template-columns:1fr; }
+  .kpi{ border-left:none; border-top:1px solid var(--line); }
+  .kpi:first-child{ border-top:none; }
+  .content{ padding:18px; }
+  .topbar{ padding:12px 16px; }
+  .signal{ display:none; }            /* keep ticker on the page body for small screens */
+  .chart{ grid-template-columns:repeat(8,1fr); gap:7px; height:180px; }
+  .xaxis{ grid-template-columns:repeat(8,1fr); gap:7px; }
+}
+@media (max-width:420px){
+  .masthead h1{ font-size:25px; }
+}
+
+@media (prefers-reduced-motion:reduce){
+  *{ animation:none !important; transition:none !important; }
+  .kpi::before{ transform:scaleX(1); }
+  .signal .dot{ box-shadow:0 0 0 2px rgba(255,43,28,.35); }
+}
+</style>
+
+<a class="skip" href="#main">Skip to overview</a>
+
+<div class="app" id="app">
+  <div class="backdrop" id="backdrop"></div>
+
+  <!-- ===================== SIDEBAR ===================== -->
+  <aside class="rail" aria-label="Primary">
+    <div class="brand">
+      <div>
+        <div class="mark">APM<b>G</b></div>
+        <div class="sub">Lead Desk</div>
+      </div>
+      <span class="filetab">DOSSIER&nbsp;VIC-01</span>
+    </div>
+
+    <nav class="navwrap">
+      <div class="navlabel">Surveillance</div>
+      <ul class="nav">
+        <li><a href="#" aria-current="page" data-tel="nav:overview">
+          <span class="ic" aria-hidden="true">&#9632;</span> Overview <span class="count">312</span></a></li>
+        <li><a href="#" data-tel="nav:pipeline">
+          <span class="ic" aria-hidden="true">&#8631;</span> Pipeline <span class="count">5</span></a></li>
+        <li><a href="#" data-tel="nav:leads">
+          <span class="ic" aria-hidden="true">&#9783;</span> Leads <span class="count">312</span></a></li>
+      </ul>
+
+      <div class="navlabel">Operations</div>
+      <ul class="nav">
+        <li><a href="#" data-tel="nav:outreach">
+          <span class="ic" aria-hidden="true">&#9993;</span> Outreach <span class="count">187</span></a></li>
+        <li><a href="#" data-tel="nav:sources">
+          <span class="ic" aria-hidden="true">&#9737;</span> Sources</a></li>
+        <li><a href="#" data-tel="nav:regions">
+          <span class="ic" aria-hidden="true">&#9678;</span> Regions</a></li>
+      </ul>
+
+      <div class="navlabel">System</div>
+      <ul class="nav">
+        <li><a href="#" data-tel="nav:telemetry">
+          <span class="ic" aria-hidden="true">&#9211;</span> Telemetry</a></li>
+        <li><a href="#" data-tel="nav:settings">
+          <span class="ic" aria-hidden="true">&#9881;</span> Settings</a></li>
+      </ul>
+    </nav>
+
+    <div class="railfoot">
+      <div>PIPELINE&nbsp;<span class="op">ARMED</span></div>
+      <div>n8n&nbsp;·&nbsp;SUPABASE&nbsp;·&nbsp;CLAUDE</div>
+    </div>
+  </aside>
+
+  <!-- ===================== MAIN ===================== -->
+  <div class="main">
+    <div class="topbar">
+      <button class="hamb" id="hamb" aria-label="Open navigation">&#9776;</button>
+      <div class="crumbs">Lead Desk <span style="color:var(--ink-faint)">/</span> <b>Overview</b></div>
+
+      <!-- SIGNATURE ELEMENT: live telemetry ticker -->
+      <div class="signal" role="status" aria-label="Pipeline signal status">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="live">SIGNAL&nbsp;LIVE</span>
+        <span class="sep">·</span>
+        <span>SYNC <span id="synctime">14:32</span> AEST</span>
+        <span class="sep">·</span>
+        <span>312 REC</span>
+      </div>
+
+      <button class="themebtn" id="theme" data-tel="ctl:theme" aria-label="Switch colour theme">
+        <span id="themeic">&#9789;</span> <span id="themetxt">Light</span>
+      </button>
+    </div>
+
+    <main class="content" id="main">
+
+      <!-- MASTHEAD -->
+      <header class="masthead">
+        <div>
+          <h1>Lead Pipeline Overview</h1>
+          <div class="lede">Childcare &amp; early-learning outreach &nbsp;·&nbsp; <b>VIC + QLD</b> &nbsp;·&nbsp; Pilot batch 03</div>
+        </div>
+        <div class="period">
+          REPORTING PERIOD
+          <span class="big">01 — 29 Jun 2026</span>
+          ROLLING 30 DAYS
+        </div>
+      </header>
+
+      <!-- ===== ROW 1 — KPI CARDS ===== -->
+      <div class="field-tag">
+        <span class="no">FIELD 01</span> <span>Pipeline Vitals</span> <span class="ln"></span>
+      </div>
+      <section class="kpis" aria-label="Key metrics">
+        <div class="kpi" tabindex="0" data-tel="kpi:total-leads">
+          <div class="klabel"><span class="idx">A.</span> Total Leads Sourced</div>
+          <div class="kval">312</div>
+          <div class="kmeta">
+            <span class="delta up" aria-label="up 18 percent">&#9650; 18%</span>
+            <span class="vs">vs prev 30d</span>
+          </div>
+          <svg class="spark" viewBox="0 0 120 26" preserveAspectRatio="none" aria-hidden="true">
+            <polyline fill="none" stroke="var(--signal-deep)" stroke-width="1.6"
+              points="0,20 15,18 30,19 45,14 60,15 75,10 90,11 105,6 120,4"/>
+          </svg>
+        </div>
+
+        <div class="kpi" tabindex="0" data-tel="kpi:conversion">
+          <div class="klabel"><span class="idx">B.</span> Reply &rarr; Qualified Rate</div>
+          <div class="kval">23.4<span class="unit">%</span></div>
+          <div class="kmeta">
+            <span class="delta up" aria-label="up 2.1 points">&#9650; 2.1pt</span>
+            <span class="vs">73 qualified</span>
+          </div>
+          <svg class="spark" viewBox="0 0 120 26" preserveAspectRatio="none" aria-hidden="true">
+            <polyline fill="none" stroke="var(--pos)" stroke-width="1.6"
+              points="0,16 15,17 30,13 45,14 60,11 75,12 90,9 105,8 120,7"/>
+          </svg>
+        </div>
+
+        <div class="kpi" tabindex="0" data-tel="kpi:cost-per-lead">
+          <div class="klabel"><span class="idx">C.</span> Cost / Qualified Lead</div>
+          <div class="kval"><span class="unit" style="margin:0 1px 0 0">A$</span>0.84</div>
+          <div class="kmeta">
+            <span class="delta down" aria-label="down 11 percent, which is good">&#9660; 11%</span>
+            <span class="vs">all-in spend A$61</span>
+          </div>
+          <svg class="spark" viewBox="0 0 120 26" preserveAspectRatio="none" aria-hidden="true">
+            <polyline fill="none" stroke="var(--signal)" stroke-width="1.6"
+              points="0,6 15,7 30,9 45,8 60,12 75,11 90,14 105,16 120,18"/>
+          </svg>
+        </div>
+      </section>
+
+      <!-- ===== ROW 2 — HISTOGRAM + TABLE ===== -->
+      <div class="field-tag">
+        <span class="no">FIELD 02</span> <span>Throughput &amp; Source Yield</span> <span class="ln"></span>
+      </div>
+      <section class="analysis">
+
+        <!-- HISTOGRAM -->
+        <div class="panel" aria-label="Leads processed over time">
+          <div class="panel-head">
+            <h2>Leads Processed / Week</h2>
+            <span class="meta">UNITS: CENTRES</span>
+          </div>
+          <div class="legend">
+            <span><i class="swatch-sent"></i>Sourced &amp; emailed</span>
+            <span><i class="swatch-qual"></i>Qualified reply</span>
+          </div>
+
+          <div class="chart" id="chart" role="img"
+               aria-label="Weekly histogram. Sourced centres rise from 22 in week 1 to 58 in week 8; qualified replies rise from 3 to 14.">
+            <!-- bars injected by JS for the page-load grow animation; static fallback below -->
+          </div>
+          <div class="xaxis" id="xaxis"></div>
+        </div>
+
+        <!-- TABLE -->
+        <div class="panel" aria-label="Top performing lead sources">
+          <div class="panel-head">
+            <h2>Top Sources</h2>
+            <span class="meta">BY QUALIFIED YIELD</span>
+          </div>
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th scope="col">Source channel</th>
+                <th scope="col" class="num">Leads</th>
+                <th scope="col" class="num">Qual&nbsp;%</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr data-tel="row:source-maps-vic">
+                <td><span class="src">Google Maps</span><span class="reg">Melbourne East · VIC</span></td>
+                <td class="num">98</td>
+                <td class="num"><span class="rate">28%</span><span class="yield"><i style="width:93%"></i></span></td>
+              </tr>
+              <tr data-tel="row:source-maps-qld">
+                <td><span class="src">Google Maps</span><span class="reg">Brisbane North · QLD</span></td>
+                <td class="num">74</td>
+                <td class="num"><span class="rate">24%</span><span class="yield"><i style="width:80%"></i></span></td>
+              </tr>
+              <tr data-tel="row:source-places">
+                <td><span class="src">Places API</span><span class="reg">Geelong · VIC</span></td>
+                <td class="num">61</td>
+                <td class="num"><span class="rate">21%</span><span class="yield"><i style="width:70%"></i></span></td>
+              </tr>
+              <tr data-tel="row:source-directory">
+                <td><span class="src">ACECQA Registry</span><span class="reg">Statewide · VIC</span></td>
+                <td class="num">48</td>
+                <td class="num"><span class="rate">19%</span><span class="yield"><i style="width:63%"></i></span></td>
+              </tr>
+              <tr data-tel="row:source-referral">
+                <td><span class="src">Referral / Repeat</span><span class="reg">Gold Coast · QLD</span></td>
+                <td class="num">31</td>
+                <td class="num"><span class="rate">16%</span><span class="yield"><i style="width:53%"></i></span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- FOOTER -->
+      <footer class="footer">
+        <div class="dev">Developed by <b>APMG AI Team</b> <span class="r">&copy;</span> <span id="year">2026</span></div>
+        <div class="stamp">DISPATCH DOSSIER · BUILD 2.4.0 · DATA SUPABASE/N8N</div>
+      </footer>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ---- year ---- */
+  document.getElementById("year").textContent = new Date().getFullYear();
+
+  /* ---- theme toggle (first-class) ---- */
+  var root = document.documentElement;
+  var tBtn = document.getElementById("theme");
+  var tIc  = document.getElementById("themeic");
+  var tTxt = document.getElementById("themetxt");
+  function setTheme(mode){
+    root.setAttribute("data-theme", mode);
+    var dark = mode === "dark";
+    tIc.innerHTML = dark ? "&#9789;" : "&#9728;";   /* moon / sun */
+    tTxt.textContent = dark ? "Light" : "Dark";
+  }
+  setTheme("dark");
+  tBtn.addEventListener("click", function(){
+    setTheme(root.getAttribute("data-theme") === "dark" ? "light" : "dark");
+  });
+
+  /* ---- mobile nav ---- */
+  var app = document.getElementById("app");
+  document.getElementById("hamb").addEventListener("click", function(){ app.classList.toggle("nav-open"); });
+  document.getElementById("backdrop").addEventListener("click", function(){ app.classList.remove("nav-open"); });
+
+  /* ---- HISTOGRAM (hand-rolled) ---- */
+  var data = [
+    {wk:"W1", sent:22, qual:3},
+    {wk:"W2", sent:28, qual:4},
+    {wk:"W3", sent:31, qual:6},
+    {wk:"W4", sent:39, qual:7},
+    {wk:"W5", sent:44, qual:9},
+    {wk:"W6", sent:49, qual:11},
+    {wk:"W7", sent:53, qual:12},
+    {wk:"W8", sent:58, qual:14}
+  ];
+  var max = 64; /* headroom above peak 58+14? no — stacked total caps ~72; scale to 76 */
+  max = 76;
+  var chart = document.getElementById("chart");
+  var xaxis = document.getElementById("xaxis");
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  data.forEach(function(d, i){
+    var total = d.sent + d.qual;
+    var bar = document.createElement("div");
+    bar.className = "bar";
+    bar.tabIndex = 0;
+    bar.setAttribute("data-tel", "bar:"+d.wk);
+    bar.setAttribute("aria-label", d.wk+": "+d.sent+" sourced, "+d.qual+" qualified");
+
+    var qH = (d.qual / max) * 100;
+    var sH = (d.sent / max) * 100;
+
+    var qual = document.createElement("div");
+    qual.className = "seg qual";
+    qual.style.height = qH + "%";
+    var sent = document.createElement("div");
+    sent.className = "seg sent";
+    sent.style.height = sH + "%";
+
+    var tip = document.createElement("div");
+    tip.className = "tip";
+    tip.textContent = d.wk+" — "+total+" leads · "+d.qual+" qual";
+
+    bar.appendChild(tip);
+    bar.appendChild(qual);
+    bar.appendChild(sent);
+
+    if(!reduce){
+      [qual, sent].forEach(function(seg){
+        seg.style.animation = "grow .6s cubic-bezier(.2,.8,.2,1) both";
+        seg.style.animationDelay = (i*60) + "ms";
+      });
+    }
+    chart.appendChild(bar);
+
+    var x = document.createElement("div");
+    x.textContent = d.wk;
+    xaxis.appendChild(x);
+  });
+
+  /* ---- CLICK TELEMETRY (the client's explicit ask) ----
+     Every element carrying data-tel emits a structured event.
+     Wired to console here; swap _emit() for a Supabase insert in prod. */
+  function _emit(evt){
+    /* shape mirrors a telemetry row: { ts, surface, target, theme } */
+    var row = {
+      ts: new Date().toISOString(),
+      surface: "overview",
+      target: evt,
+      theme: root.getAttribute("data-theme")
+    };
+    /* console.debug so it's inspectable in the demo */
+    if(window.console && console.debug) console.debug("[telemetry]", row);
+  }
+  document.addEventListener("click", function(e){
+    var t = e.target.closest("[data-tel]");
+    if(t) _emit(t.getAttribute("data-tel"));
+  });
+  /* keyboard activation on focusable cards/bars also counts */
+  document.addEventListener("keydown", function(e){
+    if(e.key !== "Enter" && e.key !== " ") return;
+    var t = e.target.closest("[data-tel]");
+    if(t && (t.tabIndex === 0)) _emit(t.getAttribute("data-tel"));
+  });
+})();
+</script>

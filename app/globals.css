@@ -1,0 +1,260 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * APMG Services — lead-gen dashboard theme ("SIGNAL/RAIL" telemetry console).
+ * Editorial family (ui-standards.md §1.2) recolored to a black/red signal
+ * identity. Dark (graphite chassis) is the default; light is a warm
+ * "bench-print" reinterpretation. HSL channel triplets so Tailwind's /alpha
+ * modifier works on every token.
+ *
+ * Red is rationed into calibrated states:
+ *   --primary   Signal Red   live LEDs, active nav, short red text  (AA-safe)
+ *   --bar        Incandescent histogram/data fills ONLY — never text (~3:1)
+ *   --bar-strong Signal Red   the current/most-recent bucket
+ *   --idle       Standby      armed-but-idle / wrong-direction grounds
+ */
+
+@layer base {
+  /* Light theme — warm bench-print paper */
+  :root {
+    --background: 40 30% 97%;
+    --foreground: 240 6% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 240 6% 10%;
+
+    --muted: 40 16% 93%;
+    --muted-foreground: 240 4% 40%;
+
+    --secondary: 40 16% 93%;
+    --secondary-foreground: 240 6% 10%;
+
+    --accent: 6 86% 96%;
+    --accent-foreground: 4 76% 40%;
+
+    --primary: 4 76% 46%; /* #D1271B — AA text on white (5.2:1) */
+    --primary-foreground: 0 0% 100%;
+    /* solid red fill that carries WHITE text at AA (buttons, "won" chips) */
+    --primary-solid: 4 76% 46%; /* #D1271B — white text 5.2:1 */
+
+    --destructive: 4 76% 46%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 36 12% 86%;
+    --input: 36 12% 86%;
+    --ring: 4 80% 50%;
+
+    --bar: #b00c26;
+    --bar-strong: #d1271b;
+    --idle: #e3c7cb;
+    --grid: rgba(20, 16, 14, 0.07);
+
+    --radius: 0.75rem;
+    color-scheme: light;
+  }
+
+  /* Dark theme — graphite chassis (the default) */
+  .dark {
+    --background: 228 9% 6%; /* #0E0F11 — graphite, not pure black */
+    --foreground: 216 12% 92%; /* #E8EAED readout */
+
+    --card: 216 10% 10%; /* #17191C panel face */
+    --card-foreground: 216 12% 92%;
+
+    --muted: 216 9% 14%;
+    --muted-foreground: 213 8% 58%; /* #8A9099 steel labels */
+
+    --secondary: 216 9% 14%;
+    --secondary-foreground: 216 12% 92%;
+
+    --accent: 4 55% 14%; /* deep-red active-nav ground */
+    --accent-foreground: 5 100% 78%;
+
+    --primary: 4 100% 56%; /* #FF2E1F signal — AA text on panel (4.75:1) */
+    --primary-foreground: 0 0% 100%;
+    /* solid red fill that carries WHITE text at AA — darker than Signal so
+       white passes (Signal #FF2E1F would only be 3.7:1 under white). */
+    --primary-solid: 350 85% 42%; /* #C8102E — white text 5.9:1 */
+
+    --destructive: 4 100% 56%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 213 9% 19%; /* #2B2F34 bezel */
+    --input: 213 9% 22%;
+    --ring: 4 100% 62%;
+
+    --bar: #c8102e; /* Incandescent — fills only */
+    --bar-strong: #ff2e1f; /* Signal — current bucket */
+    --idle: #5a1a1f; /* Standby */
+    --grid: rgba(255, 255, 255, 0.05);
+
+    color-scheme: dark;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-size: 1.0625rem; /* a little bigger base (17px); text-* utilities still win */
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Headings use the second typeface (Plus Jakarta Sans). An explicit `font-*`
+     utility on an element still overrides this (utilities layer beats base). */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-heading), ui-sans-serif, system-ui, sans-serif;
+  }
+
+  ::selection {
+    background-color: hsl(var(--primary) / 0.28);
+    color: hsl(var(--foreground));
+  }
+
+  /* Keyboard focus always visible (a11y floor, ui-standards §16). */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /* Thin, restrained scrollbars — the instrument aesthetic. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer components {
+  /* Faint machined-graphite grain so the dark never reads as flat void.
+     A non-negotiable per the design review — protects the instrument feel. */
+  .chassis-grain::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.4;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+    mix-blend-mode: overlay;
+  }
+  .dark .chassis-grain::before {
+    opacity: 0.06;
+  }
+  :root:not(.dark) .chassis-grain::before {
+    opacity: 0.03;
+  }
+
+  /* ── Dropdown panels (Export menus, folder pickers) ──────────────────────
+     The panel stays mounted and flips `data-open`, so opening AND closing both
+     animate — a `{open && …}` mount can only ever animate the way in, and the
+     way out reads as a hard cut.
+
+     `visibility` (not `display`) does the hiding: it is transitionable, and a
+     visibility:hidden subtree is already out of the tab order and out of the
+     accessibility tree, so a closed menu can't be tabbed into. */
+  .apmg-menu {
+    /* A fixed w-64/w-72 panel would clip against a phone's screen edge; clamp
+       to the viewport so long option labels wrap instead of running off. */
+    max-width: calc(100vw - 1.5rem);
+    transform-origin: top center;
+    visibility: hidden;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-0.25rem) scale(0.97);
+    transition:
+      opacity 160ms ease-out,
+      transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      visibility 200ms linear;
+  }
+  .apmg-menu[data-open="true"] {
+    visibility: visible;
+    pointer-events: auto;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  /* Right-anchored menus should grow out of the button they hang from. */
+  .apmg-menu-end {
+    transform-origin: top right;
+  }
+
+  /* Reduced motion keeps the fade (opacity is not vestibular) but drops the
+     travel + scale entirely (§14.5). */
+  @media (prefers-reduced-motion: reduce) {
+    .apmg-menu,
+    .apmg-menu[data-open="true"] {
+      transform: none;
+      transition:
+        opacity 120ms linear,
+        visibility 120ms linear;
+    }
+  }
+}
+
+/* Click-ping bloom — the telemetry signature (ClickPing.tsx). */
+@keyframes apmg-ping {
+  from {
+    transform: translate(-50%, -50%) scale(0.4);
+    opacity: 0.7;
+  }
+  to {
+    transform: translate(-50%, -50%) scale(2.6);
+    opacity: 0;
+  }
+}
+.apmg-ping {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid hsl(var(--primary));
+  border-radius: 9999px;
+  animation: apmg-ping 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Belt-and-suspenders reduced-motion guard for the looping LED pulse:
+   kills it even before JS hydration / with JS disabled (§14.5). */
+@media (prefers-reduced-motion: reduce) {
+  .animate-signal-ping {
+    animation: none !important;
+  }
+}
+
+/* View Transitions: a soft cross-fade for theme/view swaps (§14.6). */
+@media (prefers-reduced-motion: no-preference) {
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation-duration: 0.28s;
+  }
+}
+
+/* Tabular figures wherever numbers align (§13). */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}

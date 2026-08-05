@@ -1,0 +1,40 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env files — .env carries real keys (Anthropic + Supabase service role), never commit it
+.env
+.env*.local
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# large source portfolio PDFs (~40MB scans). The compressed, emailable copies
+# live in references/portfolios/ and are the ones uploaded to Supabase Storage.
+/references/Aged Care.pdf
+/references/Early.pdf
+/references/Education.pdf
+
+.vercel
+.env*
+
+# Google OAuth client secret downloads (contains client_secret) — never commit
+client_secret_*.json

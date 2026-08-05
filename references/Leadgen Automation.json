@@ -1,0 +1,329 @@
+{
+  "name": "My workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1f457487-88a8-4a2e-a2b8-dde89f93b385",
+      "name": "When clicking 'Execute workflow'",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -224,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "https://docs.google.com/spreadsheets/d/17ktSn9e-HbLWoSCKOTtsNDdlwhbhzM39ejyk8HOm6Wc/edit?gid=0#gid=0",
+          "mode": "url"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/17ktSn9e-HbLWoSCKOTtsNDdlwhbhzM39ejyk8HOm6Wc/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "6ab6ac74-057d-4ceb-8096-b2e483bc5374",
+      "name": "Read Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -16,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst out = [];\nfor (let i = 0; i < items.length; i++) {\n  const row = items[i].json;\n  let url = row.url || row.URL || row.Url || row.website || row.Website || row.Websites || row.link || row.Link || row.domain || row.Domain;\n  if (!url) {\n    for (const v of Object.values(row)) {\n      if (typeof v === \"string\" && /(\\.[a-z]{2,})(\\/|$|\\?|:)/i.test(v.trim())) { url = v; break; }\n    }\n  }\n  url = (url || \"\").toString().trim();\n  if (!url) continue;\n  if (!url.toLowerCase().startsWith(\"http\")) url = \"https://\" + url;\n  out.push({ json: { url }, pairedItem: { item: i } });\n}\nreturn out;"
+      },
+      "id": "4b81c5c4-8f9d-42df-95cd-e7257577fa2a",
+      "name": "Normalize URL",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        160,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (compatible; n8n-email-scraper/1.0)"
+            }
+          ]
+        },
+        "options": {
+          "allowUnauthorizedCerts": true,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "b2dfe7e1-969f-4426-b448-d87a8156f234",
+      "name": "Fetch Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        352,
+        32
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const html = $json.data || $json.body || $json.text || (typeof $json === \"string\" ? $json : JSON.stringify($json));\nconst url = $(\"Normalize URL\").item.json.url;\n\nconst emailRegex = /[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}/g;\nconst raw = html.match(emailRegex) || [];\n\nconst junk = /\\.(png|jpe?g|gif|svg|webp|css|js|ico|woff2?|mp4)$/i;\nconst placeholder = /(example\\.(com|org)|sentry|wixpress|yourdomain|domain\\.com|email\\.com|@2x|@3x|\\.png|\\.jpg)/i;\n\nconst emails = [...new Set(\n  raw.map(e => e.toLowerCase().trim())\n     .filter(e => !junk.test(e))\n     .filter(e => !placeholder.test(e))\n)];\n\nconst gmail_emails = emails.filter(e => e.endsWith(\"@gmail.com\"));\n\nconst text_snippet = html\n  .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n  .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n  .replace(/<[^>]+>/g, \" \")\n  .replace(/\\s+/g, \" \")\n  .trim()\n  .slice(0, 6000);\n\nreturn { json: { url, emails, gmail_emails, email_count: emails.length, text_snippet } };"
+      },
+      "id": "fbcd8e66-6113-4b3d-b569-aca37c1c059d",
+      "name": "Extract Emails",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        576,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "text": "={{ 'Website: ' + $json.url + ' || Emails detected by regex: ' + JSON.stringify($json.emails) + ' || Page text: ' + $json.text_snippet }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "best_contact_email",
+              "description": "The single best email address to contact this company (prefer info@, contact@, sales@, or a personal name). Empty string if none found."
+            },
+            {
+              "name": "all_valid_emails",
+              "description": "Comma-separated list of ALL real email addresses on the page, including any written in obfuscated form like 'name [at] company [dot] com' which you should reconstruct. Empty string if none."
+            },
+            {
+              "name": "has_gmail",
+              "type": "boolean",
+              "description": "True if any of the email addresses ends in @gmail.com."
+            }
+          ]
+        },
+        "options": {
+          "systemPromptTemplate": "You are an expert at extracting business contact email addresses from website text. Return only genuine email addresses. Ignore image file names and tracking IDs that merely look like emails. Reconstruct obfuscated emails (e.g. 'name [at] company [dot] com' -> name@company.com)."
+        }
+      },
+      "id": "bb222aca-3f37-4a80-9551-f7cb2bab1ffa",
+      "name": "AI Extract Emails",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.1,
+      "position": [
+        752,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "claude-sonnet-4-5-20250929",
+          "mode": "list",
+          "cachedResultName": "Claude Sonnet 4.5"
+        },
+        "options": {}
+      },
+      "id": "51a42aca-4f24-4f54-beeb-3ed53914c884",
+      "name": "Claude (Anthropic)",
+      "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+      "typeVersion": 1.3,
+      "position": [
+        816,
+        256
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "url",
+              "type": "string",
+              "value": "={{ $('Extract Emails').item.json.url }}"
+            },
+            {
+              "id": "f2",
+              "name": "best_contact_email",
+              "type": "string",
+              "value": "={{ $json.output?.best_contact_email ?? $json.best_contact_email ?? '' }}"
+            },
+            {
+              "id": "f3",
+              "name": "all_valid_emails",
+              "type": "string",
+              "value": "={{ $json.output?.all_valid_emails ?? $json.all_valid_emails ?? '' }}"
+            },
+            {
+              "id": "f4",
+              "name": "has_gmail",
+              "type": "boolean",
+              "value": "={{ $json.output?.has_gmail ?? $json.has_gmail ?? false }}"
+            },
+            {
+              "id": "f5",
+              "name": "regex_emails",
+              "type": "array",
+              "value": "={{ $('Extract Emails').item.json.emails }}"
+            },
+            {
+              "id": "f6",
+              "name": "gmail_emails",
+              "type": "array",
+              "value": "={{ $('Extract Emails').item.json.gmail_emails }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8c091052-1a4c-46d2-acc4-44740d59a786",
+      "name": "Format Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1136,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.best_contact_email }}",
+        "subject": "A quick idea to bring you more customers",
+        "emailType": "html",
+        "message": "=<p>Hi there,</p><p>We help businesses like yours get a steady stream of qualified, ready-to-buy customers — without the busywork.</p><p><a href=\"https://apmgmaintenance.com.au/t/{{ encodeURIComponent($json.best_contact_email) }}?c=outreach-2026\">See how it works &rarr;</a></p><p>Not interested? No problem — just ignore this email.</p><p>&mdash; The APMG Services team</p>",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1360,
+        32
+      ],
+      "id": "0934370c-85fb-446a-b00e-b56080daf285",
+      "name": "Send a message",
+      "webhookId": "b44c549c-6a41-4804-a434-968ee04632b0"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking 'Execute workflow'": {
+      "main": [
+        [
+          {
+            "node": "Read Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Sheet": {
+      "main": [
+        [
+          {
+            "node": "Normalize URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize URL": {
+      "main": [
+        [
+          {
+            "node": "Fetch Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Page": {
+      "main": [
+        [
+          {
+            "node": "Extract Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Emails": {
+      "main": [
+        [
+          {
+            "node": "AI Extract Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Extract Emails": {
+      "main": [
+        [
+          {
+            "node": "Format Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Claude (Anthropic)": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Extract Emails",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Result": {
+      "main": [
+        [
+          {
+            "node": "Send a message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "c3139d2e-736f-4569-8339-bc6dfd00ce56",
+  "meta": {
+    "instanceId": "6b20b77d7a3fd2e31fd7b0cb44dc61b514009ab3b55c1ea8d1896a9a48a5c090"
+  },
+  "nodeGroups": [],
+  "id": "t0VEQsSseQB4B2a6",
+  "tags": []
+}
