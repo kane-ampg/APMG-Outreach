@@ -1,8 +1,15 @@
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 import { MAIN_ADMIN_EMAIL, denyRoleChange, type RoleChangeDenial } from "@/lib/auth/policy";
-import { listUsers, setUserRole } from "@/lib/auth/userStore";
+import { allowedDomain } from "@/lib/auth/google";
+import {
+  DEFAULT_SIGNUP_ROLE,
+  createUserWithRole,
+  listUsers,
+  setUserRole,
+} from "@/lib/auth/userStore";
 import { assignableRoles, isRole } from "@/lib/rbac/roles";
 import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import { fetchWorkspaceDirectory } from "@/lib/google/directory";
 
 /**
  * Console user administration for the Settings → Roles and Permissions tab.
@@ -35,7 +42,19 @@ export async function GET(req: Request): Promise<Response> {
   const guard = await requirePermission(req, "users.manage");
   if (!guard.ok) return guardResponse(guard);
 
-  const result = await listUsers();
+  // Concurrent, and independent by design: the roster must still render when
+  // Google is unreachable, and the directory is still worth showing when the
+  // app_users query fails. `fetchWorkspaceDirectory` never rejects — it returns
+  // its failure as a state — so this cannot take the whole route down.
+  // ?refresh=1 comes from the Refresh button and bypasses the directory's
+  // 5-minute cache. Safe to take from the query string: this route already
+  // required users.manage above, and the only thing it can cost is one extra
+  // call to Google.
+  const force = new URL(req.url).searchParams.get("refresh") === "1";
+  const [result, directory] = await Promise.all([
+    listUsers(),
+    fetchWorkspaceDirectory({ force }),
+  ]);
   // "error" and [] are both possible here, and they must not be conflated:
   // [] can mean a genuinely empty table OR (via listUsers()'s demo-mode branch)
   // "Supabase not configured" -- `mode`/`canPersist` already cover that case.
@@ -54,9 +73,18 @@ export async function GET(req: Request): Promise<Response> {
     canPersist: configured,
     actorEmail: guard.email,
     mainAdminEmail: MAIN_ADMIN_EMAIL,
+    // Mirrored so "Add by email" can reject a typo'd domain inline instead of
+    // making the round trip to be told no. The PATCH check above is what
+    // enforces it -- this is the same courtesy as the disabled dropdowns.
+    allowedDomain: allowedDomain(),
+    // So the UI can say "Sales on first sign-in" for someone with no row,
+    // rather than the flat "no roles" that would imply they arrive with no
+    // access at all.
+    defaultRoleOnSignIn: DEFAULT_SIGNUP_ROLE,
     assignableRoles: assignableRoles(),
     users,
     usersError,
+    directory,
   });
 }
 
@@ -106,8 +134,27 @@ export async function PATCH(req: Request): Promise<Response> {
       503,
     );
   }
-  if (!users.some((u) => u.email === email)) {
-    return json({ error: "That address is not a console user yet. They must sign in once first." }, 404);
+  // Pre-assignment. Settings lists the whole Workspace domain, not just people
+  // who have signed in, so "give Maria the Sales role before her first login"
+  // has to work -- the old flat refusal here would have made most of that list
+  // unassignable.
+  //
+  // The domain check is the boundary. `assertWorkspaceIdentity` means only a
+  // verified @<allowedDomain> account can ever hold a session, so a row for any
+  // other address is unreachable by definition: dead state that reads like
+  // access. Refusing it here keeps the table honest rather than adding a
+  // security guarantee -- the sign-in gate is what actually stops them.
+  const exists = users.some((u) => u.email === email);
+  if (!exists) {
+    const domain = allowedDomain();
+    if (!email.endsWith(`@${domain}`)) {
+      return json(
+        {
+          error: `Only @${domain} addresses can be given a role. Anyone else is refused at sign-in, so the grant would never take effect.`,
+        },
+        400,
+      );
+    }
   }
 
   // Read-then-act snapshot, not a transaction: two admins racing to demote
@@ -126,6 +173,24 @@ export async function PATCH(req: Request): Promise<Response> {
     adminEmails: users.filter((u) => u.role === "admin").map((u) => u.email),
   });
   if (denial) return json({ error: DENIAL[denial], reason: denial }, 409);
+
+  // Runs AFTER denyRoleChange even though none of its three rules can fire on
+  // an address with no row (it is not the main admin, not the actor, and not
+  // the last admin). Ordering the create before the guard would make that a
+  // load-bearing coincidence: the day a fourth rule is added, a brand-new user
+  // would silently skip it.
+  if (!exists) {
+    const created = await createUserWithRole({ email, role: nextRole, invitedBy: guard.email });
+    if (created === "demo") {
+      return json({ error: "Supabase isn't configured, so this can't be saved." }, 503);
+    }
+    if (created === "error") {
+      return json({ error: "Couldn't add that person. Please try again." }, 500);
+    }
+    if (created === "ok") return json({ ok: true, email, role: nextRole, created: true });
+    // "conflict": another admin created the row between our read and our
+    // insert. The row exists now, so setting the role below is exactly right.
+  }
 
   const result = await setUserRole(email, nextRole);
   if (result === "demo") {

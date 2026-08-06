@@ -48,7 +48,7 @@ export const ROLES: Record<Role, RoleDef> = {
   pending: {
     label: "Pending",
     description:
-      "Signed in, but no access yet — an admin must grant a role. This is where every auto-admitted Workspace account lands.",
+      "Signed in, but no access — an admin must grant a role. New Workspace accounts start on Sales, so this is now a revocation state an admin sets deliberately, not where newcomers land.",
     enabled: true,
     permissions: [],
   },

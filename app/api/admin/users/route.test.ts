@@ -4,12 +4,18 @@ vi.mock("server-only", () => ({}));
 
 const listUsers = vi.fn();
 const setUserRole = vi.fn();
+const createUserWithRole = vi.fn();
 const requirePermission = vi.fn();
 const assignableRoles = vi.fn();
 
 vi.mock("@/lib/auth/userStore", () => ({
   listUsers: (...a: unknown[]) => listUsers(...a),
   setUserRole: (...a: unknown[]) => setUserRole(...a),
+  createUserWithRole: (...a: unknown[]) => createUserWithRole(...a),
+  // A literal, not a mock fn: the route only echoes it into the GET payload,
+  // and pinning it here means a change to the real column default in
+  // app-users.sql shows up as a failing assertion rather than a silent pass.
+  DEFAULT_SIGNUP_ROLE: "sales",
 }));
 
 vi.mock("@/lib/rbac/server", async (importOriginal) => {
@@ -52,13 +58,22 @@ function get(): Request {
 }
 
 function row(email: string, role: string) {
-  return { email, name: null, picture_url: null, role, created_at: "", last_login_at: null };
+  return {
+    email,
+    name: null,
+    picture_url: null,
+    role,
+    created_at: "",
+    last_login_at: null,
+    invited_by: null,
+  };
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   requirePermission.mockResolvedValue({ ok: true, role: "admin", email: ACTOR });
   setUserRole.mockResolvedValue("ok");
+  createUserWithRole.mockResolvedValue("ok");
   // Matches the real catalog today (every role in lib/rbac/roles.ts is
   // enabled: true) so existing PATCH behavior is unchanged by this mock.
   assignableRoles.mockReturnValue(["admin", "client", "sales", "pending"]);
@@ -84,6 +99,11 @@ describe("GET /api/admin/users", () => {
     expect(body.mainAdminEmail).toBe(MAIN_ADMIN_EMAIL);
     expect(body.assignableRoles).toEqual(["admin", "client", "sales", "pending"]);
     expect(body.users).toEqual(users);
+    // Both are mirrored so the client never hardcodes its own copy: the domain
+    // gates "Add by email", and the default is what lets the People pane say
+    // "Sales on first sign-in" instead of an untrue "no access".
+    expect(body.allowedDomain).toBe("apmgservices.com.au");
+    expect(body.defaultRoleOnSignIn).toBe("sales");
     // Deliberately not asserting on `mode`/`canPersist`: those come from the
     // real (unmocked) supabaseTarget(), which resolves to demo in this test
     // environment. Mocking lib/pipeline/server just to pin those two fields
@@ -215,9 +235,52 @@ describe("PATCH /api/admin/users — validation", () => {
     expect(setUserRole).not.toHaveBeenCalled();
   });
 
-  it("404s an address that is not a known user", async () => {
+  // This route used to refuse any address without a row ("they must sign in
+  // once first"). Settings now lists the whole Workspace domain, so that
+  // refusal would have made most of the list unassignable -- pre-assignment is
+  // the point, not an edge case.
+  it("creates the row when pre-assigning an on-domain address nobody has signed in with", async () => {
     const res = await PATCH(patch({ email: "ghost@apmgservices.com.au", role: "sales" }));
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ created: true, role: "sales" });
+    expect(createUserWithRole).toHaveBeenCalledWith({
+      email: "ghost@apmgservices.com.au",
+      role: "sales",
+      invitedBy: ACTOR,
+    });
+    // There was no row to update, so the update path must not also fire.
+    expect(setUserRole).not.toHaveBeenCalled();
+  });
+
+  it("refuses to pre-assign a role to an address outside the Workspace domain", async () => {
+    // assertWorkspaceIdentity means such an account can never hold a session,
+    // so the row would be permanently unreachable state that reads like access.
+    const res = await PATCH(patch({ email: "outsider@gmail.com", role: "sales" }));
+    expect(res.status).toBe(400);
+    expect(createUserWithRole).not.toHaveBeenCalled();
+    expect(setUserRole).not.toHaveBeenCalled();
+  });
+
+  it("still applies the lockout rules before creating anything", async () => {
+    // A brand-new address can't trip any of today's three rules, so this pins
+    // the ORDER rather than an outcome: the guard must run first, or a fourth
+    // rule added later would be skipped for pre-assigned users.
+    const res = await PATCH(patch({ email: ACTOR, role: "client" }));
+    expect(res.status).toBe(409);
+    expect(createUserWithRole).not.toHaveBeenCalled();
+  });
+
+  it("falls back to setting the role when another admin created the row first", async () => {
+    createUserWithRole.mockResolvedValue("conflict");
+    const res = await PATCH(patch({ email: "ghost@apmgservices.com.au", role: "sales" }));
+    expect(res.status).toBe(200);
+    expect(setUserRole).toHaveBeenCalledWith("ghost@apmgservices.com.au", "sales");
+  });
+
+  it("reports a failed create rather than claiming success", async () => {
+    createUserWithRole.mockResolvedValue("error");
+    const res = await PATCH(patch({ email: "ghost@apmgservices.com.au", role: "sales" }));
+    expect(res.status).toBe(500);
     expect(setUserRole).not.toHaveBeenCalled();
   });
 

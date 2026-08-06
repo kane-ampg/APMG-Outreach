@@ -2,12 +2,19 @@
 
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { ShieldCheck, Settings as SettingsIcon } from "lucide-react";
+import {
+  BadgeCheck,
+  Clock,
+  ShieldCheck,
+  Settings as SettingsIcon,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useRbac } from "@/lib/rbac/RbacProvider";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
-import { RolesPermissionsTab } from "./settings/RolesPermissionsTab";
+import { RolesPermissionsTab, type RosterStats } from "./settings/RolesPermissionsTab";
 
 /**
  * Settings. One sub-tab today (Roles and Permissions); the tablist exists so
@@ -26,7 +33,7 @@ export function SettingsPage() {
   const { can } = useRbac();
   const [tab, setTab] = useState<SubTab>("roles");
   const reduce = useReducedMotion() ?? false;
-  const [pendingCount, setPendingCount] = useState(0);
+  const [stats, setStats] = useState<RosterStats>({ directory: 0, withRoles: 0, pending: 0 });
 
   if (!can("users.manage")) {
     return (
@@ -63,6 +70,16 @@ export function SettingsPage() {
               Who can sign in to this console, and what each role may do.
             </p>
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <StatChip icon={Users} label="People" value={stats.directory} />
+            <StatChip icon={BadgeCheck} label="With roles" value={stats.withRoles} />
+            <StatChip
+              icon={Clock}
+              label="Revoked"
+              value={stats.pending}
+              tone={stats.pending > 0 ? "amber" : "muted"}
+            />
+          </div>
         </div>
       </Reveal>
 
@@ -76,15 +93,54 @@ export function SettingsPage() {
             active={tab === "roles"}
             reduce={reduce}
             label="Roles and Permissions"
-            count={pendingCount}
+            count={stats.pending}
             onSelect={() => setTab("roles")}
           />
         </div>
       </Reveal>
 
-      {tab === "roles" && <RolesPermissionsTab onPendingCountChange={setPendingCount} />}
+      {tab === "roles" && <RolesPermissionsTab onStatsChange={setStats} />}
 
       <Footer />
+    </div>
+  );
+}
+
+/**
+ * Header tallies. Small and quiet on purpose: they answer "how big is this
+ * roster" at a glance, and are not the thing an admin came here to click.
+ */
+function StatChip({
+  icon: Icon,
+  label,
+  value,
+  tone = "muted",
+}: {
+  icon: LucideIcon;
+  label: string;
+  value: number;
+  tone?: "muted" | "amber";
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg bg-card px-2.5 py-1.5 ring-1 ring-foreground/10">
+      <Icon
+        className={cn(
+          "h-3.5 w-3.5",
+          tone === "amber" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground",
+        )}
+        aria-hidden
+      />
+      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </span>
+      <span
+        className={cn(
+          "tnum font-mono text-xs font-bold",
+          tone === "amber" ? "text-amber-600 dark:text-amber-400" : "text-foreground",
+        )}
+      >
+        {value}
+      </span>
     </div>
   );
 }

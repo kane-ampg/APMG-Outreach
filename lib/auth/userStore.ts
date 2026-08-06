@@ -13,6 +13,17 @@ import { isRole, type Role } from "@/lib/rbac/roles";
 
 const TABLE = "app_users";
 
+/**
+ * The role a first-time Google sign-in lands on.
+ *
+ * A MIRROR of `app_users.role`'s column default in supabase/app-users.sql —
+ * the database is what actually applies it, since `upsertOnLogin` deliberately
+ * never writes the column. Kept here so the Settings screen can say "Sales on
+ * first sign-in" out loud instead of rendering somebody who has never signed in
+ * as though they had no access coming. Change the SQL and this together.
+ */
+export const DEFAULT_SIGNUP_ROLE: Role = "sales";
+
 function authHeaders(key: string): Record<string, string> {
   return { apikey: key, Authorization: `Bearer ${key}` };
 }
@@ -124,6 +135,57 @@ export interface AppUserRow {
   role: Role;
   created_at: string;
   last_login_at: string | null;
+  /** Set when an admin pre-assigned this role before the person ever signed
+   *  in. Display-only: `last_login_at === null` is what "never signed in"
+   *  actually means. */
+  invited_by: string | null;
+}
+
+/**
+ * Pre-assign a role to somebody who has never signed in ("Add by email").
+ *
+ * A plain INSERT, not an upsert, and that matters: `Prefer:
+ * resolution=merge-duplicates` would stamp `invited_by` onto an EXISTING row,
+ * relabelling a colleague who signed in normally months ago as though an admin
+ * had invited them. Callers establish non-existence first and treat the
+ * duplicate-key case as the race it is — see the PATCH handler, which falls
+ * back to `setUserRole`.
+ *
+ * Writing `role` here is safe in a way it is not in `upsertOnLogin`: this runs
+ * only from an explicit admin action that names the role, never from a read
+ * that could have failed closed to "pending".
+ */
+export async function createUserWithRole(args: {
+  email: string;
+  role: Role;
+  invitedBy: string;
+}): Promise<"ok" | "demo" | "conflict" | "error"> {
+  const target = supabaseTarget();
+  if (target.state !== "ok") return "demo";
+  const email = args.email.trim().toLowerCase();
+  try {
+    const res = await fetch(`${target.base}/rest/v1/${TABLE}`, {
+      method: "POST",
+      headers: {
+        ...authHeaders(target.key),
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify([
+        { email, role: args.role, invited_by: args.invitedBy.trim().toLowerCase() },
+      ]),
+    });
+    if (res.ok) return "ok";
+    // 23505 = unique_violation. Two admins adding the same address at once:
+    // the row now exists, so the caller can simply set the role on it.
+    const detail = await res.text().catch(() => "");
+    if (res.status === 409 || detail.includes("23505")) return "conflict";
+    console.error(`[auth] app_users invite ${res.status}:`, detail.slice(0, 500));
+    return "error";
+  } catch (e) {
+    console.error("[auth] app_users invite failed:", e);
+    return "error";
+  }
 }
 
 /**
@@ -146,7 +208,7 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
   if (target.state !== "ok") return [];
   try {
     const res = await fetch(
-      `${target.base}/rest/v1/${TABLE}?select=email,name,picture_url,role,created_at,last_login_at&order=last_login_at.desc.nullslast`,
+      `${target.base}/rest/v1/${TABLE}?select=email,name,picture_url,role,created_at,last_login_at,invited_by&order=last_login_at.desc.nullslast`,
       { headers: authHeaders(target.key), cache: "no-store" },
     );
     if (!res.ok) {
@@ -165,6 +227,7 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
         role: isRole(row.role) ? row.role : "pending",
         created_at: typeof row.created_at === "string" ? row.created_at : "",
         last_login_at: typeof row.last_login_at === "string" ? row.last_login_at : null,
+        invited_by: typeof row.invited_by === "string" ? row.invited_by : null,
       };
     }).filter((r) => r.email !== "");
   } catch (e) {

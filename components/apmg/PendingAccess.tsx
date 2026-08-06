@@ -3,8 +3,10 @@
 import { ShieldQuestion } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-/** Where every auto-admitted Workspace account lands until an admin grants a
- *  role. Signing in succeeded; authorisation simply hasn't happened yet. */
+/** Shown to a signed-in account holding the `pending` role. New Workspace
+ *  accounts start on Sales, so reaching this screen now means either an admin
+ *  revoked access deliberately, or the role couldn't be read — signing in
+ *  succeeded, authorisation didn't. */
 export function PendingAccess({ email }: { email: string }) {
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background px-4">
