@@ -19,6 +19,8 @@ import {
 import { cn } from "@/lib/cn";
 import {
   MAX_NOTIFY_EMAILS,
+  NOTIFY_SEPARATOR_RE,
+  commitNotifyDraft,
   parseNotifyEmails,
   serializeNotifyEmails,
 } from "@/lib/pipeline/notifyEmails";
@@ -291,7 +293,14 @@ export function IntegrationsPage() {
  *  them. Consumed by the enquiry route + the Enquiry Notification n8n workflow.
  *  Blank clears it (no notifications sent). Parsing lives in
  *  lib/pipeline/notifyEmails.ts, shared with the API route so the validation
- *  shown here is exactly the validation enforced on save. */
+ *  shown here is exactly the validation enforced on save.
+ *
+ *  UI is a tag input: `committed` holds the confirmed recipients as a
+ *  canonical string (rendered as removable chips below), `draft` holds
+ *  whatever's currently being typed in the small add field. Pressing Enter,
+ *  typing/pasting a separator, or clicking Add folds `draft` onto `committed`
+ *  via commitNotifyDraft — the same validation Save and the API route already
+ *  enforce, so a bad add attempt can never corrupt the confirmed list. */
 function NotifyEmailPanel({
   initial,
   canPersist,
@@ -301,7 +310,9 @@ function NotifyEmailPanel({
   canPersist: boolean;
   onSaved: () => void;
 }) {
-  const [value, setValue] = useState(initial);
+  const [committed, setCommitted] = useState(initial);
+  const [draft, setDraft] = useState("");
+  const [addError, setAddError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
@@ -315,13 +326,13 @@ function NotifyEmailPanel({
     const prev = initialRef.current;
     initialRef.current = initial;
     if (prev === initial) return;
-    setValue((cur) => (cur.trim() === prev.trim() ? initial : cur));
+    setCommitted((cur) => (cur.trim() === prev.trim() ? initial : cur));
   }, [initial]);
   useEffect(() => () => {
     if (flashRef.current) clearTimeout(flashRef.current);
   }, []);
 
-  const parsed = useMemo(() => parseNotifyEmails(value), [value]);
+  const parsed = useMemo(() => parseNotifyEmails(committed), [committed]);
   // Compare canonical-to-canonical: saving normalises ("A@b.com ,c@d.com" →
   // "a@b.com, c@d.com"), so a raw comparison would leave the field permanently
   // dirty after every save.
@@ -331,28 +342,65 @@ function NotifyEmailPanel({
   }, [initial]);
   const canonical = parsed.ok ? parsed.value : null;
   const emails = parsed.ok ? parsed.emails : [];
-  const dirty = canonical !== null && canonical !== initialCanonical;
-  const validish = parsed.ok;
+  const atCap = emails.length >= MAX_NOTIFY_EMAILS;
+
+  // What Save would actually persist, accounting for a non-empty draft that
+  // hasn't been explicitly committed yet — otherwise typing an address and
+  // clicking Save straight away (without pressing Enter first) would look
+  // like a no-op because `committed` hasn't changed.
+  const draftPreview = useMemo(
+    () => (draft.trim() ? commitNotifyDraft(committed, draft) : null),
+    [committed, draft],
+  );
+  const effectiveCanonical = draftPreview ? (draftPreview.ok ? draftPreview.value : null) : canonical;
+  const dirty = effectiveCanonical !== null && effectiveCanonical !== initialCanonical;
+  const validish = draftPreview ? draftPreview.ok : parsed.ok;
+
+  /** Fold `rawDraft` onto `committed`. On success, clears the draft field and
+   *  the committed list grows by one chip (or more, for a pasted list). On
+   *  failure, the draft text is preserved so the operator can fix the exact
+   *  problem — the committed chips are never touched by a bad attempt. */
+  function tryCommit(rawDraft: string) {
+    const result = commitNotifyDraft(committed, rawDraft);
+    if (!result.ok) {
+      setAddError(result.error);
+      setDraft(rawDraft);
+      return;
+    }
+    setAddError(null);
+    setCommitted(result.value);
+    setDraft("");
+  }
 
   async function save() {
     setError(null);
+    let toSave = canonical;
+    if (draft.trim()) {
+      const result = commitNotifyDraft(committed, draft);
+      if (!result.ok) {
+        setAddError(result.error);
+        return;
+      }
+      setAddError(null);
+      setCommitted(result.value);
+      setDraft("");
+      toSave = result.value;
+    }
+    // Save is gated on `validish`, so `toSave` is non-null whenever save()
+    // can fire; the guard is defensive only.
+    if (toSave === null) return;
     setBusy(true);
     try {
       const res = await fetch("/api/integrations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // Canonical form — Save is gated on `validish`, so this is non-null
-        // whenever save() can fire; the fallback is defensive only.
-        body: JSON.stringify({ notifyEmail: canonical ?? value }),
+        body: JSON.stringify({ notifyEmail: toSave }),
       });
       const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
       if (!res.ok || !data?.ok) {
         setError(data?.error ?? `Save failed (${res.status}).`);
         return;
       }
-      // Settle the field on what was actually stored, so the text matches the
-      // recipient chips instead of keeping the pre-normalised typing.
-      if (canonical !== null) setValue(canonical);
       setSavedFlash(true);
       if (flashRef.current) clearTimeout(flashRef.current);
       flashRef.current = setTimeout(() => setSavedFlash(false), 1800);
@@ -376,22 +424,49 @@ function NotifyEmailPanel({
           </h3>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
             Every portal enquiry is emailed to all of these addresses (via the Enquiry Notification
-            automation below). Separate them with commas — up to {MAX_NOTIFY_EMAILS}. They arrive as
-            one email, so each recipient can see the others. Leave blank to send no notifications.
+            automation below). Add up to {MAX_NOTIFY_EMAILS} — type one and press Enter, or paste a
+            list. They arrive as one email, so each recipient can see the others. Leave blank to send
+            no notifications.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               type="email"
-              multiple
               inputMode="email"
               autoComplete="email"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="you@company.com.au, ops@company.com.au"
-              disabled={busy || !canPersist}
+              value={draft}
+              onChange={(e) => {
+                const next = e.target.value;
+                if (NOTIFY_SEPARATOR_RE.test(next)) {
+                  tryCommit(next);
+                } else {
+                  setDraft(next);
+                  setAddError(null);
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  tryCommit(draft);
+                }
+              }}
+              placeholder={
+                atCap
+                  ? `${MAX_NOTIFY_EMAILS} of ${MAX_NOTIFY_EMAILS} — remove one to add another.`
+                  : "you@company.com.au"
+              }
+              disabled={busy || !canPersist || atCap}
               data-track="notify_email_input"
               className="h-9 w-full flex-1 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => tryCommit(draft)}
+              disabled={busy || !canPersist || atCap || !draft.trim()}
+              data-track="notify_email_add"
+            >
+              Add
+            </Button>
             <Button
               size="sm"
               onClick={save}
@@ -403,8 +478,9 @@ function NotifyEmailPanel({
               {savedFlash ? "Saved" : busy ? "Saving…" : "Save"}
             </Button>
           </div>
-          {/* Parsed recipients — shows exactly who gets notified, since a long
-              comma list scrolls out of sight inside the input. */}
+          {/* Parsed recipients — the chips ARE the committed list, so this is
+              exactly who Save will persist (plus whatever's in the add field,
+              covered by the dirty/validish check above). */}
           {emails.length > 0 && (
             <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
               {emails.map((addr) => (
@@ -415,7 +491,7 @@ function NotifyEmailPanel({
                   {addr}
                   <button
                     type="button"
-                    onClick={() => setValue(serializeNotifyEmails(emails.filter((a) => a !== addr)))}
+                    onClick={() => setCommitted(serializeNotifyEmails(emails.filter((a) => a !== addr)))}
                     aria-label={`Remove ${addr}`}
                     disabled={busy || !canPersist}
                     className="text-muted-foreground transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
@@ -434,7 +510,7 @@ function NotifyEmailPanel({
               Connect Supabase to save this here.
             </p>
           )}
-          {!parsed.ok && <p className="mt-2 text-[11px] text-primary">{parsed.error}</p>}
+          {addError && <p className="mt-2 text-[11px] text-primary">{addError}</p>}
           {error && (
             <p className="mt-2 flex items-center gap-1 text-[11px] text-destructive">
               <AlertTriangle className="h-3 w-3" aria-hidden /> {error}
