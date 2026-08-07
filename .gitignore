@@ -38,3 +38,6 @@ next-env.d.ts
 
 # Google OAuth client secret downloads (contains client_secret) — never commit
 client_secret_*.json
+
+# scratch workspace for subagent-driven-development (ledgers, briefs, review packages)
+/.superpowers/
