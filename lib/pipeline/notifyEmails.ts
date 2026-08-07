@@ -31,8 +31,11 @@ export const MAX_NOTIFY_RAW_LEN = MAX_NOTIFY_EMAILS * (MAX_NOTIFY_EMAIL_LEN + 2)
 const EMAIL_RE = /^[^\s@?&=#,;]+@[^\s@?&=#,;]+\.[^\s@?&=#,;]+$/;
 
 /** Commas, semicolons and newlines all separate — operators paste from Outlook
- *  (semicolons) and from spreadsheet columns (newlines). */
-const SEPARATORS = /[,;\r\n]+/;
+ *  (semicolons) and from spreadsheet columns (newlines). Exported so the
+ *  Integrations panel can detect "a separator was just typed/pasted" and
+ *  commit the in-progress draft immediately, without re-deriving what counts
+ *  as a separator. */
+export const NOTIFY_SEPARATOR_RE = /[,;\r\n]+/;
 
 export type NotifyEmailsParse =
   /** `value` is the canonical string to store; `""` means "clear the setting". */
@@ -55,7 +58,7 @@ export function parseNotifyEmails(raw: string): NotifyEmailsParse {
 
   const seen = new Set<string>();
   const emails: string[] = [];
-  for (const part of raw.split(SEPARATORS)) {
+  for (const part of raw.split(NOTIFY_SEPARATOR_RE)) {
     // Lowercase the whole address, not just the domain: it makes case-differing
     // duplicates collapse, and Gmail — the only transport here — is
     // case-insensitive on the local part too (RFC technically allows a
@@ -85,4 +88,19 @@ export function parseNotifyEmails(raw: string): NotifyEmailsParse {
 
   // Empty is valid and means "clear" — the caller decides what to do with it.
   return { ok: true, emails, value: serializeNotifyEmails(emails) };
+}
+
+/** Fold a not-yet-confirmed draft string onto an already-canonical
+ *  `committed` list, producing the next canonical list. Used by the
+ *  Integrations panel's add-one-recipient field: `committed` is the
+ *  confirmed chips, `draft` is whatever the operator is currently typing —
+ *  one address, or a pasted separator-delimited list.
+ *
+ *  A blank draft is a no-op success (`committed` re-validated and returned
+ *  unchanged), so callers like Save can call this unconditionally without
+ *  special-casing "nothing to commit". */
+export function commitNotifyDraft(committed: string, draft: string): NotifyEmailsParse {
+  if (!draft.trim()) return parseNotifyEmails(committed);
+  const separator = committed.trim() ? ", " : "";
+  return parseNotifyEmails(committed + separator + draft);
 }
