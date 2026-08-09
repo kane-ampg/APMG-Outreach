@@ -31,7 +31,7 @@ const EASE = [0.16, 1, 0.3, 1] as const;
 const BATCH_SIZE = 200;
 
 type Phase = "idle" | "reading" | "confirm" | "uploading" | "done" | "error";
-type UploadMode = "live" | "demo" | "noop";
+type UploadMode = "live" | "unconfigured" | "noop";
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const out: T[][] = [];
@@ -385,7 +385,7 @@ function PipelineLeads() {
 
     const chunks = chunk(rows, BATCH_SIZE);
     let inserted = 0;
-    let anyDemo = false;
+    let anyUnconfigured = false;
     let anyLive = false;
     for (const chunkRows of chunks) {
       let res: Response;
@@ -412,13 +412,13 @@ function PipelineLeads() {
         fail(2, data?.error ?? `Importer responded ${res.status}.`);
         return;
       }
-      if (data.mode === "demo") anyDemo = true;
+      if (data.mode === "unconfigured") anyUnconfigured = true;
       if (data.mode === "live") anyLive = true;
       const prev = inserted;
       inserted += data.inserted ?? chunkRows.length;
       // Smooth, eased fill for this chunk. The write itself can return instantly
-      // (demo mode / tiny files), so we animate the counter + bar over a comfy
-      // minimum instead of snapping to 100% — this is the "loading" the user sees.
+      // (Supabase unconfigured / tiny files), so we animate the counter + bar over
+      // a comfy minimum instead of snapping to 100% — this is the "loading" the user sees.
       const span = inserted - prev;
       await tweenTo(setUploaded, prev, inserted, Math.max(750, Math.min(1800, span * 7 + 400)), live);
       if (!live()) return;
@@ -428,8 +428,8 @@ function PipelineLeads() {
     if (!reduce) await sleep(550);
     if (!live()) return;
 
-    // worst-case wins: if any batch fell back to demo, the badge says demo
-    const mode: UploadMode = anyDemo ? "demo" : anyLive ? "live" : "demo";
+    // worst-case wins: if any batch fell back to unconfigured, the badge says unconfigured
+    const mode: UploadMode = anyUnconfigured ? "unconfigured" : anyLive ? "live" : "unconfigured";
     setResult({ inserted, mode, batch: batchName });
     setRefreshSignal((n) => n + 1); // pull the freshly-written rows back
     setPhase("done");
@@ -471,7 +471,7 @@ function PipelineLeads() {
           ? `Uploading ${total} rows to Supabase`
           : phase === "done" && result
             ? `Done. Imported ${result.inserted} lead${result.inserted === 1 ? "" : "s"}${
-                result.mode === "demo" ? " (demo mode)" : ""
+                result.mode === "unconfigured" ? " — not written to Supabase (no database configured)" : ""
               }.`
             : "";
 
@@ -1038,7 +1038,7 @@ function SuccessBanner({
   result: { inserted: number; mode: UploadMode; batch: string | null };
   onReset: () => void;
 }) {
-  const demo = result.mode === "demo";
+  const unconfigured = result.mode === "unconfigured";
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/[0.04] px-3 py-2.5">
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-solid text-primary-foreground">
@@ -1049,8 +1049,8 @@ function SuccessBanner({
           Imported {result.inserted.toLocaleString("en-US")} lead{result.inserted === 1 ? "" : "s"}
         </div>
         <div className="truncate font-mono text-[10.5px] text-muted-foreground">
-          {demo
-            ? "Demo mode — not written to Supabase"
+          {unconfigured
+            ? "Not written to Supabase — no database configured"
             : result.batch
               ? `Folder ${result.batch}`
               : "Written to Supabase · public.leads"}
