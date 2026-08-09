@@ -8,7 +8,7 @@ import { isRole, type Role } from "@/lib/rbac/roles";
  * so that changing someone's role in the admin UI takes effect immediately
  * rather than whenever their cookie happens to expire.
  *
- * EDGE-SAFE BY CONTRACT: middleware.ts imports this module, so it must never
+ * EDGE-SAFE BY CONTRACT: proxy.ts imports this module, so it must never
  * import `server-only`, Node built-ins, or anything that touches the database.
  */
 

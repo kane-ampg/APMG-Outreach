@@ -108,7 +108,7 @@ function withPortalSource(req: NextRequest, res: NextResponse): NextResponse {
   return res;
 }
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const host = req.headers.get("host") || "";
   const { pathname } = req.nextUrl;
 

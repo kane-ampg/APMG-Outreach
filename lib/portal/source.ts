@@ -2,7 +2,7 @@
  * Traffic-source attribution for the customer portal — answers "did this
  * visitor come from TikTok, Facebook, Instagram, …?".
  *
- * How a source is captured (middleware.ts): a /portal request carrying
+ * How a source is captured (proxy.ts): a /portal request carrying
  * `?utm_source=` (or a social-network Referer as fallback) gets the `apmg_src`
  * cookie. From then on every telemetry event the visitor fires and any enquiry
  * they submit is stamped with that source server-side (readAttribution in

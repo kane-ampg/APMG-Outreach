@@ -177,7 +177,7 @@ export async function POST(req: Request): Promise<Response> {
   // end-to-end (it's visible and deletable on the Enquiries tab), but strip
   // attribution and skip the canonical funnel event below so it never appears
   // in a lead's Telemetry trail or the enquiry totals. Two kinds:
-  //  • internal — operator test submission (browser marked by middleware.ts).
+  //  • internal — operator test submission (browser marked by proxy.ts).
   //  • bot — a scanner/script that somehow posted the form (belt & braces on
   //    top of the honeypot); its UA gives it away (isBotRequest).
   const internal = isInternalRequest(req) || isBotRequest(req);

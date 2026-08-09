@@ -89,7 +89,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   // OPERATOR TRAFFIC IS NOT TELEMETRY. A browser that has opened the admin
-  // dashboard carries the apmg_internal cookie (middleware.ts) — accept-and-
+  // dashboard carries the apmg_internal cookie (proxy.ts) — accept-and-
   // drop its batches wholesale. Without this, an operator who test-clicked a
   // tracked /t/ link carries apmg_ref too, and their OWN portal browsing
   // (portal_view / portal_service_open — legit customer-journey names) would

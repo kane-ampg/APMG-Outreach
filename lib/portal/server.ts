@@ -192,7 +192,7 @@ export function portalAdminAuthorized(req: NextRequest | Request): boolean {
 }
 
 /**
- * Operator-browser marker. middleware.ts drops this cookie on any browser that
+ * Operator-browser marker. proxy.ts drops this cookie on any browser that
  * loads an admin dashboard page (a surface customer hosts never serve), and the
  * telemetry writers check it so the operator clicking around their OWN app —
  * including test-clicking tracked /t/ links and previewing /portal — can never
@@ -252,7 +252,7 @@ const MAX_CAMPAIGN_LEN = 120;
  * Read the visitor's attribution cookies: `apmg_ref` (the lead uuid, httpOnly)
  * and `apmg_ref_campaign` dropped by the /t/[id] outreach redirect, plus
  * `apmg_src` — the traffic source (tiktok / facebook / instagram / …) dropped
- * by middleware.ts when a /portal visit carries ?utm_source= or a social
+ * by proxy.ts when a /portal visit carries ?utm_source= or a social
  * Referer. Parsed straight off the Cookie header so it works for both
  * NextRequest and the plain Request the route handlers get. The lead id is
  * only trusted when it's a well-formed uuid — the cookie value ends up

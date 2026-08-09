@@ -54,7 +54,7 @@ export async function GET(
   const destination = safeDestination(url.searchParams.get("to"), url.origin);
 
   // Traffic that is NOT a real prospect clicking: skip it entirely. Two kinds:
-  //  • internal — a browser marked by the admin dashboard (middleware.ts), i.e.
+  //  • internal — a browser marked by the admin dashboard (proxy.ts), i.e.
   //    the operator test-clicking their own link.
   //  • bot — an email link-scanner (Microsoft Defender/Safe Links, Proofpoint,
   //    Barracuda…) or a scripted fetch (curl, python-requests, headless). These

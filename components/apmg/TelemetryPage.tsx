@@ -65,7 +65,7 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  * dashboard click noise (an operator test-clicking a tracked link carries the
  * cookie too) never pollutes a lead's trail or the anonymous block. On top of
  * that, browsers that have opened this dashboard carry the apmg_internal
- * cookie (middleware.ts) and the telemetry writers drop their traffic
+ * cookie (proxy.ts) and the telemetry writers drop their traffic
  * entirely — so the operator's own portal browsing and link test-clicks never
  * enter these trails at all. Client clicks only.
  *
