@@ -249,7 +249,7 @@ export async function POST(req: Request): Promise<Response> {
   });
 
   const target = await campaignWebhook();
-  if (target.state === "demo") {
+  if (target.state !== "ok") {
     // Demo mode — no webhook configured. Simulate a successful send so the tab
     // is fully exercisable before n8n is wired up.
     return json({ ok: true, sent: messages.length, mode: "demo", campaign, suppressed: suppressedCount });

@@ -169,7 +169,7 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const target = await emailFinderWebhook();
-  if (target.state === "demo") {
+  if (target.state !== "ok") {
     // No finder webhook configured (or toggled off). Unlike the send flow we do
     // NOT simulate success — inventing addresses would poison stored leads.
     return json({ ok: true, mode: "demo", results: [], found: 0, saved: 0 });

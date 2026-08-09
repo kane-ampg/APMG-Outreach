@@ -28,6 +28,32 @@ export function supabaseTarget():
   }
 }
 
+/** True on any deployed runtime. A production console must never substitute
+ *  invented data for missing infrastructure; a developer machine still may. */
+export function isProductionRuntime(): boolean {
+  return process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL_ENV);
+}
+
+/**
+ * Fail-closed guard for routes that would otherwise degrade to demo data.
+ * Returns a 503 Response to hand straight back to the caller when Supabase is
+ * unusable on a deployed runtime, or null when the route may proceed — either
+ * because Supabase is live, or because this is a developer machine where the
+ * demo fallback is still wanted.
+ *
+ * `label` names the route in the server log, e.g. "portal/summary".
+ */
+export function requireLiveSupabase(label: string): Response | null {
+  const target = supabaseTarget();
+  if (target.state === "ok") return null;
+  if (!isProductionRuntime()) return null;
+  console.error(`[${label}] Supabase is ${target.state} on a deployed runtime — refusing to serve demo data.`);
+  return Response.json(
+    { ok: false, error: "This console is not connected to its database, so no data can be shown." },
+    { status: 503 },
+  );
+}
+
 /** Optional shared secret sent with every outbound n8n webhook POST. Set
  *  `N8N_WEBHOOK_SECRET` in the app's environment and add a matching Header Auth
  *  credential (header `x-apmg-secret`) on the n8n webhook node so anonymous
@@ -42,13 +68,19 @@ export function webhookAuthHeaders(): Record<string, string> {
  *  Integrations tab, or from an environment variable. */
 export type WebhookSource = "setting" | "env";
 export type WebhookTarget =
-  | { state: "demo" }
+  /** No URL configured in app_settings or the environment. */
+  | { state: "unconfigured" }
+  /** Configured, but the Integrations toggle is off. The operator switched
+   *  this off deliberately — it is NOT the same as never having set it up,
+   *  and callers must not treat it as a reason to simulate success. */
+  | { state: "paused"; url: string; source: WebhookSource }
   | { state: "ok"; url: string; source: WebhookSource };
 
 /** app_settings keys for the runtime-configurable n8n webhooks. Each webhook
  *  has a URL key and an on/off `_enabled` key (the Integrations tab toggle);
- *  when the toggle is off the resolver returns demo, i.e. the automation is
- *  paused and nothing is actually sent. */
+ *  when the toggle is off the resolver reports that state separately as
+ *  paused — the automation is deliberately switched off, distinct from never
+ *  having been configured — and nothing is actually sent. */
 export const SETTING_CAMPAIGN_WEBHOOK = "n8n_campaign_webhook_url";
 export const SETTING_CAMPAIGN_ENABLED = "n8n_campaign_webhook_enabled";
 export const SETTING_EMAIL_FINDER_WEBHOOK = "n8n_email_finder_webhook_url";
@@ -109,9 +141,11 @@ export function emailFinderWebhook(): Promise<WebhookTarget> {
   return resolveWebhook(SETTING_EMAIL_FINDER_WEBHOOK, SETTING_EMAIL_FINDER_ENABLED, "N8N_EMAIL_FINDER_WEBHOOK_URL");
 }
 
-/** Setting override → env fallback → demo. Invalid URLs are ignored (logged).
- *  A configured webhook whose toggle is explicitly off resolves to demo too
- *  (paused). The toggle defaults ON, so a saved/env URL goes live immediately. */
+/** Setting override → env fallback → unconfigured. Invalid URLs are ignored
+ *  (logged). A configured webhook whose toggle is explicitly off is reported
+ *  as paused — separately from unconfigured — so callers can't confuse an
+ *  operator's deliberate pause with the automation never having been set up.
+ *  The toggle defaults ON, so a saved/env URL goes live immediately. */
 async function resolveWebhook(settingKey: string, enabledKey: string, envVar: string): Promise<WebhookTarget> {
   let url = "";
   let source: WebhookSource = "setting";
@@ -126,13 +160,13 @@ async function resolveWebhook(settingKey: string, enabledKey: string, envVar: st
       url = env;
       source = "env";
     } else if (env) {
-      console.error(`[pipeline] ${envVar} is not a valid URL — falling back to demo.`);
+      console.error(`[pipeline] ${envVar} is not a valid URL — treating as unconfigured.`);
     }
   }
 
-  if (!url) return { state: "demo" };
+  if (!url) return { state: "unconfigured" };
   // toggle: absent/anything-but-"false" ⇒ enabled (default on)
-  if ((await readSetting(enabledKey)) === "false") return { state: "demo" };
+  if ((await readSetting(enabledKey)) === "false") return { state: "paused", url, source };
   return { state: "ok", url, source };
 }
 
