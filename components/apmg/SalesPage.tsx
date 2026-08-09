@@ -6,6 +6,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleCheck,
+  Eye,
   Globe,
   LayoutGrid,
   Mail,
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { SALES_REP, type SalesLead, type SalesStatus } from "@/lib/data/sales";
+import type { LeadSubject } from "@/lib/data/enquiryActivity";
 import { formatInt, formatUsd } from "@/lib/format";
 import { Can } from "@/components/rbac/Can";
 import { Button } from "@/components/ui/button";
@@ -32,12 +34,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CloseDealModal } from "./CloseDealModal";
+import { EnquiryActivityModal } from "./EnquiryActivityModal";
 import { ReturnLeadModal } from "./ReturnLeadModal";
 import { SalesStatusPill } from "./SalesStatusPill";
 import { SignalLed } from "./SignalLed";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
 import { useSales } from "./SalesProvider";
+import { useLeadBriefs } from "./useLeadBriefs";
 
 const FILTERS: { id: SalesStatus | "all"; label: string }[] = [
   { id: "all", label: "All" },
@@ -60,6 +64,9 @@ const VIEWS: { id: ViewMode; label: string; icon: typeof Rows3 }[] = [
   { id: "cards", label: "Cards", icon: LayoutGrid },
 ];
 
+/** House ease (ui-standards §14.1) for the action-cluster cross-fades below. */
+const SWAP_EASE = [0.16, 1, 0.3, 1] as const;
+
 function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
   return (
     <div className="flex-1 px-4 py-3">
@@ -75,6 +82,33 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
         {label}
       </div>
     </div>
+  );
+}
+
+/**
+ * Opens the brief for one queued lead — the same modal the Enquiries tab's
+ * "View" opens, on the same telemetry.
+ *
+ * Every row gets one, whether or not the lead has enquired. Handed-over leads
+ * mostly HAVEN'T (they're here because admin liked their click trail, not
+ * because they filled a form), and the trail is exactly what the rep wants
+ * before dialling — so gating this on an enquiry would hide it on the rows that
+ * need it most. See EnquiryActivityModal for the two subjects it renders.
+ */
+function ViewButton({ lead, onClick }: { lead: SalesLead; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-track="sales_view_brief"
+      data-track-lead={lead.id}
+      aria-label={`View portal activity for ${lead.business}`}
+      title="What they did on the portal"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[12.5px] font-medium text-muted-foreground outline-none transition-colors hover:border-primary/40 hover:text-foreground focus-visible:border-primary/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))]"
+    >
+      <Eye className="h-4 w-4" aria-hidden />
+      View
+    </button>
   );
 }
 
@@ -105,6 +139,8 @@ function RevertButton({
 function LeadCard({
   lead,
   fresh,
+  reduce,
+  onView,
   onContacted,
   onLost,
   onRequestClose,
@@ -114,6 +150,8 @@ function LeadCard({
   lead: SalesLead;
   /** just arrived from admin and not yet acknowledged */
   fresh: boolean;
+  reduce: boolean;
+  onView: (id: string) => void;
   onContacted: (id: string) => void;
   onLost: (id: string) => void;
   onRequestClose: (id: string) => void;
@@ -285,79 +323,116 @@ function LeadCard({
           </>
         )}
 
-        {!closed && (
-          <div className="ml-auto flex items-center gap-1.5">
-            <Can perm="leads.contact">
-              {lead.status === "new" ? (
+        {/* The read, kept out of the status swap below — it stays available on
+            a closed lead, because "what did they do?" outlives the outcome. */}
+        <ViewButton lead={lead} onClick={() => onView(lead.id)} />
+
+        <AnimatePresence mode="wait" initial={false}>
+          {closed ? (
+            <motion.div
+              key="closed"
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94, transition: { duration: reduce ? 0 : 0.14 } }}
+              transition={{ duration: reduce ? 0 : 0.2, ease: SWAP_EASE }}
+              className="ml-auto flex items-center gap-2"
+            >
+              {lead.status === "closed_won" && (
+                <span className="inline-flex items-center gap-1 font-mono text-[12.5px] text-primary">
+                  <CircleCheck className="h-4 w-4" aria-hidden />
+                  Closed{lead.assignedRep ? ` by ${lead.assignedRep}` : ""}
+                </span>
+              )}
+              {/* retract the close / lost mark and hand the lead back to the queue */}
+              <Can perm="leads.close">
+                <RevertButton
+                  label={lead.status === "closed_won" ? "Reopen" : "Undo lost"}
+                  leadId={lead.id}
+                  onRevert={onRevert}
+                />
+              </Can>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="open"
+              initial={{ opacity: 0, scale: 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.94, transition: { duration: reduce ? 0 : 0.14 } }}
+              transition={{ duration: reduce ? 0 : 0.2, ease: SWAP_EASE }}
+              className="ml-auto flex items-center gap-1.5"
+            >
+              <Can perm="leads.contact">
+                <AnimatePresence mode="wait" initial={false}>
+                  {lead.status === "new" ? (
+                    <motion.span
+                      key="mark"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.12 } }}
+                      transition={{ duration: reduce ? 0 : 0.18, ease: SWAP_EASE }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onContacted(lead.id)}
+                        data-track="lead_mark_contacted"
+                        data-track-lead={lead.id}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                      >
+                        <Phone className="h-4 w-4" aria-hidden />
+                        Mark contacted
+                      </button>
+                    </motion.span>
+                  ) : (
+                    <motion.span
+                      key="undo"
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.12 } }}
+                      transition={{ duration: reduce ? 0 : 0.18, ease: SWAP_EASE }}
+                    >
+                      {/* marked contacted by mistake — put it back in New */}
+                      <RevertButton label="Undo contacted" leadId={lead.id} onRevert={onRevert} />
+                    </motion.span>
+                  )}
+                </AnimatePresence>
+              </Can>
+              <Can perm="leads.close">
                 <button
                   type="button"
-                  onClick={() => onContacted(lead.id)}
-                  data-track="lead_mark_contacted"
+                  onClick={() => onRequestClose(lead.id)}
+                  data-track="lead_open_close_modal"
                   data-track-lead={lead.id}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                  className="inline-flex items-center gap-1.5 rounded-md bg-primary-solid px-3 py-1.5 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:bg-primary-solid/90"
                 >
-                  <Phone className="h-4 w-4" aria-hidden />
-                  Mark contacted
+                  <CircleCheck className="h-4 w-4" aria-hidden />
+                  Closed
                 </button>
-              ) : (
-                // marked contacted by mistake — put it back in New
-                <RevertButton label="Undo contacted" leadId={lead.id} onRevert={onRevert} />
-              )}
-            </Can>
-            <Can perm="leads.close">
+                <button
+                  type="button"
+                  onClick={() => onLost(lead.id)}
+                  aria-label={`Mark ${lead.business} lost`}
+                  data-track="lead_close_lost"
+                  data-track-lead={lead.id}
+                  className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                >
+                  <X className="h-4 w-4" aria-hidden />
+                </button>
+              </Can>
+              {/* hand it back to admin — for leads we shouldn't be calling */}
               <button
                 type="button"
-                onClick={() => onRequestClose(lead.id)}
-                data-track="lead_open_close_modal"
+                onClick={() => onRequestReturn(lead.id)}
+                aria-label={`Return ${lead.business} to admin`}
+                title="Return to admin"
+                data-track="lead_open_return_modal"
                 data-track-lead={lead.id}
-                className="inline-flex items-center gap-1.5 rounded-md bg-primary-solid px-3 py-1.5 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:bg-primary-solid/90"
+                className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
               >
-                <CircleCheck className="h-4 w-4" aria-hidden />
-                Closed
+                <Undo2 className="h-4 w-4" aria-hidden />
               </button>
-              <button
-                type="button"
-                onClick={() => onLost(lead.id)}
-                aria-label={`Mark ${lead.business} lost`}
-                data-track="lead_close_lost"
-                data-track-lead={lead.id}
-                className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
-              >
-                <X className="h-4 w-4" aria-hidden />
-              </button>
-            </Can>
-            {/* hand it back to admin — for leads we shouldn't be calling */}
-            <button
-              type="button"
-              onClick={() => onRequestReturn(lead.id)}
-              aria-label={`Return ${lead.business} to admin`}
-              title="Return to admin"
-              data-track="lead_open_return_modal"
-              data-track-lead={lead.id}
-              className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-            >
-              <Undo2 className="h-4 w-4" aria-hidden />
-            </button>
-          </div>
-        )}
-        {closed && (
-          <div className="ml-auto flex items-center gap-2">
-            {lead.status === "closed_won" && (
-              <span className="inline-flex items-center gap-1 font-mono text-[12.5px] text-primary">
-                <CircleCheck className="h-4 w-4" aria-hidden />
-                Closed{lead.assignedRep ? ` by ${lead.assignedRep}` : ""}
-              </span>
-            )}
-            {/* retract the close / lost mark and hand the lead back to the queue */}
-            <Can perm="leads.close">
-              <RevertButton
-                label={lead.status === "closed_won" ? "Reopen" : "Undo lost"}
-                leadId={lead.id}
-                onRevert={onRevert}
-              />
-            </Can>
-          </div>
-        )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -376,7 +451,9 @@ function LeadRow({
   lead,
   fresh,
   selected,
+  reduce,
   onToggle,
+  onView,
   onContacted,
   onLost,
   onRequestClose,
@@ -387,7 +464,9 @@ function LeadRow({
   /** just arrived from admin and not yet acknowledged — the row announces it */
   fresh: boolean;
   selected: boolean;
+  reduce: boolean;
   onToggle: (id: string) => void;
+  onView: (id: string) => void;
   onContacted: (id: string) => void;
   onLost: (id: string) => void;
   onRequestClose: (id: string) => void;
@@ -398,9 +477,11 @@ function LeadRow({
   const value = lead.closedValue ?? lead.dealValue;
 
   return (
-    <TableRow
+    <motion.tr
+      layout
+      exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.15 } }}
       className={cn(
-        "transition-colors",
+        "border-b transition-colors hover:bg-muted/50",
         // A fresh row has to stay legible as "new" while the rep scans past it,
         // so the tint wins over hover instead of being replaced by it.
         fresh
@@ -535,89 +616,128 @@ function LeadRow({
       {/* the same marks the card carries, compacted to icon buttons */}
       <TableCell className="text-right">
         <div className="flex items-center justify-end gap-1">
-          {!closed ? (
-            <>
-              <Can perm="leads.contact">
-                {lead.status === "new" ? (
-                  <button
-                    type="button"
-                    onClick={() => onContacted(lead.id)}
-                    aria-label={`Mark ${lead.business} contacted`}
-                    title="Mark contacted"
-                    data-track="lead_mark_contacted"
-                    data-track-lead={lead.id}
-                    className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-                  >
-                    <Phone className="h-4 w-4" aria-hidden />
-                  </button>
-                ) : (
+          {/* Outside the swap: the brief is a read, so it survives the lead
+              being closed, lost or reopened. */}
+          <ViewButton lead={lead} onClick={() => onView(lead.id)} />
+          <AnimatePresence mode="wait" initial={false}>
+            {closed ? (
+              <motion.span
+                key="closed"
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.94, transition: { duration: reduce ? 0 : 0.14 } }}
+                transition={{ duration: reduce ? 0 : 0.2, ease: SWAP_EASE }}
+                className="inline-flex"
+              >
+                <Can perm="leads.close">
                   <button
                     type="button"
                     onClick={() => onRevert(lead.id)}
-                    aria-label={`Undo contacted on ${lead.business}`}
-                    title="Undo contacted"
                     data-track="lead_revert_status"
                     data-track-lead={lead.id}
-                    className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
                   >
                     <Undo2 className="h-4 w-4" aria-hidden />
+                    {lead.status === "closed_won" ? "Reopen" : "Undo lost"}
                   </button>
-                )}
-              </Can>
-              <Can perm="leads.close">
+                </Can>
+              </motion.span>
+            ) : (
+              <motion.span
+                key="open"
+                initial={{ opacity: 0, scale: 0.94 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.94, transition: { duration: reduce ? 0 : 0.14 } }}
+                transition={{ duration: reduce ? 0 : 0.2, ease: SWAP_EASE }}
+                className="inline-flex items-center gap-1"
+              >
+                <Can perm="leads.contact">
+                  <AnimatePresence mode="wait" initial={false}>
+                    {lead.status === "new" ? (
+                      <motion.span
+                        key="mark"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.12 } }}
+                        transition={{ duration: reduce ? 0 : 0.18, ease: SWAP_EASE }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onContacted(lead.id)}
+                          aria-label={`Mark ${lead.business} contacted`}
+                          title="Mark contacted"
+                          data-track="lead_mark_contacted"
+                          data-track-lead={lead.id}
+                          className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                        >
+                          <Phone className="h-4 w-4" aria-hidden />
+                        </button>
+                      </motion.span>
+                    ) : (
+                      <motion.span
+                        key="undo"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0, transition: { duration: reduce ? 0 : 0.12 } }}
+                        transition={{ duration: reduce ? 0 : 0.18, ease: SWAP_EASE }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => onRevert(lead.id)}
+                          aria-label={`Undo contacted on ${lead.business}`}
+                          title="Undo contacted"
+                          data-track="lead_revert_status"
+                          data-track-lead={lead.id}
+                          className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                        >
+                          <Undo2 className="h-4 w-4" aria-hidden />
+                        </button>
+                      </motion.span>
+                    )}
+                  </AnimatePresence>
+                </Can>
+                <Can perm="leads.close">
+                  <button
+                    type="button"
+                    onClick={() => onRequestClose(lead.id)}
+                    title="Close won"
+                    data-track="lead_open_close_modal"
+                    data-track-lead={lead.id}
+                    className="inline-flex items-center gap-1.5 rounded-md bg-primary-solid px-2 py-1 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:bg-primary-solid/90"
+                  >
+                    <CircleCheck className="h-4 w-4" aria-hidden />
+                    Closed
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onLost(lead.id)}
+                    aria-label={`Mark ${lead.business} lost`}
+                    title="Mark lost"
+                    data-track="lead_close_lost"
+                    data-track-lead={lead.id}
+                    className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" aria-hidden />
+                  </button>
+                </Can>
+                {/* hand it back to admin — for leads we shouldn't be calling */}
                 <button
                   type="button"
-                  onClick={() => onRequestClose(lead.id)}
-                  title="Close won"
-                  data-track="lead_open_close_modal"
+                  onClick={() => onRequestReturn(lead.id)}
+                  aria-label={`Return ${lead.business} to admin`}
+                  title="Return to admin"
+                  data-track="lead_open_return_modal"
                   data-track-lead={lead.id}
-                  className="inline-flex items-center gap-1.5 rounded-md bg-primary-solid px-2 py-1 text-[12.5px] font-semibold text-primary-foreground transition-colors hover:bg-primary-solid/90"
+                  className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
                 >
-                  <CircleCheck className="h-4 w-4" aria-hidden />
-                  Closed
+                  <Undo2 className="h-4 w-4" aria-hidden />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => onLost(lead.id)}
-                  aria-label={`Mark ${lead.business} lost`}
-                  title="Mark lost"
-                  data-track="lead_close_lost"
-                  data-track-lead={lead.id}
-                  className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
-                >
-                  <X className="h-4 w-4" aria-hidden />
-                </button>
-              </Can>
-              {/* hand it back to admin — for leads we shouldn't be calling */}
-              <button
-                type="button"
-                onClick={() => onRequestReturn(lead.id)}
-                aria-label={`Return ${lead.business} to admin`}
-                title="Return to admin"
-                data-track="lead_open_return_modal"
-                data-track-lead={lead.id}
-                className="inline-flex items-center justify-center rounded-md border border-border bg-background p-2 text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-              >
-                <Undo2 className="h-4 w-4" aria-hidden />
-              </button>
-            </>
-          ) : (
-            <Can perm="leads.close">
-              <button
-                type="button"
-                onClick={() => onRevert(lead.id)}
-                data-track="lead_revert_status"
-                data-track-lead={lead.id}
-                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-              >
-                <Undo2 className="h-4 w-4" aria-hidden />
-                {lead.status === "closed_won" ? "Reopen" : "Undo lost"}
-              </button>
-            </Can>
-          )}
+              </motion.span>
+            )}
+          </AnimatePresence>
         </div>
       </TableCell>
-    </TableRow>
+    </motion.tr>
   );
 }
 
@@ -625,8 +745,10 @@ function LeadsTable({
   leads,
   freshIds,
   selected,
+  reduce,
   onToggle,
   onToggleAll,
+  onView,
   onContacted,
   onLost,
   onRequestClose,
@@ -636,8 +758,10 @@ function LeadsTable({
   leads: SalesLead[];
   freshIds: ReadonlySet<string>;
   selected: ReadonlySet<string>;
+  reduce: boolean;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
+  onView: (id: string) => void;
   onContacted: (id: string) => void;
   onLost: (id: string) => void;
   onRequestClose: (id: string) => void;
@@ -680,20 +804,24 @@ function LeadsTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {leads.map((lead) => (
-            <LeadRow
-              key={lead.id}
-              lead={lead}
-              fresh={freshIds.has(lead.id)}
-              selected={selected.has(lead.id)}
-              onToggle={onToggle}
-              onContacted={onContacted}
-              onLost={onLost}
-              onRequestClose={onRequestClose}
-              onRequestReturn={onRequestReturn}
-              onRevert={onRevert}
-            />
-          ))}
+          <AnimatePresence initial={false}>
+            {leads.map((lead) => (
+              <LeadRow
+                key={lead.id}
+                lead={lead}
+                fresh={freshIds.has(lead.id)}
+                selected={selected.has(lead.id)}
+                reduce={reduce}
+                onToggle={onToggle}
+                onView={onView}
+                onContacted={onContacted}
+                onLost={onLost}
+                onRequestClose={onRequestClose}
+                onRequestReturn={onRequestReturn}
+                onRevert={onRevert}
+              />
+            ))}
+          </AnimatePresence>
         </TableBody>
       </Table>
     </div>
@@ -742,6 +870,7 @@ export function SalesPage() {
     needsMigration,
     arrivals,
     freshIds,
+    handoffAt,
     acknowledgeArrivals,
     setPage,
     reload,
@@ -751,7 +880,11 @@ export function SalesPage() {
     returnLeads,
     revertStatus,
   } = useSales();
+  // The telemetry behind each row's "View", read once for the whole page.
+  const briefs = useLeadBriefs();
   const [filter, setFilter] = useState<SalesStatus | "all">("all");
+  /** id of the lead whose brief modal is open (null = closed). */
+  const [viewingId, setViewingId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   /** Leads queued for the return modal — one from a row button, or the whole
    *  tick-box selection. Empty means the modal is closed. */
@@ -786,6 +919,39 @@ export function SalesPage() {
     .map((id) => leads.find((l) => l.id === id))
     .filter((l): l is SalesLead => !!l);
   const initialLoad = loading && leads.length === 0;
+
+  /* ── the "View" brief ─────────────────────────────────────────────────────
+     Resolved from the loaded queue, so a lead that vanishes under the rep (a
+     return, a page turn) closes the modal instead of stranding it. When the
+     lead HAS enquired the modal gets that enquiry — the richer subject, and
+     the same view the Enquiries tab shows — otherwise it gets the lead itself
+     and reads the brief off the click trail alone. */
+  const viewingLead = viewingId ? leads.find((l) => l.id === viewingId) ?? null : null;
+  useEffect(() => {
+    if (viewingId && !viewingLead) setViewingId(null);
+  }, [viewingId, viewingLead]);
+
+  const viewingEnquiry = viewingLead ? briefs.enquiryOf(viewingLead.id) : null;
+  const viewingActivity = viewingLead ? briefs.trailOf(viewingLead.id) : null;
+  const viewingSubject = useMemo<LeadSubject | null>(
+    () =>
+      viewingLead
+        ? {
+            leadId: viewingLead.id,
+            business: viewingLead.business,
+            contactName: null,
+            email: viewingLead.email ?? null,
+            phone: viewingLead.phone ?? null,
+            website: viewingLead.website ?? null,
+            sector: viewingLead.category || null,
+            // The scraped row doesn't carry one; the trail does, and
+            // buildLeadFacts falls back to it.
+            campaign: null,
+            handedOverAt: handoffAt.get(viewingLead.id) ?? null,
+          }
+        : null,
+    [viewingLead, handoffAt],
+  );
 
   // Drop anything that has left the view — a page turn, a filter change, or a
   // lead being returned out from under the selection. Without this the bulk
@@ -1090,14 +1256,19 @@ export function SalesPage() {
           </div>
         </div>
       ) : view === "table" ? (
-        <div className={cn("mt-3", loading && "opacity-60")} aria-busy={loading || undefined}>
+        <div
+          className={cn("mt-3 transition-opacity duration-200", loading && "opacity-60")}
+          aria-busy={loading || undefined}
+        >
           <Reveal delay={0.06}>
             <LeadsTable
               leads={visible}
               freshIds={freshIds}
               selected={selected}
+              reduce={reduce}
               onToggle={toggleOne}
               onToggleAll={toggleAll}
+              onView={setViewingId}
               onContacted={markContacted}
               onLost={markLost}
               onRequestClose={setClosingId}
@@ -1108,22 +1279,35 @@ export function SalesPage() {
         </div>
       ) : (
         <div
-          className={cn("mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3", loading && "opacity-60")}
+          className={cn(
+            "mt-3 grid grid-cols-1 gap-3 transition-opacity duration-200 lg:grid-cols-2 xl:grid-cols-3",
+            loading && "opacity-60",
+          )}
           aria-busy={loading || undefined}
         >
-          {visible.map((lead, i) => (
-            <Reveal key={lead.id} delay={0.06 + 0.03 * i} className="h-full">
-              <LeadCard
-                lead={lead}
-                fresh={freshIds.has(lead.id)}
-                onContacted={markContacted}
-                onLost={markLost}
-                onRequestClose={setClosingId}
-                onRequestReturn={openReturn}
-                onRevert={revertStatus}
-              />
-            </Reveal>
-          ))}
+          <AnimatePresence mode="popLayout">
+            {visible.map((lead, i) => (
+              <Reveal
+                key={lead.id}
+                layout
+                delay={0.06 + Math.min(i * 0.03, 0.2)}
+                exit={{ opacity: 0, scale: 0.96, transition: { duration: reduce ? 0 : 0.14 } }}
+                className="h-full"
+              >
+                <LeadCard
+                  lead={lead}
+                  fresh={freshIds.has(lead.id)}
+                  reduce={reduce}
+                  onView={setViewingId}
+                  onContacted={markContacted}
+                  onLost={markLost}
+                  onRequestClose={setClosingId}
+                  onRequestReturn={openReturn}
+                  onRevert={revertStatus}
+                />
+              </Reveal>
+            ))}
+          </AnimatePresence>
         </div>
       )}
 
@@ -1161,6 +1345,15 @@ export function SalesPage() {
       )}
 
       <Footer />
+
+      <EnquiryActivityModal
+        inquiry={viewingEnquiry}
+        lead={viewingSubject}
+        activity={viewingActivity}
+        activityState={briefs.state}
+        demo={mode === "demo"}
+        onClose={() => setViewingId(null)}
+      />
 
       <CloseDealModal
         lead={closingLead}

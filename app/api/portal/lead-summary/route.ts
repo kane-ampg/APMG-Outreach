@@ -1,3 +1,4 @@
+import { bestEmail } from "@/lib/pipeline/campaign";
 import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import {
   CUSTOMER_JOURNEY_EVENTS,
@@ -7,18 +8,28 @@ import {
 } from "@/lib/portal/server";
 import {
   buildEngagementFacts,
+  buildLeadFacts,
   fallbackSummary,
   type EngagementFacts,
+  type LeadSubject,
 } from "@/lib/data/enquiryActivity";
 import { INQUIRY_STATUSES, type InquiryStatus, type PortalInquiry } from "@/lib/data/enquiries";
 import type { LeadActivity, LeadActivityEvent } from "@/lib/data/leadActivity";
+import { HANDOFF_EVENT } from "@/lib/sales/handoff";
 import { isEnquirySummaryConfigured, summariseEngagement } from "@/lib/ai/enquirySummary";
 
-// POST /api/portal/lead-summary — the "AI Summary" button in the Enquiries tab's
-// per-enquiry modal. Given ONE enquiry id it re-reads that enquiry and (when the
-// enquirer arrived through a tracked outreach link) their whole portal click
-// trail, reduces both to the counted facts the modal itself renders
-// (lib/data/enquiryActivity), and has Claude write the short brief a rep reads
+// POST /api/portal/lead-summary — the "AI Summary" button behind the per-row
+// "View" modal, on BOTH desks.
+//
+//   { inquiryId } → Enquiries. Re-reads that enquiry and (when the enquirer
+//                   arrived through a tracked outreach link) their whole portal
+//                   click trail.
+//   { leadId }    → Sales. Re-reads the LEAD row and its trail. Handed-over
+//                   leads have usually never enquired, so the trail is the whole
+//                   brief — see lib/data/enquiryActivity for the two subjects.
+//
+// Either way the rows are reduced to the counted facts the modal itself renders
+// (lib/data/enquiryActivity), and Claude writes the short brief a rep reads
 // before ringing them (lib/ai/enquirySummary).
 //
 // WHY THE SERVER RE-READS instead of summarising what the client already has:
@@ -44,6 +55,11 @@ const COLS =
 /** COLS minus `source` — for deploys where the column migration
  *  (supabase/portal-telemetry.sql) hasn't been run yet. Mirrors the listing. */
 const LEGACY_COLS = COLS.replace(",source", "");
+
+/** The scraped lead row behind a Sales-queue brief. Same columns
+ *  /api/sales/queue reads, minus the ones only the queue card needs. */
+const LEAD_TABLE = "leads";
+const LEAD_COLS = "id,name,category,website,phone,emails";
 
 /** The one customer-journey allowlist (lib/portal/server), shared with
  *  /api/portal/lead-activity so the modal's trail and the summary's grounding
@@ -182,6 +198,70 @@ async function readTrail(
   };
 }
 
+/**
+ * The Sales-queue subject: the scraped lead row, plus the stamp of when admin
+ * handed it to the desk.
+ *
+ * Deliberately NOT gated on that hand-off existing. This endpoint already sits
+ * behind the same shared secret as the sibling PII reads, and admin views leads
+ * that were never handed over (Hot Leads) — so a missing stamp just means the
+ * "handed over" line is omitted from the brief, not that the read is refused.
+ */
+async function readLeadSubject(
+  base: string,
+  key: string,
+  leadId: string,
+): Promise<LeadSubject | "missing" | "error"> {
+  let res: Response;
+  try {
+    res = await restGet(base, key, `${LEAD_TABLE}?select=${LEAD_COLS}&id=eq.${leadId}&limit=1`);
+  } catch (e) {
+    console.error("[portal/lead-summary] lead fetch failed:", e);
+    return "error";
+  }
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(`[portal/lead-summary] lead read ${res.status}:`, detail.slice(0, 500));
+    return "error";
+  }
+  const rows = (await res.json().catch(() => [])) as Record<string, unknown>[];
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row) return "missing";
+
+  // The hand-off stamp is context, not the record — a failed read costs the
+  // brief one line rather than the whole summary.
+  let handedOverAt: string | null = null;
+  try {
+    const stampRes = await restGet(
+      base,
+      key,
+      `portal_events?select=created_at&event=eq.${HANDOFF_EVENT}&lead_id=eq.${leadId}` +
+        `&order=created_at.asc&limit=1`,
+    );
+    if (stampRes.ok) {
+      const stamps = (await stampRes.json().catch(() => [])) as Array<{ created_at?: unknown }>;
+      const at = Array.isArray(stamps) ? stamps[0]?.created_at : null;
+      if (typeof at === "string" && at) handedOverAt = at;
+    }
+  } catch {
+    /* best effort — the brief reads fine without it */
+  }
+
+  const emails = Array.isArray(row.emails) ? (row.emails as unknown[]).filter((e): e is string => typeof e === "string") : [];
+  const site = typeof row.website === "string" ? row.website : null;
+  return {
+    leadId,
+    business: typeof row.name === "string" && row.name ? row.name : null,
+    contactName: null,
+    email: bestEmail(emails),
+    phone: typeof row.phone === "string" && row.phone ? row.phone : null,
+    website: site ? site.replace(/^https?:\/\//i, "").replace(/\/+$/, "") || null : null,
+    sector: typeof row.category === "string" && row.category ? row.category : null,
+    campaign: null,
+    handedOverAt,
+  };
+}
+
 export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
@@ -193,11 +273,19 @@ export async function POST(req: Request): Promise<Response> {
   } catch {
     return Response.json({ ok: false, error: "Invalid JSON body." }, { status: 400 });
   }
-  const inquiryId = (body as Record<string, unknown> | null)?.inquiryId;
+  const raw = (body as Record<string, unknown> | null) ?? {};
+  const inquiryId = raw.inquiryId;
+  const leadId = raw.leadId;
   // isUuid also makes the eq. interpolation safe (uuids never need quoting).
-  if (!isUuid(inquiryId)) {
+  // An enquiry wins when both are sent: it's the richer subject.
+  const subject: "enquiry" | "lead" | null = isUuid(inquiryId)
+    ? "enquiry"
+    : isUuid(leadId)
+      ? "lead"
+      : null;
+  if (!subject) {
     return Response.json(
-      { ok: false, error: "A valid enquiry id is required." },
+      { ok: false, error: "A valid enquiry id or lead id is required." },
       { status: 400 },
     );
   }
@@ -217,6 +305,41 @@ export async function POST(req: Request): Promise<Response> {
       { ok: false, mode: "live", error: "Portal storage is misconfigured." },
       { status: 500 },
     );
+  }
+
+  // ── the Sales-queue path: a lead, usually with no enquiry behind it ───────
+  if (subject === "lead") {
+    const lead = await readLeadSubject(target.base, target.key, leadId as string);
+    if (lead === "error") {
+      return Response.json(
+        { ok: false, mode: "live", error: "Couldn't read the lead." },
+        { status: 502 },
+      );
+    }
+    if (lead === "missing") {
+      return Response.json(
+        { ok: false, mode: "live", error: "That lead no longer exists." },
+        { status: 404 },
+      );
+    }
+    const trail = await readTrail(
+      target.base,
+      target.key,
+      lead.leadId,
+      lead.business,
+      lead.sector,
+    );
+    const leadFacts = buildLeadFacts(lead, trail);
+    const leadResult = await summariseEngagement(leadFacts);
+    return Response.json({
+      ok: true,
+      mode: "live",
+      configured: isEnquirySummaryConfigured(),
+      summary: leadResult.summary || fallbackSummary(leadFacts),
+      source: leadResult.source,
+      reason: leadResult.reason,
+      cached: leadResult.cached === true,
+    });
   }
 
   // ── the enquiry ───────────────────────────────────────────────────────────

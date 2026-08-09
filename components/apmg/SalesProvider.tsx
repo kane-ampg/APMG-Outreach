@@ -76,6 +76,10 @@ interface SalesContextValue {
    * list with it, so a rep never sees enquiries from the raw outreach list.
    */
   queuedIds: ReadonlySet<string>;
+  /** When each of those leads was handed over, ISO, by lead id — the same roll
+   *  as `queuedIds` with its stamps kept. The queue card shows a formatted
+   *  label; surfaces that need the real moment (the "View" brief) read this. */
+  handoffAt: ReadonlyMap<string, string>;
   /** newest hand-off stamp anywhere in the queue, ISO ("" when empty) */
   latestHandoffAt: string;
   /** 1-based current page */
@@ -453,10 +457,16 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     [handoffDates],
   );
   const handedToday = useMemo(() => countLast24h(handoffDates), [handoffDates]);
-  const queuedIds = useMemo(
-    () => new Set(handoffs.map((h) => h.leadId)) as ReadonlySet<string>,
+  // The roll is newest-first, so a lead handed over more than once (returned,
+  // then sent again) keeps its most recent stamp.
+  const handoffAt = useMemo(
+    () =>
+      new Map(
+        handoffs.map((h): [string, string] => [h.leadId, h.at]).reverse(),
+      ) as ReadonlyMap<string, string>,
     [handoffs],
   );
+  const queuedIds = useMemo(() => new Set(handoffAt.keys()) as ReadonlySet<string>, [handoffAt]);
 
   // Mirror of freshIds for the poll closure (which is re-created each render
   // and must not compare against a stale set).
@@ -582,6 +592,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       series,
       handedToday,
       queuedIds,
+      handoffAt,
       latestHandoffAt: latestAt,
       page,
       pageCount,
@@ -611,6 +622,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       series,
       handedToday,
       queuedIds,
+      handoffAt,
       latestAt,
       page,
       pageCount,

@@ -8,6 +8,7 @@ import {
   Copy,
   Eye,
   FileDown,
+  Globe,
   Inbox,
   LayoutGrid,
   Mail,
@@ -28,19 +29,29 @@ import { isHiddenEvent, serviceName, type LeadActivity } from "@/lib/data/leadAc
 import { leadScore, scoreTier } from "@/lib/data/leadScore";
 import {
   buildEngagementFacts,
+  buildLeadFacts,
   fallbackSummary,
   humanDuration,
   talkingPoints,
+  type LeadSubject,
 } from "@/lib/data/enquiryActivity";
 import { Button } from "@/components/ui/button";
 import { TimelineLine, fmtStamp } from "./LeadTrail";
 
 /**
- * Enquiries → "View": everything one enquirer did before they enquired.
+ * "View": everything a lead did on the portal, in one place.
  *
- * The rep about to ring an inbound enquiry has two questions — how warm is
- * this, and what do I open with — and the answers are already in the portal
- * telemetry. This modal puts them in one place, hottest signal first:
+ * TWO DESKS OPEN THIS, on two kinds of subject (lib/data/enquiryActivity):
+ *
+ *   Enquiries → an ENQUIRY (`inquiry` prop). Someone filled the form, so there
+ *               is a service, a message and a moment to reason from.
+ *   Sales     → a LEAD (`lead` prop). Admin handed it over off tracked clicks,
+ *               and handed-over leads have usually never enquired — the trail is
+ *               the whole brief, and the call is outbound, not a reply.
+ *
+ * The rep about to ring either one has two questions — how warm is this, and
+ * what do I open with — and the answers are already in the portal telemetry.
+ * This modal puts them in one place, hottest signal first:
  *
  *   1 · Engagement    — the countable tallies (email clicks, info-pack
  *                       downloads, portal visits, service cards, chat
@@ -55,12 +66,16 @@ import { TimelineLine, fmtStamp } from "./LeadTrail";
  *   3 · Talking points— the fact-only bullets (lib/data/enquiryActivity) the
  *                       summary is built from, so nothing on screen is a claim
  *                       the rep can't check against the trail below.
- *   4 · Their enquiry — service, contact details, and the message verbatim.
+ *   4 · Their enquiry — service, contact details, and the message verbatim. On
+ *                       a lead with no enquiry this becomes "How to reach them":
+ *                       the numbers to ring, and a plain statement that they
+ *                       never asked for anything.
  *   5 · Full trail    — the chronological timeline, same grammar as Telemetry.
  *
  * A direct or social enquirer has no tracked trail (no attribution cookie), and
  * that's a normal state, not an error: the panels say so plainly and the enquiry
- * itself carries the modal.
+ * itself carries the modal. The mirror case — a Sales lead with a trail but no
+ * enquiry — is equally normal, and the trail carries the modal instead.
  *
  * Follows ui-standards §10 (icon + description + explicit close), traps focus
  * and restores it on close, same as CloseDealModal / ReturnLeadModal.
@@ -159,14 +174,18 @@ function Tally({
 
 export function EnquiryActivityModal({
   inquiry,
+  lead = null,
   activity,
   activityState,
   demo,
   onClose,
 }: {
-  /** null = closed. */
+  /** The enquiry this brief is about. Null with no `lead` = closed. */
   inquiry: PortalInquiry | null;
-  /** the enquirer's click trail, or null when they have none */
+  /** The Sales-queue lead this brief is about, when there's no enquiry behind
+   *  it. Ignored when `inquiry` is set — an enquiry is the richer subject. */
+  lead?: LeadSubject | null;
+  /** the lead's click trail, or null when they have none */
   activity: LeadActivity | null;
   /** whether the trail read is still in flight / failed */
   activityState: "loading" | "ready" | "unavailable";
@@ -176,7 +195,8 @@ export function EnquiryActivityModal({
 }) {
   const reduce = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
-  const open = inquiry !== null;
+  const subject = lead && !inquiry ? lead : null;
+  const open = inquiry !== null || subject !== null;
   const [summary, setSummary] = useState<SummaryState>({ status: "idle" });
   const [copied, setCopied] = useState(false);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -192,11 +212,11 @@ export function EnquiryActivityModal({
     };
   }, []);
 
-  // A different enquiry means a different brief — never show the last one's.
+  // A different subject means a different brief — never show the last one's.
   useEffect(() => {
     setSummary({ status: "idle" });
     setCopied(false);
-  }, [inquiry?.id]);
+  }, [inquiry?.id, subject?.leadId]);
 
   useEffect(() => {
     if (!open) return;
@@ -208,8 +228,13 @@ export function EnquiryActivityModal({
   }, [open, onClose]);
 
   const facts = useMemo(
-    () => (inquiry ? buildEngagementFacts(inquiry, activity) : null),
-    [inquiry, activity],
+    () =>
+      inquiry
+        ? buildEngagementFacts(inquiry, activity)
+        : subject
+          ? buildLeadFacts(subject, activity)
+          : null,
+    [inquiry, subject, activity],
   );
   const points = useMemo(() => (facts ? talkingPoints(facts) : []), [facts]);
   const visibleEvents = useMemo(
@@ -221,7 +246,7 @@ export function EnquiryActivityModal({
    *  summary with a note rather than an error state — the panel always says
    *  something useful about the lead. */
   const generate = useCallback(async () => {
-    if (!inquiry || !facts) return;
+    if (!facts) return;
     const local = (note: string | null): SummaryState => ({
       status: "ready",
       text: fallbackSummary(facts),
@@ -242,7 +267,11 @@ export function EnquiryActivityModal({
       const res = await fetch("/api/portal/lead-summary", {
         method: "POST",
         headers: { "Content-Type": "application/json", ...adminHeaders() },
-        body: JSON.stringify({ inquiryId: inquiry.id }),
+        // The server re-reads whichever subject this is, so it grounds the brief
+        // in the database rather than in anything this body claims.
+        body: JSON.stringify(
+          inquiry ? { inquiryId: inquiry.id } : { leadId: subject?.leadId },
+        ),
       });
       const data = (await res.json().catch(() => null)) as SummaryResponse | null;
       if (!mounted.current) return;
@@ -265,7 +294,7 @@ export function EnquiryActivityModal({
     } catch {
       if (mounted.current) setSummary(local(REASON_NOTE.error));
     }
-  }, [inquiry, facts, demo]);
+  }, [inquiry, subject, facts, demo]);
 
   async function copySummary() {
     if (summary.status !== "ready") return;
@@ -279,16 +308,17 @@ export function EnquiryActivityModal({
     }
   }
 
-  const title = inquiry
-    ? inquiry.business ?? inquiry.name ?? inquiry.email
+  const title = facts
+    ? facts.business ?? facts.contactName ?? facts.email ?? "This lead"
     : "";
+  const enquired = facts?.kind === "enquiry";
   const score = activity ? leadScore(activity) : null;
   const tier = score !== null ? scoreTier(score) : null;
   const t = facts?.trail ?? null;
 
   return (
     <AnimatePresence>
-      {open && inquiry && facts && (
+      {open && facts && (
         <>
           <motion.div
             className="fixed inset-0 z-[80] bg-black/55 backdrop-blur-[1px]"
@@ -305,6 +335,7 @@ export function EnquiryActivityModal({
               role="dialog"
               aria-modal="true"
               aria-label={`Portal activity for ${title}`}
+              data-brief-kind={facts.kind}
               tabIndex={-1}
               className="flex max-h-[90vh] w-[min(96vw,44rem)] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none"
               initial={reduce ? false : { opacity: 0, scale: 0.96, y: 8 }}
@@ -338,11 +369,26 @@ export function EnquiryActivityModal({
                     )}
                   </div>
                   <p className="mt-0.5 text-[12.5px] text-muted-foreground">
-                    Enquired about{" "}
-                    <span className="font-medium text-foreground">
-                      {serviceName(inquiry.serviceSlug)}
-                    </span>{" "}
-                    · <span className="tnum">{fmtStamp(inquiry.createdAt)}</span>
+                    {inquiry ? (
+                      <>
+                        Enquired about{" "}
+                        <span className="font-medium text-foreground">
+                          {serviceName(inquiry.serviceSlug)}
+                        </span>{" "}
+                        · <span className="tnum">{fmtStamp(inquiry.createdAt)}</span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="font-medium text-foreground">No enquiry yet</span>
+                        {facts.handedOverAt && (
+                          <>
+                            {" "}
+                            · handed over{" "}
+                            <span className="tnum">{fmtStamp(facts.handedOverAt)}</span>
+                          </>
+                        )}
+                      </>
+                    )}
                     {t?.firstSeen && (
                       <>
                         {" "}
@@ -400,6 +446,13 @@ export function EnquiryActivityModal({
                             from first click to enquiry
                           </>
                         )}
+                        {!enquired && (
+                          <>
+                            {" "}
+                            · last seen{" "}
+                            <span className="tnum text-foreground/80">{fmtStamp(t.lastSeen)}</span>
+                          </>
+                        )}
                         {t.consented && " · accepted the Terms & Privacy Policy"}
                       </p>
                     </>
@@ -408,12 +461,16 @@ export function EnquiryActivityModal({
                       {activityState === "loading"
                         ? "Reading this lead’s click trail…"
                         : activityState === "unavailable"
-                          ? "The click trail couldn’t be read just now — everything below comes from the enquiry itself."
-                          : inquiry.source
-                            ? `No tracked trail — they reached the portal via ${sourceLabel(
-                                inquiry.source,
-                              )} rather than a tracked outreach link, so this enquiry is their first recorded touch.`
-                            : "No tracked trail — they reached the portal directly rather than through a tracked outreach link, so this enquiry is their first recorded touch."}
+                          ? `The click trail couldn’t be read just now — everything below comes from the ${
+                              enquired ? "enquiry" : "lead record"
+                            } itself.`
+                          : !enquired
+                            ? "No tracked activity at all — this lead has never opened an outreach link or reached the portal, so there's nothing recorded to open the call with."
+                            : inquiry?.source
+                              ? `No tracked trail — they reached the portal via ${sourceLabel(
+                                  inquiry.source,
+                                )} rather than a tracked outreach link, so this enquiry is their first recorded touch.`
+                              : "No tracked trail — they reached the portal directly rather than through a tracked outreach link, so this enquiry is their first recorded touch."}
                     </p>
                   )}
                 </section>
@@ -444,7 +501,7 @@ export function EnquiryActivityModal({
                           disabled={summary.status === "loading" || activityState === "loading"}
                           onClick={() => void generate()}
                           data-track="enquiry_ai_summary"
-                          data-track-service={inquiry.serviceSlug}
+                          data-track-service={inquiry?.serviceSlug ?? "none"}
                           className="gap-1.5 bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
                         >
                           {summary.status === "loading" ? (
@@ -473,6 +530,8 @@ export function EnquiryActivityModal({
                         Have Claude read this lead’s telemetry and write the brief you’d want before
                         picking up the phone — what they clicked, what it says about their intent,
                         and how to open the call.
+                        {!enquired &&
+                          " They haven’t enquired, so it’ll be written from the click trail alone."}
                       </p>
                     )}
                     {summary.status === "loading" && (
@@ -524,55 +583,88 @@ export function EnquiryActivityModal({
                   </ul>
                 </section>
 
-                {/* 4 · the enquiry itself */}
+                {/* 4 · the enquiry itself — or, with no enquiry behind the lead,
+                       the contact details the rep is about to ring */}
                 <section className="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10">
                   <PanelHead
-                    title="Their enquiry"
-                    icon={Send}
+                    title={enquired ? "Their enquiry" : "How to reach them"}
+                    icon={enquired ? Send : Phone}
                     action={
-                      <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                        {serviceLabel(inquiry.serviceSlug)}
-                      </span>
+                      enquired ? (
+                        <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          {serviceLabel(facts.enquiredService ?? "general")}
+                        </span>
+                      ) : (
+                        <span className="font-mono text-[9.5px] uppercase tracking-[0.12em] text-muted-foreground">
+                          outbound call
+                        </span>
+                      )
                     }
                   />
                   <div className="space-y-2.5 px-4 py-3">
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                      <a
-                        href={`mailto:${encodeURIComponent(inquiry.email)}`}
-                        className="inline-flex items-center gap-1.5 font-mono text-[11.5px] font-medium text-primary hover:underline"
-                      >
-                        <Mail className="h-3 w-3" aria-hidden />
-                        {inquiry.email}
-                      </a>
-                      {inquiry.phone && (
+                      {facts.email && (
                         <a
-                          href={`tel:${inquiry.phone.replace(/[^\d+]/g, "")}`}
+                          href={`mailto:${encodeURIComponent(facts.email)}`}
+                          className="inline-flex items-center gap-1.5 font-mono text-[11.5px] font-medium text-primary hover:underline"
+                        >
+                          <Mail className="h-3 w-3" aria-hidden />
+                          {facts.email}
+                        </a>
+                      )}
+                      {facts.phone && (
+                        <a
+                          href={`tel:${facts.phone.replace(/[^\d+]/g, "")}`}
                           className="inline-flex items-center gap-1.5 font-mono text-[11.5px] font-medium text-primary hover:underline"
                         >
                           <Phone className="h-3 w-3" aria-hidden />
-                          {inquiry.phone}
+                          {facts.phone}
                         </a>
                       )}
-                      {inquiry.name && (
+                      {facts.website && (
+                        <a
+                          href={`https://${facts.website}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] font-medium text-primary hover:underline"
+                        >
+                          <Globe className="h-3 w-3 shrink-0" aria-hidden />
+                          <span className="truncate">{facts.website}</span>
+                        </a>
+                      )}
+                      {facts.contactName && (
                         <span className="text-[12px] text-muted-foreground">
-                          Contact: <span className="text-foreground">{inquiry.name}</span>
+                          Contact: <span className="text-foreground">{facts.contactName}</span>
+                        </span>
+                      )}
+                      {!facts.email && !facts.phone && !facts.website && (
+                        <span className="font-mono text-[10.5px] text-muted-foreground">
+                          No contact details on file for this lead.
                         </span>
                       )}
                     </div>
-                    {inquiry.message?.trim() ? (
-                      <blockquote className="border-l-2 border-primary/40 bg-background/50 px-3 py-2 text-[12.5px] leading-relaxed text-foreground/90">
-                        {inquiry.message.trim()}
-                      </blockquote>
+                    {enquired ? (
+                      facts.message ? (
+                        <blockquote className="border-l-2 border-primary/40 bg-background/50 px-3 py-2 text-[12.5px] leading-relaxed text-foreground/90">
+                          {facts.message}
+                        </blockquote>
+                      ) : (
+                        <p className="font-mono text-[10.5px] text-muted-foreground">
+                          They submitted the form without a message.
+                        </p>
+                      )
                     ) : (
-                      <p className="font-mono text-[10.5px] text-muted-foreground">
-                        They submitted the form without a message.
+                      <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+                        They haven’t sent an enquiry — admin handed this lead over off the outreach
+                        list, so there’s nothing in their own words to go on. Everything above is
+                        what the portal recorded them doing.
                       </p>
                     )}
-                    {(inquiry.category || inquiry.campaign || inquiry.source) && (
+                    {(facts.sector || facts.campaign || facts.source) && (
                       <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
-                        {inquiry.category && <>Sector: {inquiry.category}</>}
-                        {inquiry.campaign && <> · Campaign: {inquiry.campaign}</>}
-                        {inquiry.source && <> · Source: {sourceLabel(inquiry.source)}</>}
+                        {facts.sector && <>Sector: {facts.sector}</>}
+                        {facts.campaign && <> · Campaign: {facts.campaign}</>}
+                        {facts.source && <> · Source: {sourceLabel(facts.source)}</>}
                       </p>
                     )}
                   </div>
@@ -606,7 +698,9 @@ export function EnquiryActivityModal({
                     <p className="px-4 py-3 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
                       {activityState === "loading"
                         ? "Reading the trail…"
-                        : "Nothing tracked for this enquirer — the enquiry above is the only recorded event."}
+                        : enquired
+                          ? "Nothing tracked for this enquirer — the enquiry above is the only recorded event."
+                          : "Nothing tracked for this lead — they’ve never opened an outreach link or reached the portal."}
                     </p>
                   )}
                 </section>
@@ -617,16 +711,35 @@ export function EnquiryActivityModal({
                 <Button variant="outline" size="sm" onClick={onClose}>
                   Close
                 </Button>
-                {/* An anchor, not a Button — mailto: is a navigation, and Button
-                    renders a <button> (no asChild in components/ui/button). */}
-                <a
-                  href={`mailto:${encodeURIComponent(inquiry.email)}`}
-                  data-track="enquiry_modal_email"
-                  className="inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-solid px-2.5 text-xs font-medium text-primary-foreground shadow-sm shadow-signal-900/30 transition-colors hover:bg-primary-solid/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:translate-y-px"
-                >
-                  <Mail className="h-3.5 w-3.5" aria-hidden />
-                  Email them
-                </a>
+                {/* Anchors, not Buttons — tel:/mailto: are navigations, and
+                    Button renders a <button> (no asChild in components/ui/button).
+                    A lead with no enquiry is an OUTBOUND call, so the phone is
+                    the primary action there and email is the fallback. */}
+                {!enquired && facts.phone && (
+                  <a
+                    href={`tel:${facts.phone.replace(/[^\d+]/g, "")}`}
+                    data-track="enquiry_modal_call"
+                    className="inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg bg-primary-solid px-2.5 text-xs font-medium text-primary-foreground shadow-sm shadow-signal-900/30 transition-colors hover:bg-primary-solid/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:translate-y-px"
+                  >
+                    <Phone className="h-3.5 w-3.5" aria-hidden />
+                    Call them
+                  </a>
+                )}
+                {facts.email && (
+                  <a
+                    href={`mailto:${encodeURIComponent(facts.email)}`}
+                    data-track="enquiry_modal_email"
+                    className={cn(
+                      "inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-xs font-medium shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:translate-y-px",
+                      !enquired && facts.phone
+                        ? "border border-border bg-background text-foreground hover:border-primary/40"
+                        : "bg-primary-solid text-primary-foreground shadow-signal-900/30 hover:bg-primary-solid/90",
+                    )}
+                  >
+                    <Mail className="h-3.5 w-3.5" aria-hidden />
+                    Email them
+                  </a>
+                )}
               </div>
             </motion.div>
           </div>
