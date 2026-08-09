@@ -70,7 +70,7 @@ const PANEL_EASE = [0.22, 1, 0.36, 1] as const;
 const UNGROUPED = "__ungrouped__";
 
 type SendPhase = "idle" | "sending" | "done" | "error";
-type SendMode = "live" | "demo" | "noop";
+type SendMode = "live" | "unconfigured" | "paused" | "noop";
 // AI drafting via the in-app composer (app/api/pipeline/campaigns/compose)
 type ComposePhase = "idle" | "running" | "ready" | "error";
 type DraftMode = "template" | "ai";
@@ -130,7 +130,8 @@ type LoadState =
  *                      Drafts are reviewed one by one (or select-all) and are
  *                      editable; selections above the AI cap fall back to the
  *                      shared {{business}}/{{link}} template editor.
- *   3. Review & send — fire the campaign (n8n webhook, or simulated in demo mode)
+ *   3. Review & send — fire the campaign (n8n webhook); refuses to report a
+ *                      send as sent if the automation is paused or unconfigured
  *
  * Each recipient's CTA is rewritten to /t/<leadId>?c=<campaign>, so a click
  * flips the lead's "Engaged" badge and feeds the email-gated Sales queue.
@@ -888,7 +889,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     if (!live()) return;
     if (!reduce) await sleep(450);
     if (!live()) return;
-    setResult({ sent, mode: data.mode ?? "demo", campaign: data.campaign ?? tag });
+    setResult({ sent, mode: data.mode ?? "unconfigured", campaign: data.campaign ?? tag });
     setSendPhase("done");
   }, [recipients, campaign, subject, body, service, reduce]);
 
@@ -964,7 +965,11 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       : sendPhase === "sending"
         ? `Sending the campaign to ${recipientCount} recipients`
         : sendPhase === "done" && result
-          ? `Done. Sent ${result.sent} email${result.sent === 1 ? "" : "s"}${result.mode === "demo" ? " (demo mode)" : ""}.`
+          ? result.mode === "live"
+            ? `Done. Sent ${result.sent} email${result.sent === 1 ? "" : "s"}.`
+            : result.mode === "paused"
+              ? "Nothing was sent — the campaign automation is paused. Switch it on under Integrations."
+              : "Nothing was sent — no campaign automation is configured."
           : "";
 
   const panelKey =
@@ -2578,23 +2583,42 @@ function SuccessBanner({
   onNextBatch: () => void;
   onReset: () => void;
 }) {
-  const demo = result.mode === "demo";
+  // The send route only ever answers ok:true for a live send — a paused or
+  // unconfigured webhook fails closed with a 503 before send() reaches
+  // setResult (see the `!res.ok || !data?.ok` check there). This is kept as a
+  // real branch rather than an assertion, so a malformed response still
+  // renders as a failure here, never a false success.
+  const live = result.mode === "live";
   const hasNext = !!batch && batch.nextCount > 0;
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/[0.04] px-3 py-2.5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary-solid text-primary-foreground">
-          <Check className="h-4 w-4" aria-hidden />
+      <div
+        className={cn(
+          "flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2.5",
+          live ? "border-primary/30 bg-primary/[0.04]" : "border-destructive/30 bg-destructive/[0.06]",
+        )}
+      >
+        <span
+          className={cn(
+            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
+            live ? "bg-primary-solid text-primary-foreground" : "bg-destructive/10 text-destructive",
+          )}
+        >
+          {live ? <Check className="h-4 w-4" aria-hidden /> : <AlertTriangle className="h-4 w-4" aria-hidden />}
         </span>
         <div className="min-w-0">
           <div className="text-[13px] font-semibold text-foreground">
-            Sent {result.sent.toLocaleString("en-US")} email{result.sent === 1 ? "" : "s"}
+            {live
+              ? `Sent ${result.sent.toLocaleString("en-US")} email${result.sent === 1 ? "" : "s"}`
+              : "Nothing was sent"}
             {batch ? ` · batch ${batch.no} of ${batch.total}${hasNext ? "" : " — all batches done"}` : ""}
           </div>
           <div className="truncate font-mono text-[10.5px] text-muted-foreground">
-            {demo
-              ? "Demo mode — not actually delivered (set N8N_CAMPAIGN_WEBHOOK_URL to go live)"
-              : `Campaign ${result.campaign} · handed to the automation`}
+            {live
+              ? `Campaign ${result.campaign} · handed to the automation`
+              : result.mode === "paused"
+                ? "The campaign automation is paused. Switch it on under Integrations."
+                : "No campaign automation is configured."}
           </div>
         </div>
         <Button variant="outline" size="sm" data-track="campaign_send_another" onClick={onReset} className="ml-auto gap-1.5">

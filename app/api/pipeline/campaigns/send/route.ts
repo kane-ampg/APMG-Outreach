@@ -28,9 +28,11 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // is rewritten to the attribution hook /t/<leadId>?c=<campaign> (app/t/[id]),
 // so a click flips the lead's "Engaged" badge in the Sales queue. Runs on Node.
 //
-// Delivery: when N8N_CAMPAIGN_WEBHOOK_URL is set we POST the messages to that
-// n8n webhook (the "Send a message" Gmail node); otherwise we simulate a
-// successful send (demo mode), mirroring the CSV importer.
+// Delivery: POSTs the messages to the n8n campaign webhook (the "Send a
+// message" Gmail node) resolved by campaignWebhook() — configured on the
+// Integrations tab or via N8N_CAMPAIGN_WEBHOOK_URL. When that automation is
+// unconfigured, or configured but paused via its Integrations toggle, the
+// send refuses to run and reports sent: 0 rather than claiming success.
 //
 // Webhook payload: { campaign, messages: [{ to, leadId, subject, text, attachment?, hero?, hero_alt? }] }.
 // `text` is the PLAIN-TEXT body (HTML flattened via htmlToText) — the Gmail node
@@ -58,7 +60,7 @@ const SENT_EVENT = "email_sent";
 const MAX_SUBJECT = 300;
 const MAX_HTML = 20_000;
 
-type SendMode = "live" | "demo" | "noop";
+type SendMode = "live" | "unconfigured" | "paused" | "noop";
 
 interface SendResult {
   ok: boolean;
@@ -250,9 +252,16 @@ export async function POST(req: Request): Promise<Response> {
 
   const target = await campaignWebhook();
   if (target.state !== "ok") {
-    // Demo mode — no webhook configured. Simulate a successful send so the tab
-    // is fully exercisable before n8n is wired up.
-    return json({ ok: true, sent: messages.length, mode: "demo", campaign, suppressed: suppressedCount });
+    // NEVER report a send that did not happen. "paused" is called out
+    // separately from "unconfigured" because it is the dangerous one: the
+    // operator configured n8n, later switched the Integrations toggle off,
+    // and would otherwise be told the whole campaign went out.
+    const error =
+      target.state === "paused"
+        ? "The campaign automation is paused. Switch it back on under Integrations to send."
+        : "No campaign automation is configured, so nothing can be sent.";
+    console.error(`[pipeline/campaigns] refusing to send: webhook is ${target.state}.`);
+    return json({ ok: false, sent: 0, mode: target.state, campaign, error }, 503);
   }
 
   let res: Response;
