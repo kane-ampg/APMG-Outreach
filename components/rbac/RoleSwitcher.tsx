@@ -6,12 +6,11 @@ import { useRbac } from "@/lib/rbac/RbacProvider";
 import { requestViewAs } from "@/lib/rbac/viewAs";
 import { ROLES, type Role } from "@/lib/rbac/roles";
 
-// Sales is the role checked most often when previewing, so it's listed
-// first. Admin is deliberately excluded from the options: the only audience
-// who can ever see this switcher (roleCan(trueRole, "roles.viewas")) IS
-// admin, so offering it as a preview target would just be a no-op button —
-// ViewAsBanner's Exit is the way back to the real Admin view.
-const PREVIEW_ROLES: readonly Role[] = ["sales", "client", "pending"];
+// Admin is listed first as the way back to the real console — selecting it
+// clears the preview rather than setting a viewAs claim (see selectRole), so
+// it's an alternative to ViewAsBanner's Exit, not a no-op. Pending is left
+// out: it holds no permissions, so previewing it just shows an empty shell.
+const PREVIEW_ROLES: readonly Role[] = ["admin", "sales", "client"];
 
 /**
  * Lets an admin preview the console as another role. Rendering here is a UI
@@ -20,14 +19,17 @@ const PREVIEW_ROLES: readonly Role[] = ["sales", "client", "pending"];
  * regardless of what this component does or doesn't show.
  */
 export function RoleSwitcher() {
-  const { role, canViewAs } = useRbac();
+  const { role, trueRole, canViewAs } = useRbac();
   const [pending, setPending] = useState(false);
 
   if (!canViewAs) return null;
 
   async function selectRole(next: Role) {
     setPending(true);
-    const ok = await requestViewAs(next);
+    // Picking your own role means "stop previewing", so send null (exit)
+    // rather than a viewAs claim that would resolve to the same role anyway
+    // — this keeps the session cookie free of a redundant claim.
+    const ok = await requestViewAs(next === trueRole ? null : next);
     if (!ok) setPending(false);
   }
 
