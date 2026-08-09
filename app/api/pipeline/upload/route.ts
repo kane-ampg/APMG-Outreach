@@ -1,6 +1,7 @@
 import type { LeadImportRow } from "@/lib/pipeline/csv";
 import {
   isMissingBatchColumn,
+  requireLiveSupabase,
   safeBatchName,
   sameOrigin,
   supabaseTarget,
@@ -15,7 +16,7 @@ export const runtime = "nodejs";
 const TABLE = "leads";
 const MAX_BATCH = 1000;
 
-type UploadMode = "live" | "demo" | "noop";
+type UploadMode = "live" | "unconfigured" | "noop";
 
 interface UploadResult {
   ok: boolean;
@@ -102,10 +103,14 @@ export async function POST(req: Request): Promise<Response> {
   const rows = sanitized.map((r) => ({ ...r, batch }));
 
   const target = supabaseTarget();
-  // Demo mode — credentials not configured yet. Simulate a successful write so
-  // the pipeline UI is fully exercisable before Supabase is wired up.
+  // Never claim an import that did not land. On a deployed runtime an
+  // unconfigured database is an outage, not a demo.
+  const blocked = requireLiveSupabase("pipeline/upload");
+  if (blocked) return blocked;
   if (target.state === "demo") {
-    return json({ ok: true, inserted: rows.length, mode: "demo", batch });
+    // Developer machine only (requireLiveSupabase let us through) — the
+    // importer UI stays exercisable without Supabase, and says so.
+    return json({ ok: true, inserted: rows.length, mode: "unconfigured", batch });
   }
   if (target.state === "misconfigured") {
     console.error("[pipeline/upload] SUPABASE_URL is not a valid URL.");
