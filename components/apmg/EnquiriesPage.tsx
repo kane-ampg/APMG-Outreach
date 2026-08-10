@@ -77,8 +77,9 @@ import { useSales } from "./SalesProvider";
  * optimistically and are gated on `enquiries.manage` (sales + admin), as is
  * the per-row delete (DELETE /api/portal/inquiries?id= — for clearing operator
  * test submissions and spam, behind an inline destructive confirm).
- * `mode:"demo"` (no Supabase) swaps in the believable Melbourne dataset from
- * lib/data/enquiries.ts behind an amber banner — the tab never crashes.
+ * `mode:"demo"` (no Supabase) renders this page's real, empty structure —
+ * zeroed totals, no inquiries — behind a "Not connected" banner rather than
+ * inventing data. The tab never crashes.
  *
  * SALES REPS SEE A NARROWER TAB. The funnel gauges and the three analysis
  * panels are admin instruments — they measure the whole portal experiment, not

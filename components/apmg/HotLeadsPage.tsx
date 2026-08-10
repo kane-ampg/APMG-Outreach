@@ -79,7 +79,9 @@ import { SalesStatusPill } from "./SalesStatusPill";
  *
  * Live data names leads, so — exactly like Telemetry and Enquiries — the read
  * sits behind the shared PORTAL_ADMIN_KEY; 401 raises the unlock form instead
- * of a dead end. Demo mode scores the same Melbourne preset Telemetry uses.
+ * of a dead end. Not connected (no Supabase, or the portal tables unmigrated):
+ * the queue renders empty rather than a believable preset, same policy as
+ * Telemetry and Enquiries.
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
@@ -693,8 +695,8 @@ export function HotLeadsPage() {
             <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden />
             <p className="font-mono text-[10.5px] leading-relaxed text-amber-600 dark:text-amber-400">
               {state.needsMigration
-                ? "Demo data — the portal telemetry tables are missing. Run supabase/portal-telemetry.sql in the Supabase SQL editor to score real leads. Hand-offs made here last for this session only."
-                : "Demo data — connect Supabase and run supabase/portal-telemetry.sql to score real leads. Hand-offs made here last for this session only."}
+                ? "Not connected — the portal telemetry tables are missing. Run supabase/portal-telemetry.sql in the Supabase SQL editor to see real leads. Hand-offs made here last for this session only."
+                : "Not connected — configure Supabase and run supabase/portal-telemetry.sql to see real leads. Hand-offs made here last for this session only."}
             </p>
           </div>
         </Reveal>

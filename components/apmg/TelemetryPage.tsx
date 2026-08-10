@@ -76,9 +76,9 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  *
  * A secondary card aggregates portal visitors with NO attribution cookie —
  * real interest we can't pin to an outreach lead. `mode:"demo"` (no Supabase,
- * or the portal tables not migrated) swaps in the believable Melbourne
- * dataset from lib/data/leadActivity.ts behind an amber banner — the tab
- * never crashes.
+ * or the portal tables not migrated) renders this page's real, empty
+ * structure — zeroed totals, no leads — behind a "Not connected" banner
+ * rather than inventing data. The tab never crashes.
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
