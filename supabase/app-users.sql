@@ -51,27 +51,14 @@ alter table public.app_users add column if not exists sessions_valid_from timest
 -- introduced client-side.
 alter table public.app_users enable row level security;
 
--- Every access change, append-only. Written by /api/admin/users on each role
--- change, pre-assignment and forced sign-out; read back by the "Recent
--- changes" list in Settings.
+-- Access changes are recorded in console_audit (supabase/console-audit.sql),
+-- not here.
 --
--- Deliberately NOT a foreign key to app_users(email): the log must outlive the
--- row it describes, or deleting a user would erase the record of what they
--- were granted -- exactly the history an audit log exists to keep.
-create table if not exists public.role_change_log (
-  id           uuid primary key default gen_random_uuid(),
-  target_email text not null,
-  actor_email  text not null,
-  action       text not null check (action in ('invite', 'role_change', 'force_logout')),
-  from_role    text,
-  to_role      text,
-  created_at   timestamptz not null default now()
-);
-
-create index if not exists role_change_log_created_at_idx
-  on public.role_change_log (created_at desc);
-
-alter table public.role_change_log enable row level security;
+-- This file used to declare a role_change_log table with the same intent, but
+-- the writer it described was never built, so it only ever held zero rows.
+-- console-audit.sql drops it and records role changes, invitations and forced
+-- sign-outs alongside every other operator action -- one trail an admin reads
+-- in one place, rather than two that each tell half the story.
 
 -- The protected main admin. Re-running this file always restores admin, which
 -- is the intended recovery path if the role is ever lost.

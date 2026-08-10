@@ -92,3 +92,9 @@ create policy "sector-assets public read"
 -- leads.engaged / engaged_at columns behind the Sales-queue "Engaged" badge
 -- live in supabase/portal-telemetry.sql — run that file too when setting up
 -- the services portal and the admin Enquiries tab.
+
+-- ── operator audit trail ─────────────────────────────────────────────────────
+-- supabase/console-audit.sql creates console_audit: one append-only row per
+-- operator action, carrying the Google SSO identity that performed it. The
+-- Sales desk replays it to derive each lead's status, so run that file before
+-- working the queue — without it a close has nowhere to be recorded.
