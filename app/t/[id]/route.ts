@@ -1,6 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isUuid, supabaseTarget } from "@/lib/pipeline/server";
-import { insertPortalEvents, isBotRequest, isInternalRequest, lookupLead } from "@/lib/portal/server";
+import {
+  classifyClick,
+  insertPortalEvents,
+  isBotRequest,
+  isInternalRequest,
+  lookupLead,
+  readClickHistory,
+} from "@/lib/portal/server";
 
 /**
  * Email attribution hook. The automation's outreach email links its CTA to
@@ -67,29 +74,42 @@ export async function GET(
   const bot = isBotRequest(req);
   const skip = internal || bot;
 
-  // Always-on operator trace (and the only record in demo mode).
-  console.info("[attribution] lead click", {
-    lead: id,
-    campaign,
-    internal,
-    bot,
-    ts: new Date().toISOString(),
-    ua: req.headers.get("user-agent") ?? undefined,
-  });
-
   // FAIL-CLOSED CARVE-OUT. This is a public visitor endpoint reached from an
   // outreach email, not a console surface. 503-ing it when Supabase is
   // unconfigured would break the link for a real lead, so it degrades quietly
   // instead. It renders no data into the console, so it cannot fabricate.
   const target = supabaseTarget();
+  let verdict: "record" | "too-fast" | "duplicate" | "skipped" = skip ? "skipped" : "record";
+
   if (!skip && target.state === "ok" && isUuid(id)) {
-    // Persist before redirecting — serverless runtimes can kill work left
-    // pending after the response, and a click is a one-shot signal.
-    await Promise.allSettled([
-      recordAttributionClick(target.base, target.key, req, id, campaign, destination),
-      markLeadEngaged(target.base, target.key, id),
-    ]);
+    // The UA filter above catches scanners that announce themselves. This
+    // catches the ones that don't: nobody reads an email and clicks inside
+    // SCANNER_WINDOW_MS, and a repeat hit inside CLICK_DEDUPE_MS is one visit.
+    const history = await readClickHistory(target.base, target.key, id);
+    verdict = classifyClick({ nowMs: Date.now(), ...history });
+
+    if (verdict === "record") {
+      // Persist before redirecting — serverless runtimes can kill work left
+      // pending after the response, and a click is a one-shot signal.
+      await Promise.allSettled([
+        recordAttributionClick(target.base, target.key, req, id, campaign, destination),
+        markLeadEngaged(target.base, target.key, id),
+      ]);
+    }
   }
+
+  // Always-on operator trace (and the only record in demo mode). Below the
+  // block above so `verdict` is populated — it still fires for every request,
+  // including skipped and suppressed ones.
+  console.info("[attribution] lead click", {
+    lead: id,
+    campaign,
+    internal,
+    bot,
+    verdict,
+    ts: new Date().toISOString(),
+    ua: req.headers.get("user-agent") ?? undefined,
+  });
 
   const res = NextResponse.redirect(new URL(destination, url.origin), { status: 302 });
   if (skip) {

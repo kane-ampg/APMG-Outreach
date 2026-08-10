@@ -527,3 +527,72 @@ export async function fetchSuppressedEmails(
     return new Set();
   }
 }
+
+/* ── Scanner-click suppression (/t/[id]) ─────────────────────────────────
+   isBotRequest (above) matches on User-Agent only, so a scanner that presents
+   a normal browser string sails through it. These two signals catch what the
+   UA misses without touching the UA filter itself: classifyClick is the pure
+   decision (testable, never reads the clock), readClickHistory is the I/O
+   that feeds it. */
+
+/**
+ * A human cannot receive an email, open it, read it and click inside this
+ * window. A hit that fast is an automated scanner that got past the
+ * User-Agent filter by presenting a browser string.
+ */
+export const SCANNER_WINDOW_MS = 10_000;
+
+/** Repeat hits on the same tracked link inside this window are one visit —
+ *  a preloading browser, a double tap, a client that retries the redirect. */
+export const CLICK_DEDUPE_MS = 60_000;
+
+/**
+ * Decide whether a tracked-link hit is real lead activity. Pure: the caller
+ * supplies the clock and the two timestamps, so this is fully testable and
+ * the redirect path stays the only place that does I/O.
+ *
+ * A future-dated send is ignored rather than treated as suspicious — clock
+ * skew between the automation and this app must not silently drop real clicks.
+ */
+export function classifyClick(opts: {
+  nowMs: number;
+  lastSentMs: number | null;
+  lastClickMs: number | null;
+}): "record" | "too-fast" | "duplicate" {
+  const { nowMs, lastSentMs, lastClickMs } = opts;
+  if (lastSentMs !== null && lastSentMs <= nowMs && nowMs - lastSentMs < SCANNER_WINDOW_MS) {
+    return "too-fast";
+  }
+  if (lastClickMs !== null && lastClickMs <= nowMs && nowMs - lastClickMs < CLICK_DEDUPE_MS) {
+    return "duplicate";
+  }
+  return "record";
+}
+
+/** Most recent email_sent and attribution_click timestamps for one lead.
+ *  Both null on any failure — an unreadable history must never cost a real
+ *  lead their recorded click. */
+export async function readClickHistory(
+  base: string,
+  key: string,
+  leadId: string,
+): Promise<{ lastSentMs: number | null; lastClickMs: number | null }> {
+  if (!isUuid(leadId)) return { lastSentMs: null, lastClickMs: null };
+  const latest = async (event: string): Promise<number | null> => {
+    try {
+      const res = await fetch(
+        `${base}/rest/v1/portal_events?select=created_at&lead_id=eq.${encodeURIComponent(leadId)}` +
+          `&event=eq.${event}&order=created_at.desc&limit=1`,
+        { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: "no-store" },
+      );
+      if (!res.ok) return null;
+      const rows = (await res.json().catch(() => [])) as Array<{ created_at?: string }>;
+      const ts = Array.isArray(rows) && rows[0]?.created_at ? Date.parse(rows[0].created_at) : NaN;
+      return Number.isFinite(ts) ? ts : null;
+    } catch {
+      return null;
+    }
+  };
+  const [lastSentMs, lastClickMs] = await Promise.all([latest("email_sent"), latest("attribution_click")]);
+  return { lastSentMs, lastClickMs };
+}
