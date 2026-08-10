@@ -109,6 +109,10 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  // FAIL-CLOSED CARVE-OUT. This is a public visitor endpoint reached from an
+  // outreach email, not a console surface. 503-ing it when Supabase is
+  // unconfigured would break the link for a real lead, so it degrades quietly
+  // instead. It renders no data into the console, so it cannot fabricate.
   if (target.state === "demo") {
     // No Supabase configured — accept-and-drop so the client never retries.
     return Response.json({ accepted: 0, mode: "demo" }, { status: 202 });

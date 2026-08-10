@@ -1,5 +1,5 @@
 import { bestEmail } from "@/lib/pipeline/campaign";
-import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import { isUuid, requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import {
   CUSTOMER_JOURNEY_EVENTS,
   isMissingColumn,
@@ -291,6 +291,8 @@ export async function POST(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/lead-summary");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     // Nothing to read (and the demo enquiry ids aren't uuids anyway) — the modal
     // renders its own deterministic summary from the preset instead.

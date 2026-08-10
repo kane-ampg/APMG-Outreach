@@ -1,4 +1,4 @@
-import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import { isUuid, requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import {
   CUSTOMER_JOURNEY_EVENTS,
   isMissingPortalTable,
@@ -144,6 +144,8 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/lead-activity");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo", ...EMPTY });
   }
@@ -371,6 +373,8 @@ export async function DELETE(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/lead-activity");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     // Demo rows are a client-side constant (and their ids aren't uuids) —
     // nothing to delete server-side; the page drops the row locally.

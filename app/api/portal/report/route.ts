@@ -1,4 +1,4 @@
-import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import { requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import { isMissingPortalTable, portalAdminAuthorized } from "@/lib/portal/server";
 
 // GET /api/portal/report?from=<ISO>&to=<ISO> — the numbers behind the
@@ -99,6 +99,8 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/report");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo", ...EMPTY });
   }

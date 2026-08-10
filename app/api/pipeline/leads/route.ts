@@ -1,6 +1,7 @@
 import {
   isMissingBatchColumn,
   isUuid,
+  requireLiveSupabase,
   safeBatchName,
   sameOrigin,
   supabaseTarget,
@@ -55,6 +56,8 @@ export async function GET(req: Request): Promise<Response> {
   if (!guard.ok) return guardResponse(guard);
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("pipeline/leads");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo", rows: [], total: 0 });
   }
@@ -200,6 +203,8 @@ export async function PATCH(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("pipeline/leads");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo", updated: 0 });
   }
@@ -297,6 +302,8 @@ export async function DELETE(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("pipeline/leads");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, deleted: 0, mode: "demo" });
   }

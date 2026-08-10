@@ -77,6 +77,10 @@ export async function GET(
     ua: req.headers.get("user-agent") ?? undefined,
   });
 
+  // FAIL-CLOSED CARVE-OUT. This is a public visitor endpoint reached from an
+  // outreach email, not a console surface. 503-ing it when Supabase is
+  // unconfigured would break the link for a real lead, so it degrades quietly
+  // instead. It renders no data into the console, so it cannot fabricate.
   const target = supabaseTarget();
   if (!skip && target.state === "ok" && isUuid(id)) {
     // Persist before redirecting — serverless runtimes can kill work left

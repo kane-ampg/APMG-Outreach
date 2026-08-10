@@ -1,4 +1,4 @@
-import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import { requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import { isMissingColumn, isMissingPortalTable } from "@/lib/portal/server";
 import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
 
@@ -83,6 +83,8 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/summary");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo", ...EMPTY_SUMMARY });
   }

@@ -76,7 +76,7 @@ type ComposePhase = "idle" | "running" | "ready" | "error";
 type DraftMode = "template" | "ai";
 // Email finding via the n8n Email Finder (app/api/pipeline/campaigns/find-emails)
 type FindPhase = "idle" | "running" | "done" | "error";
-type FindInfo = { mode: "live" | "demo"; found: number; tried: number };
+type FindInfo = { mode: "live" | "unconfigured"; found: number; tried: number };
 type Recipient = {
   id: string;
   email: string;
@@ -448,11 +448,12 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         }),
       };
     });
-    const mode = data.mode === "demo" ? "demo" : "live";
+    const mode = data.mode === "live" ? "live" : "unconfigured";
     setFindInfo({ mode, found: data.found ?? 0, tried: batch.length });
     setFindPhase("done");
-    // Pop the success summary for a real run — demo means "not connected", which
-    // the inline hint already explains, so no modal there.
+    // Pop the success summary for a real run only — an unconfigured/paused
+    // finder now fails the request outright (see the error branch above), so
+    // this stays "live" in practice; the check is belt and braces.
     if (mode === "live") setFindSuccessOpen(true);
   }, [findable]);
 
@@ -1333,15 +1334,14 @@ function AudiencePanel({
   const noFolders = folderSel.size === 0;
   const finding = findPhase === "running";
   // outcome line for the last Find emails run (shown under the lead table).
-  // Errors are surfaced in a modal (see FindErrorModal) rather than inline, so
-  // this line only carries the success / demo outcome.
+  // Errors are surfaced in a modal (see FindErrorModal) rather than inline —
+  // an unconfigured/paused finder is now one of those errors, not a silent
+  // demo note, so this line only ever carries the success outcome.
   const findNote =
     findPhase === "done" && findInfo
-      ? findInfo.mode === "demo"
-        ? "The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again."
-        : `Found addresses for ${findInfo.found.toLocaleString("en-US")} of ${findInfo.tried.toLocaleString("en-US")} website-only lead${findInfo.tried === 1 ? "" : "s"}.${
-            findInfo.found < findInfo.tried ? " The rest had nothing scrapable — add those by hand in review." : ""
-          }`
+      ? `Found addresses for ${findInfo.found.toLocaleString("en-US")} of ${findInfo.tried.toLocaleString("en-US")} website-only lead${findInfo.tried === 1 ? "" : "s"}.${
+          findInfo.found < findInfo.tried ? " The rest had nothing scrapable — add those by hand in review." : ""
+        }`
       : null;
   return (
     <div className="flex flex-col gap-4">

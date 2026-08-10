@@ -1,5 +1,5 @@
 import { bestEmail } from "@/lib/pipeline/campaign";
-import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import { isUuid, requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import { isMissingPortalTable } from "@/lib/portal/server";
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 import { HANDOFF_EVENT } from "@/lib/sales/handoff";
@@ -157,6 +157,8 @@ export async function GET(req: Request): Promise<Response> {
   );
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("sales/queue");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return json({ ok: true, mode: "demo", page, pageSize });
   }

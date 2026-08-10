@@ -1,5 +1,6 @@
 import {
   isUuid,
+  requireLiveSupabase,
   sameOrigin,
   supabaseTarget,
   enquiryNotifyWebhook,
@@ -144,6 +145,8 @@ export async function POST(req: Request): Promise<Response> {
     typeof b.consentVersion === "string" ? b.consentVersion.trim() : "";
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/inquiries");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     // No Supabase — the modal still shows its thank-you state; nothing is lost
     // that existed (demo mode has no real traffic, nothing is stored).
@@ -340,7 +343,12 @@ async function notifyOperator(input: {
     const parsed = parseNotifyEmails(input.to);
     if (!parsed.ok || parsed.emails.length === 0) return; // nothing set on the Integrations tab
     const target = await enquiryNotifyWebhook();
-    if (target.state !== "ok") return; // demo / not configured / toggled off
+    if (target.state !== "ok") {
+      // The enquiry is already persisted; the operator just won't get an email.
+      // Failing the visitor's submission over a paused notifier would be worse.
+      console.error(`[portal/inquiries] enquiry notification skipped: webhook is ${target.state}.`);
+      return;
+    }
     // Deliberately ONE request with every recipient joined, never one request
     // per address: a single Gmail send counts once against the 2,000
     // messages/day cap, whereas looping would multiply it and can lock the
@@ -362,6 +370,8 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/inquiries");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo", inquiries: [] });
   }
@@ -438,6 +448,8 @@ export async function PATCH(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/inquiries");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo" });
   }
@@ -495,6 +507,8 @@ export async function DELETE(req: Request): Promise<Response> {
   }
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("portal/inquiries");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     // Demo rows are a client-side constant (their ids aren't uuids) — nothing
     // to delete server-side; the tab drops the row locally.

@@ -29,7 +29,7 @@ export const maxDuration = 300;
  *  inside the window; the route walks the chunks sequentially. */
 const CHUNK_SIZE = 10;
 
-type FindMode = "live" | "demo" | "noop";
+type FindMode = "live" | "unconfigured" | "paused" | "noop";
 
 /** One lead's outcome, as returned to the client. `emails` empty = the site
  *  was scraped but yielded nothing usable. */
@@ -170,9 +170,14 @@ export async function POST(req: Request): Promise<Response> {
 
   const target = await emailFinderWebhook();
   if (target.state !== "ok") {
-    // No finder webhook configured (or toggled off). Unlike the send flow we do
-    // NOT simulate success — inventing addresses would poison stored leads.
-    return json({ ok: true, mode: "demo", results: [], found: 0, saved: 0 });
+    // No finder webhook configured, or configured but paused. Unlike the send
+    // flow we do NOT simulate success — inventing addresses would poison
+    // stored leads, so this is a real failure, not a quiet demo no-op.
+    const error =
+      target.state === "paused"
+        ? "The email-finder automation is paused. Switch it on under Integrations."
+        : "No email-finder automation is configured.";
+    return json({ ok: false, mode: target.state, results: [], found: 0, saved: 0, error }, 503);
   }
 
   // Walk the batch in small chunks. A chunk that fails is logged and skipped so

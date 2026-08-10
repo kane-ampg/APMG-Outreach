@@ -1,4 +1,4 @@
-import { isMissingBatchColumn, sameOrigin, supabaseTarget, UNGROUPED } from "@/lib/pipeline/server";
+import { isMissingBatchColumn, requireLiveSupabase, sameOrigin, supabaseTarget, UNGROUPED } from "@/lib/pipeline/server";
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Lists the import "folders" (distinct batch values) with a count + latest time.
@@ -28,6 +28,8 @@ export async function GET(req: Request): Promise<Response> {
   if (!guard.ok) return guardResponse(guard);
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("pipeline/batches");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     return Response.json({ ok: true, mode: "demo", batches: [] });
   }

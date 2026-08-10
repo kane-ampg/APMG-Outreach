@@ -1,4 +1,4 @@
-import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import { isUuid, requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import {
   insertPortalEvents,
   isMissingPortalTable,
@@ -185,6 +185,8 @@ function gate(req: Request): { base: string; key: string } | Response {
   if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
 
   const target = supabaseTarget();
+  const blocked = requireLiveSupabase("sales/handoff");
+  if (blocked) return blocked;
   if (target.state === "demo") {
     // No Supabase — the Hot Leads tab is on the demo preset and keeps its marks
     // in session state. Answer "demo" so it knows not to expect rows.

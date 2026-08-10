@@ -74,6 +74,15 @@ export async function GET(req: Request): Promise<Response> {
     );
   }
 
+  // FAIL-CLOSED CARVE-OUT. This is a public visitor endpoint reached from an
+  // outreach email, not a console surface. 503-ing it when Supabase is
+  // unconfigured would break the link for a real lead, so it degrades quietly
+  // instead. It renders no data into the console, so it cannot fabricate.
+  //
+  // Additionally: an unsubscribe link that errors is a compliance problem, not
+  // just a broken page (Spam Act 2003 (Cth) requires a functional opt-out on
+  // commercial electronic messages). This endpoint must answer even when the
+  // database behind it does not.
   if (target.state !== "ok") {
     // No DB configured (demo). Don't claim success we can't back up; give the
     // reply-to fallback which is itself a valid opt-out channel.
