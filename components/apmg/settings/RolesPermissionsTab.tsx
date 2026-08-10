@@ -5,6 +5,7 @@ import { AlertTriangle, Check, CloudOff, Loader2, RefreshCw, ShieldAlert } from 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import type { AppUserRow } from "@/lib/auth/userStore";
+import { useServerClock } from "@/lib/auth/usePresence";
 import { ROLES, type Role } from "@/lib/rbac/roles";
 import { Reveal } from "../Reveal";
 import { PeopleList } from "./PeopleList";
@@ -31,6 +32,8 @@ import { personFromAppUser } from "./types";
  */
 
 interface ApiState {
+  /** The server clock that wrote every timestamp below — see useServerClock. */
+  serverNow: string;
   mode: "live" | "demo";
   canPersist: boolean;
   actorEmail: string;
@@ -62,10 +65,19 @@ type Load =
   | { status: "error"; error: string }
   | ({ status: "ready" } & ApiState);
 
+/** Roughly two presence beats — often enough that somebody arriving shows up
+ *  promptly, rarely enough to be invisible in load terms. */
+const ROSTER_POLL_MS = 60_000;
+
 export interface RosterStats {
   directory: number;
   withRoles: number;
   pending: number;
+  /** Holds a role but has never completed a sign-in. Counted only among people
+   *  who HAVE a role: the directory is full of colleagues who have never signed
+   *  in and were never meant to, and counting them would drown the ones whose
+   *  granted access is sitting unused. */
+  neverSignedIn: number;
 }
 
 export function RolesPermissionsTab({
@@ -110,6 +122,23 @@ export function RolesPermissionsTab({
     void refresh();
   }, [refresh]);
 
+  // Re-read the roster while this screen is open, so somebody arriving turns
+  // green without the admin hitting Refresh. Going OFFLINE doesn't depend on
+  // this — `useServerClock` ticks locally, so a stale heartbeat expires on its
+  // own even if every poll fails. Paused when the tab is hidden: polling a
+  // screen nobody is looking at is pure cost.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") void refresh();
+    }, ROSTER_POLL_MS);
+    return () => clearInterval(id);
+  }, [refresh]);
+
+  // `now` in the server's frame. Every presence decision on this screen is
+  // made against it rather than Date.now(), so a browser clock that is wrong
+  // cannot hold a row green after the person has closed their tab.
+  const now = useServerClock(load.status === "ready" ? load.serverNow : null);
+
   const people = useMemo<Person[]>(() => {
     if (load.status !== "ready") return [];
     // Precedence is deliberate. app_users first, because a stored role is the
@@ -136,6 +165,8 @@ export function RolesPermissionsTab({
           role: null,
           department: d.department,
           lastLoginAt: null,
+          lastSeenAt: null,
+          createdAt: null,
           invitedBy: null,
           source: "directory",
         });
@@ -150,6 +181,8 @@ export function RolesPermissionsTab({
         role: null,
         department: null,
         lastLoginAt: null,
+        lastSeenAt: null,
+        createdAt: null,
         invitedBy: null,
         source: "custom",
       });
@@ -163,6 +196,9 @@ export function RolesPermissionsTab({
       // "With roles" counts real access, so pending — a revocation — is not one.
       withRoles: people.filter((p) => p.role && p.role !== "pending").length,
       pending: people.filter((p) => p.role === "pending").length,
+      neverSignedIn: people.filter(
+        (p) => p.role && p.role !== "pending" && !p.lastLoginAt,
+      ).length,
     }),
     [people],
   );

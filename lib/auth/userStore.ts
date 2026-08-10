@@ -135,6 +135,15 @@ export interface AppUserRow {
   role: Role;
   created_at: string;
   last_login_at: string | null;
+  /**
+   * Last heartbeat from an open console tab — presence, not sign-in.
+   *
+   * `null` means "never observed online", which includes every row written
+   * before the column existed. It is NEVER derived from `last_login_at`:
+   * treating an old sign-in as presence is the precise thing this column was
+   * added to stop.
+   */
+  last_seen_at: string | null;
   /** Set when an admin pre-assigned this role before the person ever signed
    *  in. Display-only: `last_login_at === null` is what "never signed in"
    *  actually means. */
@@ -189,6 +198,78 @@ export async function createUserWithRole(args: {
 }
 
 /**
+ * Whether `app_users.last_seen_at` exists, learned from the first read that
+ * touches it: `null` = not yet known, `false` = the migration hasn't been run.
+ *
+ * Cached per process purely to avoid paying for the failed request on every
+ * subsequent load. It only ever moves from unknown to known, and a deploy or a
+ * cold start re-checks — so running the migration takes effect without anyone
+ * having to clear anything.
+ */
+let presenceColumn: boolean | null = null;
+
+const LIST_COLUMNS = "email,name,picture_url,role,created_at,last_login_at,invited_by";
+
+function listUrl(base: string, withPresence: boolean): string {
+  const select = withPresence ? `${LIST_COLUMNS},last_seen_at` : LIST_COLUMNS;
+  return `${base}/rest/v1/${TABLE}?select=${select}&order=last_login_at.desc.nullslast`;
+}
+
+/** PostgREST surfaces an unknown column as 42703 / "does not exist". Matched on
+ *  the column name too, so an unrelated 42703 is never mistaken for this. */
+function isMissingPresenceColumn(detail: string): boolean {
+  return detail.includes("last_seen_at") && (detail.includes("42703") || detail.includes("does not exist"));
+}
+
+/**
+ * Stamp presence for one person: "this account had a console tab open just
+ * now."
+ *
+ * Best-effort by design, and the ONLY writer of `last_seen_at`. A failed
+ * heartbeat must never break the page the user is looking at — the cost of
+ * losing one is that they appear to go offline for half a minute, which is a
+ * far better failure than an error toast on an idle tab. This is the inverse
+ * of the audit-write rule: presence is telemetry, not a record of authority.
+ */
+export async function touchLastSeen(email: string): Promise<"ok" | "demo" | "missing_column" | "error"> {
+  const target = supabaseTarget();
+  if (target.state !== "ok") return "demo";
+  if (presenceColumn === false) return "missing_column";
+  try {
+    const res = await fetch(
+      `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(email.trim().toLowerCase())}`,
+      {
+        method: "PATCH",
+        headers: {
+          ...authHeaders(target.key),
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        // Written with the SERVER's clock, and compared against the server's
+        // clock too — /api/admin/users returns `serverNow` and the browser
+        // measures its own skew from it. A browser clock running five minutes
+        // slow would otherwise hold everyone green forever.
+        body: JSON.stringify({ last_seen_at: new Date().toISOString() }),
+      },
+    );
+    if (res.ok) {
+      presenceColumn = true;
+      return "ok";
+    }
+    const detail = await res.text().catch(() => "");
+    if (isMissingPresenceColumn(detail)) {
+      presenceColumn = false;
+      return "missing_column";
+    }
+    console.error(`[auth] app_users heartbeat ${res.status}:`, detail.slice(0, 500));
+    return "error";
+  } catch (e) {
+    console.error("[auth] app_users heartbeat failed:", e);
+    return "error";
+  }
+}
+
+/**
  * Every console user, most-recent sign-in first. Rows whose stored role is not
  * in the catalog are coerced to `pending` rather than dropped — an operator
  * needs to SEE a row with a bad role in order to fix it, and hiding it would
@@ -207,14 +288,34 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
   const target = supabaseTarget();
   if (target.state !== "ok") return [];
   try {
-    const res = await fetch(
-      `${target.base}/rest/v1/${TABLE}?select=email,name,picture_url,role,created_at,last_login_at,invited_by&order=last_login_at.desc.nullslast`,
-      { headers: authHeaders(target.key), cache: "no-store" },
-    );
+    let res = await fetch(listUrl(target.base, presenceColumn !== false), {
+      headers: authHeaders(target.key),
+      cache: "no-store",
+    });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      console.error(`[auth] app_users list ${res.status}:`, detail.slice(0, 500));
-      return "error";
+      // The presence column is newer than this code's first deployment, so a
+      // console pointed at a database that hasn't run the migration must still
+      // render its roster. Falling through to "error" here would black out the
+      // whole Roles and Permissions screen over one optional column.
+      if (presenceColumn !== false && isMissingPresenceColumn(detail)) {
+        console.warn(
+          "[auth] app_users.last_seen_at is missing — run supabase/app-users.sql. " +
+            "Presence will read as 'never observed online' until then.",
+        );
+        presenceColumn = false;
+        res = await fetch(listUrl(target.base, false), {
+          headers: authHeaders(target.key),
+          cache: "no-store",
+        });
+      }
+      if (!res.ok) {
+        const retryDetail = await res.text().catch(() => "");
+        console.error(`[auth] app_users list ${res.status}:`, (retryDetail || detail).slice(0, 500));
+        return "error";
+      }
+    } else if (presenceColumn === null) {
+      presenceColumn = true;
     }
     const rows = (await res.json().catch(() => [])) as unknown;
     if (!Array.isArray(rows)) return [];
@@ -227,6 +328,7 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
         role: isRole(row.role) ? row.role : "pending",
         created_at: typeof row.created_at === "string" ? row.created_at : "",
         last_login_at: typeof row.last_login_at === "string" ? row.last_login_at : null,
+        last_seen_at: typeof row.last_seen_at === "string" ? row.last_seen_at : null,
         invited_by: typeof row.invited_by === "string" ? row.invited_by : null,
       };
     }).filter((r) => r.email !== "");

@@ -7,6 +7,7 @@ import {
   Clock,
   ShieldCheck,
   Settings as SettingsIcon,
+  UserRoundX,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -33,7 +34,12 @@ export function SettingsPage() {
   const { can } = useRbac();
   const [tab, setTab] = useState<SubTab>("roles");
   const reduce = useReducedMotion() ?? false;
-  const [stats, setStats] = useState<RosterStats>({ directory: 0, withRoles: 0, pending: 0 });
+  const [stats, setStats] = useState<RosterStats>({
+    directory: 0,
+    withRoles: 0,
+    pending: 0,
+    neverSignedIn: 0,
+  });
 
   if (!can("users.manage")) {
     return (
@@ -73,6 +79,12 @@ export function SettingsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <StatChip icon={Users} label="People" value={stats.directory} />
             <StatChip icon={BadgeCheck} label="With roles" value={stats.withRoles} />
+            {/* Granted access that has never been used. Shown only when there
+                is some, since a permanent "0" is a tally rather than something
+                to look into. */}
+            {stats.neverSignedIn > 0 && (
+              <StatChip icon={UserRoundX} label="Never signed in" value={stats.neverSignedIn} />
+            )}
             <StatChip
               icon={Clock}
               label="Revoked"

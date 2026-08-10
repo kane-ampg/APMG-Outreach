@@ -20,8 +20,16 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { ROLES, type Role } from "@/lib/rbac/roles";
 import { sectionGrantsForRole } from "@/lib/rbac/sections";
+import {
+  DORMANT_AFTER_DAYS,
+  SIGN_IN_LABEL,
+  exactTime,
+  lastSignIn,
+  signInStatus,
+  type SignInStatus,
+} from "@/lib/auth/signIn";
 import type { Person } from "./types";
-import { displayName, initialsFor, whenLast } from "./types";
+import { displayName, initialsFor } from "./types";
 
 /**
  * The right pane: what the selected person holds, and what each role unlocks.
@@ -120,12 +128,10 @@ export function RoleAssignments({
           <div className="mt-px truncate font-mono text-[11px] text-muted-foreground">
             {person.email}
           </div>
-          <div className="mt-px text-[10px] text-muted-foreground/80">
-            {whenLast(person.lastLoginAt)}
-            {person.invitedBy && ` · added by ${person.invitedBy}`}
-          </div>
         </div>
       </div>
+
+      <SignInDetail person={person} />
 
       {lockReason && (
         <p className="border-b border-border bg-background/60 px-4 py-2 text-[11px] text-muted-foreground">
@@ -169,6 +175,98 @@ export function RoleAssignments({
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The sign-in record: status, the exact last sign-in, and when the account
+ * first appeared.
+ *
+ * Absolute timestamps here, relative ones in the list. The list is for
+ * scanning ("who has gone quiet?"); this pane is where an admin decides
+ * whether to revoke someone, and "47d ago" is not a defensible basis for that
+ * while "23 Jun 2026, 4:12 pm" is.
+ *
+ * Every line is derived from `app_users.last_login_at` / `created_at`. Nothing
+ * here reports a live session, because nothing in this app tracks one.
+ */
+function SignInDetail({ person }: { person: Person }) {
+  const status = signInStatus(person.lastLoginAt);
+  return (
+    <div className="flex flex-col gap-1.5 border-b border-border px-4 py-3">
+      <div className="grid grid-cols-[5.5rem_1fr] items-start gap-2">
+        <span className="pt-px text-[11px] font-medium text-muted-foreground">Sign-in</span>
+        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          <SignInPill status={status} />
+          {person.lastLoginAt && (
+            <span className="text-[11px] text-muted-foreground">
+              last {lastSignIn(person.lastLoginAt)}
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="grid grid-cols-[5.5rem_1fr] items-start gap-2">
+        <span className="pt-px text-[11px] font-medium text-muted-foreground">Last sign-in</span>
+        <span className="tnum text-[11px] text-foreground">
+          {person.lastLoginAt ? (
+            exactTime(person.lastLoginAt)
+          ) : (
+            <span className="text-muted-foreground">
+              Never — no sign-in has been recorded for this address.
+            </span>
+          )}
+        </span>
+      </div>
+      <div className="grid grid-cols-[5.5rem_1fr] items-start gap-2">
+        <span className="pt-px text-[11px] font-medium text-muted-foreground">First seen</span>
+        <span className="tnum text-[11px] text-foreground">
+          {person.createdAt ? (
+            <>
+              {exactTime(person.createdAt)}
+              {person.invitedBy && (
+                <span className="text-muted-foreground"> · added by {person.invitedBy}</span>
+              )}
+            </>
+          ) : (
+            // No app_users row at all: a colleague the Workspace directory
+            // knows about who has never signed in. Saying "unknown" would
+            // imply a record we failed to read, when there is simply none yet.
+            <span className="text-muted-foreground">
+              Not in the console yet — from the Workspace directory.
+            </span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+const SIGN_IN_PILL: Record<SignInStatus, string> = {
+  active: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+  dormant: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  never: "border border-dashed border-border text-muted-foreground",
+  unknown: "bg-muted text-muted-foreground",
+};
+
+function SignInPill({ status }: { status: SignInStatus }) {
+  return (
+    <span
+      title={
+        status === "dormant"
+          ? `No sign-in in the last ${DORMANT_AFTER_DAYS} days. Their access is unchanged — this is a usage note, not a restriction.`
+          : status === "active"
+            ? `Signed in within the last ${DORMANT_AFTER_DAYS} days.`
+            : status === "unknown"
+              ? "This row carries a sign-in timestamp the console couldn't read."
+              : undefined
+      }
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[11px] font-semibold",
+        SIGN_IN_PILL[status],
+      )}
+    >
+      {SIGN_IN_LABEL[status]}
+    </span>
   );
 }
 

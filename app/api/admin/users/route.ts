@@ -67,6 +67,12 @@ export async function GET(req: Request): Promise<Response> {
   const users = usersError ? [] : result;
   const configured = supabaseTarget().state === "ok";
   return json({
+    // The clock that WROTE every last_seen_at in this payload. The browser
+    // measures its own offset from it, so a laptop with a wrong clock cannot
+    // decide somebody is online when the server can see they are not — see
+    // useServerClock. Sent on every response so the offset re-derives rather
+    // than drifting.
+    serverNow: new Date().toISOString(),
     // Mirrors the convention in LegalDocsPage: say plainly when nothing can be
     // saved, rather than showing an empty table that looks like "no users".
     mode: configured ? "live" : "demo",

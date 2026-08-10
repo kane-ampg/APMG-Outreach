@@ -18,6 +18,15 @@ export interface Person {
   role: Role | null;
   department: string | null;
   lastLoginAt: string | null;
+  /**
+   * Last heartbeat from an open console tab. The ONLY field that may show
+   * somebody as online — see lib/auth/signIn.ts. `null` for anyone who has
+   * never had a tab open since presence tracking existed.
+   */
+  lastSeenAt: string | null;
+  /** When the app_users row was created — first sign-in, or the moment an
+   *  admin pre-assigned a role. `null` for people who have no row. */
+  createdAt: string | null;
   invitedBy: string | null;
   /**
    * `console`  — has an app_users row (signed in, or pre-assigned).
@@ -35,6 +44,8 @@ export function personFromAppUser(row: AppUserRow): Person {
     role: row.role,
     department: null,
     lastLoginAt: row.last_login_at,
+    lastSeenAt: row.last_seen_at,
+    createdAt: row.created_at || null,
     invitedBy: row.invited_by,
     source: "console",
   };
@@ -57,19 +68,6 @@ export function relativeTime(iso: string): string {
   const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
   if (secs < 60) return "just now";
   const mins = Math.round(secs / 60);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.round(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.round(hrs / 24)}d ago`;
-}
-
-/** Relative "last seen", or the reason there isn't one. */
-export function whenLast(iso: string | null): string {
-  if (!iso) return "Never signed in";
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "unknown";
-  const mins = Math.round((Date.now() - then) / 60000);
-  if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h ago`;

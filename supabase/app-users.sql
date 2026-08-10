@@ -35,6 +35,22 @@ alter table public.app_users alter column role set default 'sales';
 -- "Never signed in" is `last_login_at is null`, which needs no new column.
 alter table public.app_users add column if not exists invited_by text;
 
+-- Presence. Stamped by POST /api/auth/heartbeat, which the console shell calls
+-- every 30 seconds while a tab is OPEN AND VISIBLE, and never otherwise.
+--
+-- This column is what lets Settings say "Online now" in green. It is
+-- deliberately separate from last_login_at: a sign-in is a single moment hours
+-- or days in the past, and rendering it as presence is exactly the lie this
+-- column exists to avoid. Someone is shown online only while their beat is
+-- fresher than PRESENCE_WINDOW_MS (lib/auth/signIn.ts) — close the tab and the
+-- green expires on its own, with no sign-out required.
+--
+-- Nullable forever: every row predating this column has no presence history,
+-- and "we have never observed this person online" is the honest reading of
+-- null. No backfill from last_login_at — that would invent presence we never
+-- saw.
+alter table public.app_users add column if not exists last_seen_at timestamptz;
+
 -- Session kill switch. Every session cookie is a signed JWT carrying `iat`;
 -- resolveSession() refuses any token issued strictly before this instant, so
 -- stamping it terminates that person's live sessions on their very next

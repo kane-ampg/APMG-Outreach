@@ -13,6 +13,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { ROLES, type Role } from "@/lib/rbac/roles";
+import {
+  SIGN_IN_LABEL,
+  exactTime,
+  lastSignIn,
+  signInStatus,
+  type SignInStatus,
+} from "@/lib/auth/signIn";
 import type { Person } from "./types";
 import { displayName, initialsFor, relativeTime } from "./types";
 
@@ -58,6 +65,7 @@ export function PeopleList({
 }) {
   const [search, setSearch] = useState("");
   const [roleFilter, setRoleFilter] = useState<"all" | Role | "none">("all");
+  const [signInFilter, setSignInFilter] = useState<"all" | SignInStatus>("all");
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [withRolesOnly, setWithRolesOnly] = useState(false);
   const [page, setPage] = useState(1);
@@ -79,6 +87,7 @@ export function PeopleList({
       if (withRolesOnly && !p.role) return false;
       if (roleFilter === "none" && p.role) return false;
       if (roleFilter !== "all" && roleFilter !== "none" && p.role !== roleFilter) return false;
+      if (signInFilter !== "all" && signInStatus(p.lastLoginAt) !== signInFilter) return false;
       if (deptFilter !== "all" && p.department !== deptFilter) return false;
       if (!q) return true;
       return (
@@ -87,7 +96,7 @@ export function PeopleList({
         (p.department ?? "").toLowerCase().includes(q)
       );
     });
-  }, [people, search, roleFilter, deptFilter, withRolesOnly]);
+  }, [people, search, roleFilter, signInFilter, deptFilter, withRolesOnly]);
 
   // Clamp rather than reset: an admin who filters a 4-page list down to 1 page
   // while sitting on page 3 should land on the last page that still has rows,
@@ -97,6 +106,15 @@ export function PeopleList({
   const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const customCount = people.filter((p) => p.source === "custom").length;
   const withRoles = people.filter((p) => p.role).length;
+
+  // Counted across the whole roster rather than the current page, because the
+  // question these answer — "how many of these accounts is nobody using?" —
+  // is asked before any filter is applied, not after.
+  const signInCounts = useMemo(() => {
+    const counts: Record<SignInStatus, number> = { active: 0, dormant: 0, never: 0, unknown: 0 };
+    for (const p of people) counts[signInStatus(p.lastLoginAt)] += 1;
+    return counts;
+  }, [people]);
 
   function resetToFirstPage<T>(apply: (value: T) => void) {
     return (value: T) => {
@@ -239,6 +257,22 @@ export function PeopleList({
           ))}
           <option value="none">No role yet</option>
         </select>
+        <select
+          value={signInFilter}
+          onChange={(e) => resetToFirstPage(setSignInFilter)(e.target.value as "all" | SignInStatus)}
+          aria-label="Filter by sign-in status"
+          className="h-8 shrink-0 rounded-lg border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <option value="all">Any sign-in</option>
+          <option value="active">Active ({signInCounts.active})</option>
+          <option value="dormant">Dormant ({signInCounts.dormant})</option>
+          <option value="never">Never signed in ({signInCounts.never})</option>
+          {/* Only offered when such a row exists — an option that can only ever
+              return nothing reads as a broken filter. */}
+          {signInCounts.unknown > 0 && (
+            <option value="unknown">Unreadable stamp ({signInCounts.unknown})</option>
+          )}
+        </select>
         {departments.length > 0 && (
           <select
             value={deptFilter}
@@ -380,10 +414,49 @@ function PersonRow({
               {person.department}
             </span>
           )}
+          <SignInLine person={person} />
         </span>
         <RoleChip person={person} defaultRoleOnSignIn={defaultRoleOnSignIn} />
       </button>
     </li>
+  );
+}
+
+/** Dot colours per sign-in state. Never is hollow rather than grey-filled: an
+ *  account that has never been used is an absence, not a third activity level. */
+const DOT: Record<SignInStatus, string> = {
+  active: "bg-emerald-500",
+  dormant: "bg-amber-500",
+  never: "border border-muted-foreground/50",
+  unknown: "bg-muted-foreground/50",
+};
+
+/**
+ * "Active · 2h ago" under each row.
+ *
+ * The word is about their LAST SIGN-IN, never about a live session — nothing in
+ * this app knows who is signed in at this moment (the cookie is a stateless
+ * 12-hour JWT with no server-side registry), so nothing here says so. The exact
+ * timestamp is on the tooltip, since the relative form is the readable one but
+ * the absolute one is what an access review needs.
+ */
+function SignInLine({ person }: { person: Person }) {
+  const status = signInStatus(person.lastLoginAt);
+  return (
+    <span
+      className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground"
+      title={
+        person.lastLoginAt
+          ? `Last signed in ${exactTime(person.lastLoginAt)}`
+          : "No sign-in has ever been recorded for this address."
+      }
+    >
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[status])} aria-hidden />
+      <span className="truncate">
+        {SIGN_IN_LABEL[status]}
+        {status !== "never" && ` · ${lastSignIn(person.lastLoginAt)}`}
+      </span>
+    </span>
   );
 }
 

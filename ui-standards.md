@@ -1195,9 +1195,11 @@ Every new surface must:
   and ships to `NEXT_PUBLIC_TELEMETRY_ENDPOINT` via `sendBeacon` (local-only
   inspector drawer when unset).
 - Surfaces: **Overview** (3 KPI gauge cards → histogram beside a recent-leads
-  table → footer "Developed by APMG AI Team © {year}"); **Integrations** (n8n
-  automation cards with role=switch toggles + connection status). Others use a
-  shared "not wired yet" placeholder.
+  table → footer "Developed by APMG AI Team © {year}"); **Integrations** (a
+  table/cards switch over the same n8n automations, with role=switch toggles +
+  connection status — § 5.1 table by default, one expandable editor row per
+  setting; cards are the opt-in). Others use a shared "not wired yet"
+  placeholder.
 - Red discipline: **Signal `#FF2E1F`** for live/active/short red text (AA on
   panel); **Incandescent `#C8102E`** for data fills only (never text);
   **Standby `#5A1A1F`** for idle/wrong-direction. White-on-red solid chips

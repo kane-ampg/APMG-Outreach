@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { landingTab, TAB_LABEL, TAB_PERMISSION, tabTitle, type TabId } from "@/lib/nav";
+import { usePresenceHeartbeat } from "@/lib/auth/usePresence";
 import { useClickTelemetry } from "@/lib/telemetry";
 import { useRbac } from "@/lib/rbac/RbacProvider";
 import { ViewAsBanner } from "@/components/rbac/ViewAsBanner";
@@ -57,6 +58,13 @@ export function DashboardShell({ user }: { user?: SessionUser }) {
 
   // Attach the delegated click-telemetry listener for the active view.
   useClickTelemetry(activeTab);
+
+  // Report presence while this tab is open and visible. Mounted on the shell
+  // rather than on the Settings screen on purpose: it must beat for everyone
+  // using the console, not only for the admin who happens to be looking at the
+  // roster — otherwise the only person ever shown online would be the person
+  // reading the list.
+  usePresenceHeartbeat();
 
   // Escape closes the drawer / inspector (a11y §16).
   useEffect(() => {
