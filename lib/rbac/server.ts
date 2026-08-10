@@ -62,7 +62,23 @@ export async function resolveSession(req: Request): Promise<ResolvedSession | nu
 }
 
 export type GuardResult =
-  | { ok: true; role: Role; email: string }
+  | {
+      ok: true;
+      /** effective role — what enforcement actually used */
+      role: Role;
+      email: string;
+      /** what app_users says they are, regardless of any view-as */
+      trueRole: Role;
+      /**
+       * The role being previewed, or null when they are simply themselves.
+       *
+       * Carried so the audit trail can say "kane@ (as sales)". Without it, an
+       * admin acting while impersonating is indistinguishable in the record
+       * from the rep whose seat they borrowed — which would make the trail
+       * quietly misattribute exactly the actions it exists to attribute.
+       */
+      actingAs: Role | null;
+    }
   | { ok: false; status: 401 | 403; error: string };
 
 export async function requirePermission(
@@ -74,7 +90,13 @@ export async function requirePermission(
   if (!roleCan(session.role, perm)) {
     return { ok: false, status: 403, error: `Forbidden — missing permission: ${perm}` };
   }
-  return { ok: true, role: session.role, email: session.email };
+  return {
+    ok: true,
+    role: session.role,
+    email: session.email,
+    trueRole: session.trueRole,
+    actingAs: session.role === session.trueRole ? null : session.role,
+  };
 }
 
 /**

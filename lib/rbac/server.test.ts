@@ -144,7 +144,13 @@ describe("requirePermission", () => {
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "sales.view",
     );
-    expect(guard).toEqual({ ok: true, role: "sales", email: "rep@apmgservices.com.au" });
+    expect(guard).toEqual({
+      ok: true,
+      role: "sales",
+      email: "rep@apmgservices.com.au",
+      trueRole: "sales",
+      actingAs: null,
+    });
   });
 
   it("403s a real role that does not hold the permission", async () => {
@@ -174,7 +180,15 @@ describe("requirePermission", () => {
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "sales.view",
     );
-    expect(guard).toEqual({ ok: true, role: "sales", email: "kane@apmgservices.com.au" });
+    // The impersonation case: enforcement used `sales`, but the trail must be
+    // able to say this was kane@ wearing that hat, not the rep whose seat it is.
+    expect(guard).toEqual({
+      ok: true,
+      role: "sales",
+      email: "kane@apmgservices.com.au",
+      trueRole: "admin",
+      actingAs: "sales",
+    });
   });
 
   it("legitimate view-as: admin viewing as sales loses admin-only access", async () => {
