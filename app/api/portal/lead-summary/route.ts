@@ -294,8 +294,10 @@ export async function POST(req: Request): Promise<Response> {
   const blocked = requireLiveSupabase("portal/lead-summary");
   if (blocked) return blocked;
   if (target.state === "demo") {
-    // Nothing to read (and the demo enquiry ids aren't uuids anyway) — the modal
-    // renders its own deterministic summary from the preset instead.
+    // Nothing to read (and the demo enquiry ids aren't uuids anyway). The modal
+    // already renders fallbackSummary() locally from the facts it has and never
+    // calls this route while `demo` is true — this response only matters if
+    // something hits the route directly.
     return Response.json({ ok: true, mode: "demo" });
   }
   if (!portalAdminAuthorized(req)) {

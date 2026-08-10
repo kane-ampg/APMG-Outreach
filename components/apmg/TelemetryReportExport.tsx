@@ -207,7 +207,11 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
 
   const demoBanner =
     data.mode === "demo"
-      ? `<div class="banner">Demo data — connect Supabase (and run the portal migrations) to report on live activity.</div>`
+      ? `<div class="banner">${
+          data.needsMigration
+            ? "Not connected — the portal telemetry tables are missing. Run supabase/portal-telemetry.sql in the Supabase SQL editor to report on live activity."
+            : "Not connected — configure Supabase and run supabase/portal-telemetry.sql to report on live activity."
+        }</div>`
       : "";
 
   return `<!doctype html>
@@ -399,7 +403,14 @@ const MODE_HINT: Record<PeriodMode, string> = {
   month: "Report covers the calendar month containing the selected date.",
 };
 
-export function TelemetryReportExport({ demo }: { demo: boolean }) {
+export function TelemetryReportExport({
+  demo,
+  needsMigration,
+}: {
+  demo: boolean;
+  /** Only meaningful while `demo` is true — see the two-way split below. */
+  needsMigration: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<PeriodMode>("week");
   const [date, setDate] = useState(todayInputValue);
@@ -528,7 +539,9 @@ export function TelemetryReportExport({ demo }: { demo: boolean }) {
 
         {demo && (
           <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-amber-600 dark:text-amber-400">
-            Demo data — connect Supabase to export live reports.
+            {needsMigration
+              ? "Not connected — the portal telemetry tables are missing. Run supabase/portal-telemetry.sql in the Supabase SQL editor to export live reports."
+              : "Not connected — configure Supabase and run supabase/portal-telemetry.sql to export live reports."}
           </p>
         )}
         {error && (

@@ -117,26 +117,28 @@ export const SECTOR_ASSETS_BUCKET = "sector-assets";
 
 /** Resolve the n8n campaign-send webhook. A URL saved from the Integrations tab
  *  (app_settings) wins; otherwise the N8N_CAMPAIGN_WEBHOOK_URL env var; else
- *  demo mode (the send is simulated). When set, the Send Campaigns tab POSTs
- *  rendered outreach messages here for the automation to deliver. */
+ *  unconfigured — the send route refuses with a 503 rather than simulating a
+ *  send. When set, the Send Campaigns tab POSTs rendered outreach messages here
+ *  for the automation to deliver. */
 export function campaignWebhook(): Promise<WebhookTarget> {
   return resolveWebhook(SETTING_CAMPAIGN_WEBHOOK, SETTING_CAMPAIGN_ENABLED, "N8N_CAMPAIGN_WEBHOOK_URL");
 }
 
 /** Resolve the n8n enquiry-notification webhook (references/APMG Enquiry
  *  Notification.json). A URL saved from the Integrations tab wins; otherwise the
- *  N8N_ENQUIRY_NOTIFY_WEBHOOK_URL env var; else demo (no notification is sent).
- *  The enquiry route POSTs a landed enquiry here so the operator gets emailed. */
+ *  N8N_ENQUIRY_NOTIFY_WEBHOOK_URL env var; else unconfigured (no notification is
+ *  sent). The enquiry route POSTs a landed enquiry here so the operator gets emailed. */
 export function enquiryNotifyWebhook(): Promise<WebhookTarget> {
   return resolveWebhook(SETTING_ENQUIRY_NOTIFY_WEBHOOK, SETTING_ENQUIRY_NOTIFY_ENABLED, "N8N_ENQUIRY_NOTIFY_WEBHOOK_URL");
 }
 
 /** Resolve the n8n email-finder webhook (references/APMG Email Finder.json).
  *  A URL saved from the Integrations tab (app_settings) wins; otherwise the
- *  N8N_EMAIL_FINDER_WEBHOOK_URL env var; else demo mode (no scrape happens).
- *  When set, "Find emails" POSTs the selected website-only leads there — the
- *  automation fetches each lead's site + contact page and returns the best
- *  contact address it finds, which the app stores on the lead. */
+ *  N8N_EMAIL_FINDER_WEBHOOK_URL env var; else unconfigured — the route refuses
+ *  with a 503 rather than scraping. When set, "Find emails" POSTs the selected
+ *  website-only leads there — the automation fetches each lead's site + contact
+ *  page and returns the best contact address it finds, which the app stores on
+ *  the lead. */
 export function emailFinderWebhook(): Promise<WebhookTarget> {
   return resolveWebhook(SETTING_EMAIL_FINDER_WEBHOOK, SETTING_EMAIL_FINDER_ENABLED, "N8N_EMAIL_FINDER_WEBHOOK_URL");
 }

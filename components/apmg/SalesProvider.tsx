@@ -202,8 +202,9 @@ function toSalesLead(r: SalesQueueRow): SalesLead {
  * the sidebar badge. The queue itself is REAL data: every lead ADMIN has handed
  * over from Hot Leads (the portal_events sales_handoff ledger — being emailed
  * is not enough), fetched one server-paginated page at a time from
- * /api/sales/queue. Demo mode (no Supabase configured) falls back to the preset
- * so the tab stays exercisable.
+ * /api/sales/queue. Demo mode (no Supabase configured) shows an empty queue and
+ * an explicit "not connected" error instead of a preset — see the
+ * `mode === "demo"` branch in `load()` below.
  *
  * The queue is live: a short poll (paused when hidden, topped up on focus)
  * re-reads it, and a hand-off stamp newer than the one the rep acknowledged
@@ -410,8 +411,10 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       const many = leadIds.length > 1;
 
       if (mode === "demo") {
-        // No ledger to write to — drop them from the preset so the flow still
-        // demonstrates end to end.
+        // No ledger to write to, and no real rows to remove — the demo queue is
+        // always empty (see the `mode === "demo"` branch in load()). This just
+        // updates the already-empty local state and reports success so the
+        // return flow doesn't error out.
         const gone = new Set(leadIds);
         setRows((prev) => prev.filter((l) => !gone.has(l.id)));
         setTotal((t) => Math.max(0, t - leadIds.length));

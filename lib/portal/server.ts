@@ -583,7 +583,15 @@ export async function readClickHistory(
       const res = await fetch(
         `${base}/rest/v1/portal_events?select=created_at&lead_id=eq.${encodeURIComponent(leadId)}` +
           `&event=eq.${event}&order=created_at.desc&limit=1`,
-        { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: "no-store" },
+        {
+          headers: { apikey: key, Authorization: `Bearer ${key}` },
+          cache: "no-store",
+          // A hung PostgREST connection must not stall the customer's redirect
+          // (this runs inline in /t/[id] before the 302). Any abort lands in the
+          // catch below and reads as "unknown" — classifyClick's null,null case
+          // still records the click, so a timeout never drops a real one.
+          signal: AbortSignal.timeout(2_000),
+        },
       );
       if (!res.ok) return null;
       const rows = (await res.json().catch(() => [])) as Array<{ created_at?: string }>;

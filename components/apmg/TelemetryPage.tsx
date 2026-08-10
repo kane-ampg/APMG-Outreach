@@ -1061,7 +1061,10 @@ export function TelemetryPage() {
                 Clear <span className="tnum">{formatInt(unseenTotal)}</span>
               </button>
             )}
-            <TelemetryReportExport demo={ready?.mode === "demo"} />
+            <TelemetryReportExport
+              demo={ready?.mode === "demo"}
+              needsMigration={!!ready?.needsMigration}
+            />
             <button
               type="button"
               onClick={() => refresh()}
