@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useSyncExternalStore } from "react";
-import { DEMO_LEAD_ACTIVITY, type LeadActivity, type LeadActivityEvent } from "@/lib/data/leadActivity";
+import { type LeadActivity, type LeadActivityEvent } from "@/lib/data/leadActivity";
 import { isHotLead, leadScore } from "@/lib/data/leadScore";
 import { adminHeaders } from "@/lib/portal/adminKey";
 import { type LeadMarker, type MarkerKind, type SalesHandoffResponse } from "@/lib/sales/handoff";
@@ -32,9 +32,10 @@ import { forgetSelfHandoff, noteSelfHandoff } from "@/lib/sales/selfHandoff";
  * moment its behaviour earns it, sits here for review, and leaves only when
  * the operator hands it to Sales.
  *
- * Demo mode (no Supabase, or the portal tables unmigrated) scores the same
- * Melbourne preset the Telemetry tab uses and keeps hand-offs in session
- * memory, so the whole flow stays exercisable without a database.
+ * Not connected (no Supabase, or the portal tables unmigrated): the queue is
+ * empty rather than a believable preset — same policy as the Telemetry and
+ * Enquiries tabs — while hand-off actions still keep their marks in session
+ * memory, so the mechanism itself stays exercisable without a database.
  *
  * Failure grammar matches TelemetryPage: a background poll that fails leaves
  * the last good data on screen ("slightly stale", never red), and 401 raises
@@ -243,22 +244,21 @@ export async function refreshHotLeads(opts?: { silent?: boolean }): Promise<void
     const act = (await actRes.json().catch(() => null)) as ActivityPayload | null;
     const hand = (await handRes.json().catch(() => null)) as SalesHandoffResponse | null;
 
-    // Demo (no Supabase / tables missing) → score the same preset Telemetry
-    // shows, and keep hand-offs in session memory.
+    // Not connected: show an empty queue and say why, same as Telemetry — a
+    // believable preset here would be indistinguishable from a real hot-leads
+    // queue in a screenshot.
     if (act?.mode === "demo") {
-      const archived = new Map(demoArchived);
-      const parts = split(rankByScore(DEMO_LEAD_ACTIVITY), archived);
       set({
         status: "ready",
         mode: "demo",
         needsMigration: act.needsMigration === true || hand?.needsMigration === true,
         unauthorized: false,
         error: null,
-        leads: parts.leads,
-        handedOff: new Map(demoHandoffs),
-        archived,
-        archivedLeads: parts.archivedLeads,
-        returned: new Map(demoReturned),
+        leads: [],
+        handedOff: EMPTY_MARKERS,
+        archived: EMPTY_MARKERS,
+        archivedLeads: [],
+        returned: EMPTY_RETURNS,
       });
       return;
     }

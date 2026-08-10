@@ -19,9 +19,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
-  DEMO_ACTIVITY_TOTALS,
-  DEMO_ANONYMOUS,
-  DEMO_LEAD_ACTIVITY,
   isHiddenEvent,
   serviceName,
   type ActivityTotals,
@@ -742,21 +739,17 @@ export function TelemetryPage() {
       const sum = (await sumRes.json().catch(() => null)) as SummaryPayload | null;
       if (!mountedRef.current) return;
 
-      // Demo (no Supabase / tables missing) → the believable Melbourne preset.
-      // Either endpoint answering "demo" flips the whole page: they read the
-      // same Supabase target, so a split verdict means misconfiguration, and
-      // half-live numbers over demo trails would lie. needsMigration is OR-ed
-      // across BOTH payloads so a partially-run migration (portal_events
-      // present, portal_inquiries missing → summary demo, activity live) still
-      // gets the truthful "run the SQL" banner, not "connect Supabase".
+      // Not connected: show nothing and say why. Previously this swapped in a
+      // believable preset, which is indistinguishable from real telemetry in a
+      // screenshot — the reason this page had to stop doing it.
       if (act?.mode === "demo" || sum?.mode === "demo") {
         settle({
           status: "ready",
           mode: "demo",
           needsMigration: act?.needsMigration === true || sum?.needsMigration === true,
-          leads: DEMO_LEAD_ACTIVITY,
-          anonymous: DEMO_ANONYMOUS,
-          totals: DEMO_ACTIVITY_TOTALS,
+          leads: [],
+          anonymous: { visitors: 0, events: 0, topServices: [] },
+          totals: { attributionClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0 },
         });
         return;
       }
@@ -1095,8 +1088,8 @@ export function TelemetryPage() {
             <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden />
             <p className="font-mono text-[10.5px] leading-relaxed text-amber-600 dark:text-amber-400">
               {ready.needsMigration
-                ? "Demo data — the portal telemetry tables are missing. Run supabase/portal-telemetry.sql in the Supabase SQL editor to go live."
-                : "Demo data — connect Supabase and run supabase/portal-telemetry.sql to see live click activity."}
+                ? "Not connected — the portal telemetry tables are missing. Run supabase/portal-telemetry.sql in the Supabase SQL editor to see real click activity."
+                : "Not connected — configure Supabase and run supabase/portal-telemetry.sql to see real click activity."}
             </p>
           </div>
         </Reveal>

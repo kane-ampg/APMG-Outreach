@@ -2,12 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { adminHeaders } from "@/lib/portal/adminKey";
-import { DEMO_INQUIRIES, type PortalInquiry } from "@/lib/data/enquiries";
-import {
-  DEMO_LEAD_ACTIVITY,
-  type LeadActivity,
-  type LeadActivityEvent,
-} from "@/lib/data/leadActivity";
+import { type PortalInquiry } from "@/lib/data/enquiries";
+import { type LeadActivity, type LeadActivityEvent } from "@/lib/data/leadActivity";
 
 /**
  * The two reads behind the Sales queue's per-row "View", both keyed by lead id:
@@ -125,11 +121,9 @@ export function useLeadBriefs(): LeadBriefs {
         | null;
       if (!mounted.current) return;
       if (data?.mode === "demo") {
-        // The demo Sales preset carries fabricated ids that match no trail, so
-        // this resolves to "no tracked activity" per row — which is an honest
-        // demo of the state, not a broken one.
-        setTrails(new Map(DEMO_LEAD_ACTIVITY.map((l) => [l.leadId, l])));
-        setEnquiries(indexEnquiries(DEMO_INQUIRIES));
+        // Not connected: no tracked trails or enquiries to show — an honest
+        // empty brief rather than a fabricated one.
+        setEnquiries(indexEnquiries([]));
         setState("ready");
         return;
       }

@@ -20,8 +20,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
-  DEMO_INQUIRIES,
-  DEMO_SUMMARY,
   DIRECT_CATEGORY,
   INQUIRY_STATUSES,
   isInquiryStatus,
@@ -32,11 +30,7 @@ import {
   type PortalInquiry,
   type PortalSummary,
 } from "@/lib/data/enquiries";
-import {
-  DEMO_LEAD_ACTIVITY,
-  type LeadActivity,
-  type LeadActivityEvent,
-} from "@/lib/data/leadActivity";
+import { type LeadActivity, type LeadActivityEvent } from "@/lib/data/leadActivity";
 import { DIRECT_SOURCE } from "@/lib/portal/source";
 import { formatInt } from "@/lib/format";
 import { adminHeaders, saveAdminKey } from "@/lib/portal/adminKey";
@@ -934,6 +928,25 @@ function salesTriageStats(rows: PortalInquiry[]): EnquiryStat[] {
 
 /* ───────────────────────────  page  ─────────────────────────── */
 
+/** All-zero summary for the not-connected state — the page renders its real
+ *  structure with no numbers rather than invented ones. */
+function emptySummary(): PortalSummary {
+  return {
+    mode: "demo",
+    totals: {
+      attributionClicks: 0,
+      portalViews: 0,
+      serviceOpens: 0,
+      inquiries: 0,
+      uniqueVisitors: 0,
+    },
+    byService: [],
+    byCategory: [],
+    bySource: [],
+    recentEvents: [],
+  };
+}
+
 export function EnquiriesPage() {
   const { can, role } = useRbac();
   const canManage = can("enquiries.manage");
@@ -973,10 +986,10 @@ export function EnquiriesPage() {
         | { ok?: boolean; mode?: string; leads?: unknown }
         | null;
       if (!mountedRef.current) return;
-      // Demo mode scores the same Melbourne preset the Telemetry tab shows, so
-      // the demo enquiries have believable trails behind them too.
+      // Not connected: no trails to show — an honest empty state rather than
+      // a fabricated preset.
       if (data?.mode === "demo") {
-        setActivity({ status: "ready", byLead: indexTrails(DEMO_LEAD_ACTIVITY) });
+        setActivity({ status: "ready", byLead: indexTrails([]) });
         return;
       }
       if (!res.ok || !data?.ok) {
@@ -1013,9 +1026,10 @@ export function EnquiriesPage() {
         });
         return;
       }
-      // Demo (no Supabase) → render the believable preset behind the banner.
+      // Not connected: render the real empty structure behind the banner,
+      // not a fabricated preset.
       if (sum.mode === "demo" || inq?.mode === "demo") {
-        setLoad({ status: "ready", mode: "demo", summary: DEMO_SUMMARY, inquiries: DEMO_INQUIRIES });
+        setLoad({ status: "ready", mode: "demo", summary: emptySummary(), inquiries: [] });
         return;
       }
       // 401 = the shared-secret gate on the PII listing — surface the access
@@ -1299,8 +1313,8 @@ export function EnquiriesPage() {
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2">
             <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0 text-amber-500" aria-hidden />
             <p className="font-mono text-[10.5px] leading-relaxed text-amber-600 dark:text-amber-400">
-              Demo data — connect Supabase and run supabase/portal-telemetry.sql to see live
-              portal enquiries.
+              Not connected — configure Supabase and run supabase/portal-telemetry.sql to see real
+              enquiries.
             </p>
           </div>
         </Reveal>
