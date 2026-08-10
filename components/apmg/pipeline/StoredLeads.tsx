@@ -562,18 +562,26 @@ function SelectableLeads({
         body: JSON.stringify({ leads: batch }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; mode?: "live" | "demo" | "noop"; found?: number; error?: string }
+        | { ok?: boolean; mode?: "live" | "unconfigured" | "paused" | "noop"; found?: number; error?: string }
         | null;
-      if (!res.ok || !data?.ok) {
-        show({ kind: "error", message: data?.error ?? `The email finder responded ${res.status}.` });
-        return;
-      }
-      if (data.mode === "demo") {
+      // Checked BEFORE the generic transport-error guard below: the route
+      // answers an unconfigured/paused webhook with a 503 (ok:false), so
+      // testing res.ok first would swallow this into the red error dialog
+      // before we ever looked at which mode it was. Either config state gets
+      // the blue "not connected" info modal instead, using the route's own
+      // message — it already distinguishes paused from never-configured, so
+      // there's no need to re-derive that here.
+      if (data?.mode === "unconfigured" || data?.mode === "paused") {
         show({
-          kind: "demo",
+          kind: "not-connected",
           message:
+            data.error ??
             "The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again.",
         });
+        return;
+      }
+      if (!res.ok || !data?.ok) {
+        show({ kind: "error", message: data?.error ?? `The email finder responded ${res.status}.` });
         return;
       }
       show({ kind: "success", found: data.found ?? 0, total: batch.length });

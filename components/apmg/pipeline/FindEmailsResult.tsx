@@ -9,10 +9,13 @@ import { Button } from "@/components/ui/button";
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 
-/** Outcome of a "Find emails" run, shaped for the result modal. */
+/** Outcome of a "Find emails" run, shaped for the result modal. `not-connected`
+ *  covers both of the route's configuration states (never set up, or set up but
+ *  paused under Integrations) — the route's own `error` string is what tells
+ *  those two apart, so the modal doesn't need a separate kind for each. */
 export type FindEmailsOutcome =
   | { kind: "success"; found: number; total: number }
-  | { kind: "demo"; message: string }
+  | { kind: "not-connected"; message: string }
   | { kind: "error"; message: string };
 
 /**
@@ -82,7 +85,7 @@ export function FindEmailsResult({
 
             {outcome.kind === "success" ? (
               <SuccessBody found={outcome.found} total={outcome.total} reduce={reduce} />
-            ) : outcome.kind === "demo" ? (
+            ) : outcome.kind === "not-connected" ? (
               <NoticeBody
                 tone="info"
                 icon={PlugZap}
