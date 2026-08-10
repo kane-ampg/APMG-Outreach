@@ -1719,15 +1719,42 @@ git commit -m "feat: add the admin Audit trail tab and per-lead decision history
 
 ---
 
-## Deferred to plan 2
+## Status and coordination
 
-Tracked so they are not lost, and covered by the same spec:
+**Tasks 1-6 are complete** (commits `9009611`, `9bfb912`, `f09b0c5`, `930ae7d`). The
+foundation is in: the migration, the action catalog, the replay reducer, the
+widened guard, the audit writer, and the write endpoint. Full suite green at
+197 tests.
+
+**Tasks 7-12 are HELD.** A parallel effort — `docs/superpowers/plans/2026-08-09-fabrication-removal.md`,
+already executing on this same branch — modifies four of the files those tasks
+touch:
+
+| File | That plan | This plan |
+|---|---|---|
+| `app/api/sales/queue/route.ts` | Task 4 (fail-closed sweep) | Task 7 |
+| `components/apmg/SalesProvider.tsx` | Task 6 | Task 8 |
+| `components/apmg/SalesPage.tsx` | Task 6 | Task 9 |
+| `lib/data/sales.ts` | Task 6 | Task 8 |
+
+Its Task 6 already deletes `SALES_LEADS` and `SALES_REP` and takes the rep name
+from the session, which supersedes this plan's Task 8 Step 1 and Task 9 Step 1
+— do not do them twice. Resume Tasks 7-12 only after that plan finishes, and
+**re-derive every line number first**: `SalesPage.tsx` has already moved from
+947 to 1030 under commit `e66168b`.
+
+**Superseded outright.** These were listed here as "plan 2" work and are now
+owned by the fabrication-removal plan, three of them already shipped:
+
+- ~~`requireLiveSupabase()` across the demo-branching routes~~ — shipped, `c1fb76e`.
+- ~~The campaign send's fabricated success~~ — shipped, `99cd183`.
+- ~~The lead importer's phantom inserts~~ — shipped, `efe418e`.
+- `DEMO_*` datasets in `lib/data/enquiries.ts` and `lib/data/leadActivity.ts` — its Task 5.
+
+**Still unowned by either plan** — carry these forward:
 
 - Audit writes on `/api/sales/handoff` (before its destructive delete), `/api/pipeline/campaigns/send`, `/api/auth/view-as`, `/api/admin/users`.
-- `PATCH /api/portal/inquiries` — add the missing `requirePermission("enquiries.manage")` (the file has none today) plus an audit row.
-- The campaign send's fabricated success: a paused or unresolved webhook must 503 in production instead of reporting N delivered.
-- `requireLiveSupabase()` across the 13 demo-branching routes, carving out `/api/portal/events` and `app/t/[id]`.
-- `DEMO_*` datasets in `lib/data/enquiries.ts` and `lib/data/leadActivity.ts`.
+- `PATCH /api/portal/inquiries` — add the missing `requirePermission("enquiries.manage")`; the file still has none.
 - Currency: `formatUsd` → `formatAud`, `usd0` → `aud0`, and the five call sites.
 
 ## Self-review
