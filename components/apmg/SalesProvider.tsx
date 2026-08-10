@@ -17,7 +17,7 @@ import {
   volumeSeries,
   type VolumeSeries,
 } from "@/lib/data/buckets";
-import { SALES_LEADS, type SalesLead, type SalesStatus } from "@/lib/data/sales";
+import { type SalesLead, type SalesStatus } from "@/lib/data/sales";
 import { adminHeaders } from "@/lib/portal/adminKey";
 import type { SalesHandoffResponse } from "@/lib/sales/handoff";
 import type { SalesHandoffStamp, SalesQueueResponse, SalesQueueRow } from "@/lib/sales/queue";
@@ -238,7 +238,6 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   // increment to refetch the current page; also guards stale responses
   const [reloadTick, setReloadTick] = useState(0);
   const requestSeq = useRef(0);
-  const demoSeeded = useRef(false);
   /** Last page of RAW queue rows — `leads` is the display shape, which loses
    *  the ISO hand-off stamp that arrival detection compares against. */
   const rawRows = useRef<SalesQueueRow[]>([]);
@@ -296,20 +295,18 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       if (cancelled() || seq !== requestSeq.current) return;
 
       if (data.mode === "demo") {
-        // No database configured — preset queue, one page.
+        // No database configured. Show an empty queue and an explicit error
+        // rather than a preset — an invented queue of plausible businesses is
+        // indistinguishable from a real one.
         setMode("demo");
-        setRows(SALES_LEADS);
-        setRecentRows(SALES_LEADS.slice(0, 6));
-        // The preset carries formatted labels, not ISO stamps — nothing to
-        // bucket, so the demo overview shows the histogram's empty state.
+        setRows([]);
+        setRecentRows([]);
         setHandoffs([]);
-        setTotal(SALES_LEADS.length);
-        setEngagedTotal(SALES_LEADS.filter((l) => l.engaged).length);
+        setTotal(0);
+        setEngagedTotal(0);
         setNeedsMigration(false);
-        if (!demoSeeded.current) {
-          demoSeeded.current = true;
-          setClosedDeals(SALES_LEADS.filter((l) => l.status === "closed_won"));
-        }
+        setClosedDeals([]);
+        setError("Not connected to the database — no leads can be shown.");
       } else {
         setMode("live");
         rawRows.current = data.rows;

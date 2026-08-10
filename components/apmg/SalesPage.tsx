@@ -20,7 +20,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { SALES_REP, type SalesLead, type SalesStatus } from "@/lib/data/sales";
+import { type SalesLead, type SalesStatus } from "@/lib/data/sales";
+import { type SessionUser } from "./Sidebar";
 import type { LeadSubject } from "@/lib/data/enquiryActivity";
 import { formatInt, formatUsd } from "@/lib/format";
 import { Can } from "@/components/rbac/Can";
@@ -857,7 +858,7 @@ function CardSkeleton() {
   );
 }
 
-export function SalesPage() {
+export function SalesPage({ user }: { user?: SessionUser }) {
   const {
     leads,
     stats,
@@ -1026,8 +1027,8 @@ export function SalesPage() {
               Your qualified queue
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Leads admin has reviewed and handed over land here, newest first — ready to call. ·{" "}
-              <span className="text-foreground/80">{SALES_REP}</span>
+              Leads admin has reviewed and handed over land here, newest first — ready to call.
+              {user?.name ? <> · <span className="text-foreground/80">{user.name}</span></> : null}
             </p>
           </div>
           <div className="flex items-center gap-2">

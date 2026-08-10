@@ -146,7 +146,7 @@ export function DashboardShell({ user }: { user?: SessionUser }) {
                   ) : activeTab === "enquiries" ? (
                     <EnquiriesPage />
                   ) : activeTab === "sales" ? (
-                    <SalesPage />
+                    <SalesPage user={user} />
                   ) : activeTab === "closed" ? (
                     <ClosedDealsPage />
                   ) : activeTab === "integrations" ? (
