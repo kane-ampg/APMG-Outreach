@@ -101,7 +101,7 @@ const REASON_NOTE: Record<string, string> = {
     "Today’s AI summary cap is spent (ENQUIRY_SUMMARY_DAILY_CAP) — this is the counted-facts summary.",
   refusal: "Claude declined to write this one — this is the counted-facts summary.",
   error: "Couldn’t reach Claude just now — this is the counted-facts summary.",
-  demo: "Demo data — this is the counted-facts summary, written without a model call.",
+  demo: "Not connected to the database — this is the counted-facts summary, written without a model call.",
   unauthorized: "The access key was rejected — this is the counted-facts summary.",
 };
 
