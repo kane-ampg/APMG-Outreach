@@ -91,6 +91,8 @@ export function ServiceInquiryModal({
   const doneRef = useRef<HTMLButtonElement>(null);
   /** Inline error region — focused when a failed send disables the submit. */
   const errorRef = useRef<HTMLDivElement>(null);
+  /** Consent checkbox — focused when it is the only thing blocking a send. */
+  const consentRef = useRef<HTMLInputElement>(null);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -117,6 +119,24 @@ export function ServiceInquiryModal({
     setStatus(next);
   }
 
+  // NO `inert` on the background here, deliberately — see the note below.
+  //
+  // useFocusTrap's docblock suggests pairing it with `inert`, and an attempt at
+  // that was reverted. The reason is worth recording so it isn't re-attempted:
+  // marking the background inert BLURS whatever element currently has focus
+  // (the trigger), because an inert subtree cannot hold focus. Two independent
+  // hooks cannot order around that. Inert-first blurs the trigger before the
+  // trap records `document.activeElement`, so the trap captures <body> and the
+  // close never restores focus. Trap-first records the right trigger but then
+  // restores focus to it while it is still inert, which the browser swallows.
+  // Either way focus restoration — which works correctly today — breaks.
+  //
+  // What actually holds the line: the backdrop below blocks pointer access to
+  // the page, `aria-modal="true"` fences an assistive-tech virtual cursor out,
+  // and the Tab trap keeps the keyboard ring inside (verified contained over 45
+  // presses in both directions). Background scroll bleed is the one residual,
+  // and it is a papercut, not a criterion. A correct inert pairing needs focus
+  // capture and inert applied together in ONE hook, not bolted on beside it.
   useFocusTrap(!!service, ref);
 
   useEffect(() => {
@@ -215,9 +235,33 @@ export function ServiceInquiryModal({
   const consentReady = !!legal && !legal.placeholder;
   const consentSatisfied = !standalone || (consentReady && consentChecked);
   const valid = emailValid && messageLength >= MIN_MESSAGE && consentSatisfied;
+  /** SC 3.3.1: the email and message gates each explain themselves inline, but
+   *  an unticked consent box just left Send dead with no stated reason. This
+   *  fires only once NOTHING ELSE is missing, so the hint never competes with
+   *  the email/message hints for the visitor's attention — an unticked box is
+   *  genuinely the one thing standing between them and a sent enquiry. Gated on
+   *  `standalone` + `consentReady` because those are the only conditions under
+   *  which ticking is possible at all (the internal host doesn't ask for
+   *  consent, and a missing/placeholder policy shows its own "unavailable" note
+   *  instead — nagging someone to tick a box that isn't rendered would be a
+   *  worse lie than silence). */
+  const consentBlocking =
+    standalone &&
+    consentReady &&
+    !consentChecked &&
+    emailValid &&
+    messageLength >= MIN_MESSAGE;
 
   async function submit() {
-    if (!service || !valid || status === "sending") return;
+    if (!service || status === "sending") return;
+    // Send is deliberately left enabled while invalid (see the Button below), so
+    // a press can land here with something outstanding. Take the visitor TO the
+    // outstanding thing rather than doing nothing: an unticked consent box is the
+    // only blocker that isn't already explained inline next to its own field.
+    if (!valid) {
+      if (consentBlocking) consentRef.current?.focus();
+      return;
+    }
     setStatusBoth("sending");
     try {
       const res = await fetch("/api/portal/inquiries", {
@@ -440,6 +484,14 @@ export function ServiceInquiryModal({
                       >
                         Name
                       </label>
+                      {/* SC 1.4.3: every placeholder in this form renders at full
+                          `text-muted-foreground` (6.05:1). The `/70` tint they all
+                          carried measured 3.13:1, under the 4.5:1 floor — and on the
+                          message field the placeholder is the ONLY guidance on what to
+                          write, so it is real content, not decoration. The unsubscribe
+                          form already renders placeholders un-tinted; this removes the
+                          inconsistency rather than inventing a value. `border-input` is
+                          deliberately untouched — its token carries the SC 1.4.11 fix. */}
                       <input
                         id="enquiry-name"
                         ref={nameRef}
@@ -448,7 +500,7 @@ export function ServiceInquiryModal({
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         placeholder="Your name"
-                        className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                        className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                       />
                     </div>
 
@@ -470,7 +522,7 @@ export function ServiceInquiryModal({
                         aria-invalid={showEmailError || undefined}
                         aria-describedby={showEmailError ? "enquiry-email-error" : undefined}
                         placeholder="you@company.com.au"
-                        className={`h-9 w-full rounded-lg border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
+                        className={`h-9 w-full rounded-lg border bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background ${
                           showEmailError ? "border-destructive" : "border-input"
                         }`}
                       />
@@ -499,7 +551,7 @@ export function ServiceInquiryModal({
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
                         placeholder="Optional — if you'd prefer a call"
-                        className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                        className="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                       />
                     </div>
 
@@ -518,7 +570,7 @@ export function ServiceInquiryModal({
                         rows={4}
                         aria-describedby="enquiry-message-hint"
                         placeholder="A little about the job — the site or property, what needs doing, and when you'd like it done…"
-                        className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                        className="w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
                       />
                       {/* One wired hint slot: while the message is under the
                           minimum it says exactly why Send is still disabled
@@ -536,43 +588,86 @@ export function ServiceInquiryModal({
 
                     {/* Consent gate — customer host only. Mandatory active
                         opt-in to the current Terms & Privacy Policy before any
-                        PII is collected. The links expand the exact published
-                        text inline so consent is informed; the version is
-                        pinned onto the submission and re-checked server-side. */}
+                        PII is collected. The disclosure buttons BENEATH the
+                        checkbox (they used to sit inside its label — see below)
+                        expand the exact published text inline so consent is
+                        informed; the version is pinned onto the submission and
+                        re-checked server-side. */}
                     {standalone && (
                       <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
                         {consentReady ? (
                           <>
-                            <label className="flex cursor-pointer items-start gap-2.5">
+                            {/* SC 4.1.2 + SC 1.3.1: the two doc-disclosure buttons used
+                                to sit INSIDE this <label>. HTML forbids interactive
+                                content in a label, and it folded "Terms & Conditions"
+                                and "Privacy Policy" into the checkbox's accessible
+                                name, so the box announced as the whole paragraph
+                                including two button labels. The label now wraps ONLY
+                                the checkbox and the consent sentence; the disclosures
+                                moved to the sibling row below. The agreement's wording
+                                is byte-for-byte what it was — the stored
+                                consent_version is pinned to exactly these words, so
+                                only the buttons' POSITION changed, never the text.
+                                Explicit id + htmlFor rather than implicit wrapping so
+                                the association is unambiguous now the buttons are gone. */}
+                            <label
+                              htmlFor="enquiry-consent"
+                              className="flex cursor-pointer items-start gap-2.5"
+                            >
                               <input
+                                id="enquiry-consent"
+                                ref={consentRef}
                                 type="checkbox"
                                 checked={consentChecked}
                                 onChange={(e) => setConsentChecked(e.target.checked)}
+                                // SC 1.3.1: this box gates the submit, so it is a
+                                // required control and has to say so programmatically.
+                                // aria-required rather than native `required` because
+                                // the form is noValidate — a browser bubble would fight
+                                // the styled inline hints.
+                                aria-required="true"
                                 className="mt-0.5 h-4 w-4 shrink-0 rounded border-input text-primary focus-visible:ring-2 focus-visible:ring-ring"
                               />
                               <span className="text-[12px] leading-relaxed text-foreground">
-                                I agree to {COMPANY.tradingName}&rsquo;{" "}
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenDoc(openDoc === "terms" ? null : "terms")}
-                                  className="font-medium text-primary underline underline-offset-2"
-                                >
-                                  Terms &amp; Conditions
-                                </button>{" "}
-                                and{" "}
-                                <button
-                                  type="button"
-                                  onClick={() => setOpenDoc(openDoc === "privacy" ? null : "privacy")}
-                                  className="font-medium text-primary underline underline-offset-2"
-                                >
-                                  Privacy Policy
-                                </button>
-                                , and to APMG contacting me about my enquiry. Please don&rsquo;t
-                                include sensitive personal information in your message.
+                                I agree to {COMPANY.tradingName}&rsquo; Terms &amp; Conditions and
+                                Privacy Policy, and to APMG contacting me about my enquiry. Please
+                                don&rsquo;t include sensitive personal information in your message.
                               </span>
                             </label>
+                            {/* The disclosures, evicted from the label above. Both drive
+                                the ONE panel below, so both point aria-controls at its
+                                id and expose aria-expanded — without it a screen-reader
+                                user got no signal that activating the button had opened
+                                anything. Indented to the consent sentence's text edge
+                                (16px box + 10px gap). aria-controls naming a panel that
+                                is only mounted while expanded is the standard disclosure
+                                pattern: aria-expanded="false" states why it's absent. */}
+                            <p className="pl-[26px] text-[11px] leading-relaxed text-muted-foreground">
+                              Read the{" "}
+                              <button
+                                type="button"
+                                onClick={() => setOpenDoc(openDoc === "terms" ? null : "terms")}
+                                aria-expanded={openDoc === "terms"}
+                                aria-controls="enquiry-legal-doc"
+                                className="font-medium text-primary underline underline-offset-2"
+                              >
+                                Terms &amp; Conditions
+                              </button>{" "}
+                              or the{" "}
+                              <button
+                                type="button"
+                                onClick={() => setOpenDoc(openDoc === "privacy" ? null : "privacy")}
+                                aria-expanded={openDoc === "privacy"}
+                                aria-controls="enquiry-legal-doc"
+                                className="font-medium text-primary underline underline-offset-2"
+                              >
+                                Privacy Policy
+                              </button>
+                              .
+                            </p>
                             {openDoc && legal && (
                               <div
+                                id="enquiry-legal-doc"
                                 className="max-h-72 overflow-y-auto rounded-md border border-border bg-background p-3.5 text-[12px] leading-relaxed text-muted-foreground [&_a]:text-primary [&_a]:underline [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-[13px] [&_h2]:font-semibold [&_h2]:text-foreground [&_h2:first-child]:mt-0 [&_p]:mb-2.5 [&_strong]:text-foreground"
                                 // Operator-authored, lawyer-reviewed policy text
                                 // from the Legal Documents tab (trusted source).
@@ -648,8 +743,28 @@ export function ServiceInquiryModal({
                     )}
                   </div>
 
-                  {/* footer */}
-                  <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
+                  {/* footer. flex-wrap + the hint's w-full puts the consent hint on
+                      its own line ABOVE the buttons without squeezing them, and it
+                      lives in the footer (not the scrolling body) so the reason Send
+                      is dead is on screen whenever Send itself is. */}
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
+                    {/* SC 3.3.1 + SC 4.1.3: names the outstanding action instead of
+                        leaving a silently-dead button, and announces itself when it
+                        appears. The role="status" wrapper is mounted UNCONDITIONALLY
+                        so the live region already exists when the text arrives —
+                        putting the role on the conditional <p> would announce nothing.
+                        The hint appears purely in response to typing, with no change
+                        of context, which is the textbook definition of a status
+                        message rather than an alert. --primary is the AA-safe
+                        short-red-text state. */}
+                    <div role="status" className="w-full empty:hidden">
+                      {consentBlocking && (
+                        <p id="enquiry-consent-hint" className="text-[11px] text-primary">
+                          Please tick the box above to agree to the Terms and Privacy Policy
+                          before sending.
+                        </p>
+                      )}
+                    </div>
                     <Button
                       variant="outline"
                       size="sm"
@@ -662,7 +777,19 @@ export function ServiceInquiryModal({
                     <Button
                       type="submit"
                       size="sm"
-                      disabled={!valid || status === "sending"}
+                      /* NOT disabled on `!valid`, deliberately. A disabled button
+                         gets `disabled:pointer-events-none` from Button's base and
+                         drops out of the tab order — so the aria-describedby below
+                         could never be heard, because the only state that sets it
+                         (consentBlocking) is also a state where `valid` is false.
+                         The description was unreachable by the exact users it was
+                         added for. `submit()` already returns early unless valid, so
+                         leaving the control enabled is safe, and it matches the same
+                         call made in PortalUnsubscribe rather than contradicting it.
+                         Still disabled mid-flight, where a second press would
+                         genuinely double-send. */
+                      disabled={status === "sending"}
+                      aria-describedby={consentBlocking ? "enquiry-consent-hint" : undefined}
                       className="gap-1.5 bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
                     >
                       {status === "sending" ? (

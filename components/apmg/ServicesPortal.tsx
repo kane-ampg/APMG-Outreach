@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import Image, { type StaticImageData } from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
@@ -91,12 +91,16 @@ type PortalTab = (typeof PORTAL_TABS)[number]["key"];
 /** Hero title + subtitle per tab — swapped (cross-faded) with the background
  *  image so the whole hero reflects the active section, not just the photo.
  *  Copy rule (Company-Brief): checkable facts, not self-assertions — "trusted"
- *  is for the visitor to conclude, "family-run since 2015" is for us to say. */
+ *  is for the visitor to conclude, "est. 2015" is for us to say.
+ *
+ *  The subtitle deliberately does NOT repeat the full company name: the proof
+ *  band directly below already leads with it, and saying it twice inside one
+ *  eyeful reads as letterhead rather than substance. */
 const HERO_COPY: Record<PortalTab, { title: string; subtitle: string }> = {
   services: {
     title: "Our Services",
     subtitle:
-      "Melbourne property maintenance across eight trades — one team, one point of contact. Family-run since 2015.",
+      "Melbourne property maintenance across eight trades — one team, one point of contact. Operating since 2015.",
   },
   reviews: {
     title: "Google Reviews",
@@ -106,7 +110,7 @@ const HERO_COPY: Record<PortalTab, { title: string; subtitle: string }> = {
   team: {
     title: "Our Team",
     subtitle:
-      "The people who’ll actually look after your property — the same faces you’ll deal with from the first call to the job done.",
+      "The people who’ll actually look after your property — the same team from the first call to the job done.",
   },
 };
 
@@ -121,7 +125,7 @@ const HERO_COPY: Record<PortalTab, { title: string; subtitle: string }> = {
  * never before (Company-Brief: no unsupported claims).
  */
 const PROOF_POINTS = [
-  "Family-run since 2015",
+  "Australian Property Maintenance Group · Est. 2015",
   "Licensed, multi-trade professionals",
   "Melbourne & Victoria-wide",
   "Reactive & preventative maintenance",
@@ -341,6 +345,12 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
    *  internal (dashboard) opens get a non-contract name the summary ignores. */
   const openEvent = standalone ? "portal_service_open" : "services_card_open";
 
+  /** One entry per pill, in PORTAL_TABS order, so the keyboard handler can move
+   *  DOM focus between them. A ref array rather than a querySelector: the pills
+   *  are ours to hold onto, and reaching into the document from a component
+   *  would break the moment this portal is mounted twice on one page. */
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
   function selectTab(next: PortalTab) {
     if (next === tab) return;
     // pill order defines direction so the panel slides the way the eye moved
@@ -349,6 +359,39 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
     setDir(to >= from ? 1 : -1);
     setTab(next);
     track("portal_tab", { tab: next });
+  }
+
+  /**
+   * SC 4.1.2: the pill row has ALWAYS announced itself as role="tablist" with
+   * role="tab" children, but nothing implemented the keyboard contract that
+   * name promises — arrow keys did literally nothing, so a screen-reader user
+   * told "tab, 1 of 3" had no way to reach tabs 2 and 3 except by guessing that
+   * Tab (not Arrow) still moved between them. Arrows now move and WRAP,
+   * Home/End jump to the ends.
+   *
+   * AUTOMATIC activation (moving selects, rather than requiring Enter/Space) is
+   * the right variant here: switching panels is cheap, purely client-side, and
+   * its only side effect is the NON-contract `portal_tab` telemetry event, so
+   * arrowing across the row cannot corrupt the Enquiries funnel. Selection is
+   * routed through selectTab so the direction-aware slide and that event stay
+   * in one place; focus is moved separately because selection alone would leave
+   * the user's focus on a pill that is now tabIndex={-1}.
+   */
+  function onTabKeyDown(e: KeyboardEvent<HTMLDivElement>) {
+    const count = PORTAL_TABS.length;
+    const current = PORTAL_TABS.findIndex((t) => t.key === tab);
+    let next: number;
+    if (e.key === "ArrowRight") next = (current + 1) % count;
+    else if (e.key === "ArrowLeft") next = (current - 1 + count) % count;
+    else if (e.key === "Home") next = 0;
+    else if (e.key === "End") next = count - 1;
+    else return;
+    // preventDefault only AFTER we know the key is one of ours, so every other
+    // key keeps its default behaviour while a pill holds focus — Tab still
+    // leaves the widget, Enter/Space still activate, PageUp/Down still scroll.
+    e.preventDefault();
+    selectTab(PORTAL_TABS[next].key);
+    tabRefs.current[next]?.focus();
   }
 
   // One `portal_view` per mount of the CUSTOMER host — the funnel step between
@@ -390,7 +433,21 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
     <div className="mx-auto flex min-h-full w-full max-w-[105rem] flex-col px-4 py-5 sm:px-6">
       {/* ── Hero over the APMG background image ───────────────────────────── */}
       <Reveal y={6}>
-        <section className="relative h-[300px] overflow-hidden rounded-2xl bg-black ring-1 ring-foreground/10 sm:h-[360px]">
+        {/* SC 1.4.12 (Text Spacing): the height used to be FIXED (h-[300px]
+            sm:h-[360px]) with the copy stack absolutely positioned inside it.
+            With the criterion's spacing overrides applied at a 320px viewport
+            the copy outgrew the box — the h1 collided with the social icons and
+            the "APMG Services" chip was pushed past the top edge, where
+            overflow-hidden simply deleted it. So the height is now a MINIMUM and
+            the section is a flex column: the image layers and the three scrims
+            stay absolute (purely decorative, they should always fill the frame),
+            while BOTH the top bar and the copy stack are IN-FLOW children. Being
+            in flow is what lets them push the section taller when text grows —
+            and what makes them unable to overlap each other, which an absolute
+            top bar could not guarantee. mt-auto keeps the copy stack
+            bottom-weighted so the hero is pixel-identical at default text
+            settings. */}
+        <section className="relative flex min-h-[300px] flex-col overflow-hidden rounded-2xl bg-black ring-1 ring-foreground/10 sm:min-h-[360px]">
           {/* Two hero images stacked, cross-fading on tab change: the depot/fleet
               shot for Services, the team line-up for Our Team. object-COVER fills
               the hero frame edge-to-edge (black letterbox bars made the page open
@@ -424,10 +481,17 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
               />
             </motion.div>
           ))}
-          {/* bottom-weighted scrim: dark lower band for the overlay, clear photo up top */}
+          {/* Bottom-weighted scrim: dark lower band for the overlay, clear photo
+              up top. SC 1.4.3: the mid-stop was raised from black/25 to
+              black/70 (and the bottom from /80 to /95) because 25% could not
+              carry white type over this photo — its lower half is a fleet of
+              white utes, and measured against the real rendered pixels the h1
+              reached only 2.39:1 at p99 (needs 3:1 as large text) and the
+              subtitle 3.02:1 (needs 4.5:1). Keep this a SINGLE gradient so the
+              numbers stay easy to re-tune against fresh pixel measurements. */}
           <div
             aria-hidden
-            className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/25 to-transparent"
+            className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/70 to-transparent"
           />
           <div
             aria-hidden
@@ -440,15 +504,26 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
             className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/55 to-transparent"
           />
 
-          {/* Top bar: logo anchored top-left so the brand is the first thing
-              the page shows (it used to sit in the bottom stack, i.e. below
-              the fold of the hero photo), socials top-right — checkable
-              proof-of-life for a visitor deciding whether the business is
-              real. z-10 lifts it above the inset-0 copy stack below (later in
-              DOM order, so it would otherwise swallow clicks on the icons);
+          {/* Top bar: logo top-left so the brand is the first thing the page
+              shows (it used to sit in the bottom stack, i.e. below the fold of
+              the hero photo), socials top-right — checkable proof-of-life for a
+              visitor deciding whether the business is real.
               pointer-events-none/auto keeps everything except the icons
-              click-transparent so the stack's own controls stay reachable. */}
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-5 sm:p-8">
+              click-transparent so the stack's own controls stay reachable.
+
+              IN FLOW, not absolute (SC 1.4.12). While this was `absolute
+              inset-x-0 top-0`, the copy stack below had no knowledge of it: with
+              the criterion's text-spacing overrides at 320px the growing stack
+              slid straight up underneath the logo — a 25px overlap, from a 4px
+              one that was already there at default settings. Making both the top
+              bar and the copy stack in-flow children of the section's flex column
+              means the two can no longer occupy the same space at any text size:
+              the bar takes its natural height at the top, mt-auto on the stack
+              absorbs the slack, and the section grows if their combined height
+              ever exceeds min-h. At default settings the sum is well under
+              min-h (~80px + ~180px against 300px at 320px; ~128px + ~200px
+              against 360px from sm up), so the hero renders unchanged. */}
+          <div className="pointer-events-none relative z-10 flex items-start justify-between p-5 sm:p-8">
             <Image
               src={brandLogo}
               alt="APMG"
@@ -462,11 +537,18 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
             />
           </div>
 
-          {/* inset-0 + justify-end keeps the stack bottom-weighted but CLAMPED
-              inside the box, so a tall stack can never be clipped by the
-              section's overflow-hidden (was bottom-0, which let it overflow
-              past the top edge). */}
-          <div className="absolute inset-0 flex flex-col justify-end gap-2 p-5 sm:gap-3 sm:p-8">
+          {/* The one IN-FLOW child of the section (SC 1.4.12 — see the section
+              comment). It used to be `absolute inset-0 … justify-end`, which
+              bottom-weighted the copy but also CLAMPED it: an out-of-flow stack
+              cannot drive its parent's height, so growing text either collided
+              with the top bar or was clipped by overflow-hidden. mt-auto in the
+              section's flex column reproduces justify-end's bottom alignment
+              exactly while letting a tall stack push the hero taller instead.
+              `relative` is load-bearing: it keeps the stack in the positioned
+              paint layer so it still renders ABOVE the three absolute scrims
+              (which precede it in DOM order) and BELOW the z-10 top bar —
+              i.e. the identical stacking the absolute version had. */}
+          <div className="relative mt-auto flex flex-col gap-2 p-5 sm:gap-3 sm:p-8">
             <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/20 bg-black/40 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-white backdrop-blur-sm">
               <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_8px_2px_hsl(var(--primary)/0.7)]" />
               APMG Services
@@ -488,13 +570,20 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                   <h1 className="max-w-2xl font-heading text-xl font-bold tracking-tight text-white sm:text-4xl">
                     {HERO_COPY[tab].title}
                   </h1>
-                  <p className="mt-2 max-w-xl text-xs leading-relaxed text-white/85 sm:mt-3 sm:text-base">
+                  {/* SC 1.4.3: was text-white/85. Partial-opacity white over a
+                      photograph is compounding two contrast problems, so the
+                      scrim above carries the legibility and the type is left at
+                      full opacity. */}
+                  <p className="mt-2 max-w-xl text-xs leading-relaxed text-white sm:mt-3 sm:text-base">
                     {HERO_COPY[tab].subtitle}
                   </p>
                   {/* Sector message-match line — only when the visitor arrived
-                      from a sector-targeted outreach link. */}
+                      from a sector-targeted outreach link. SC 1.4.3: was
+                      text-white/70, which computed as low as 1.98:1 against the
+                      brightest pixels behind it (the white utes); full-opacity
+                      white on the strengthened scrim clears 4.5:1. */}
                   {sector && tab === "services" && (
-                    <p className="mt-1.5 max-w-xl text-[11px] leading-relaxed text-white/70 sm:text-sm">
+                    <p className="mt-1.5 max-w-xl text-[11px] leading-relaxed text-white sm:text-sm">
                       {sectorLine(sector)}
                     </p>
                   )}
@@ -520,7 +609,19 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                   pre-filled so the visitor's first message costs zero typing.
                   WhatsApp brand green (#25D366): the one place a non-token hue
                   is allowed, because instant brand recognition IS the point.
-                  Calling stays available via the contact card + footer tel:. */}
+                  Calling stays available via the contact card + footer tel:.
+                  SC 1.4.3: the label was text-white, which is only 1.98:1 on
+                  this green. text-zinc-900 measures 8.93:1 on the SAME green, so
+                  the brand hue survives and the label becomes legible — this is
+                  also what WhatsApp itself does on light surfaces. The glyph is
+                  currentColor, so it darkens with the text, which is correct.
+                  SC 2.4.4 (Link Purpose): the accessible name used to be the
+                  bare phone number — the icon is aria-hidden — so assistive tech
+                  could not tell this opens a chat rather than dialling, and
+                  nothing warned that it leaves the page. The sr-only span
+                  APPENDS that context to the visible number rather than
+                  replacing it, which keeps the visible text inside the
+                  accessible name (SC 2.5.3, Label in Name). */}
               <a
                 href={`${COMPANY.whatsappHref}?text=${encodeURIComponent(
                   "Hi APMG Services, I'd like a quote for some property maintenance work.",
@@ -528,10 +629,13 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                 target="_blank"
                 rel="noreferrer"
                 data-track="portal_whatsapp_click"
-                className="inline-flex w-fit items-center gap-1.5 rounded-md bg-[#25D366] px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-[transform,filter] hover:brightness-105 active:translate-y-px"
+                className="inline-flex w-fit items-center gap-1.5 rounded-md bg-[#25D366] px-3.5 py-2 text-xs font-semibold text-zinc-900 shadow-sm transition-[transform,filter] hover:brightness-105 active:translate-y-px"
               >
                 <WhatsAppIcon className="h-3.5 w-3.5" />
                 {COMPANY.phone}
+                {/* Leading space so the name reads "0433 … Message us on
+                    WhatsApp", not one run-together token. */}
+                <span className="sr-only">{" Message us on WhatsApp (opens in a new tab)"}</span>
               </a>
             </div>
           </div>
@@ -556,18 +660,24 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
 
       {/* ── In-page tabs (§11.1 sliding-pill) ────────────────────────────── */}
       <Reveal delay={0.06} className="mb-5 mt-6">
+        {/* The keydown sits on the tablist, not each pill, so it fires whichever
+            pill holds focus (SC 4.1.2 — see onTabKeyDown). */}
         <div
           role="tablist"
           aria-label="Portal sections"
+          onKeyDown={onTabKeyDown}
           className="inline-flex gap-1 rounded-lg bg-card p-1 ring-1 ring-foreground/10"
         >
-          {PORTAL_TABS.map((t) => (
+          {PORTAL_TABS.map((t, i) => (
             <TabPill
               key={t.key}
               tab={t}
               active={tab === t.key}
               reduce={!!reduce}
               onSelect={() => selectTab(t.key)}
+              buttonRef={(el) => {
+                tabRefs.current[i] = el;
+              }}
             />
           ))}
         </div>
@@ -592,6 +702,18 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
             exit="exit"
             transition={{ duration: reduce ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
             role="tabpanel"
+            // SC 4.1.2: the panel announced role="tabpanel" but was otherwise
+            // anonymous — no id for the pills' aria-controls to point at, and no
+            // aria-labelledby, so it was read as an unnamed region with no
+            // stated relationship to the tab that opened it. tabIndex={0} is
+            // required BY the roving tabindex on the pills: the pill row is now
+            // a single tab stop, so without a focusable panel the next Tab press
+            // would leave the tab widget entirely. AnimatePresence mode="wait"
+            // keeps exactly one panel mounted, so these ids are never duplicated
+            // (the outgoing panel keeps its own previous id while it animates).
+            id={`portal-panel-${tab}`}
+            aria-labelledby={`portal-tab-${tab}`}
+            tabIndex={0}
           >
             {tab === "services" ? (
               <ServicesPanel
@@ -639,18 +761,38 @@ function TabPill({
   active,
   reduce,
   onSelect,
+  buttonRef,
 }: {
   tab: (typeof PORTAL_TABS)[number];
   active: boolean;
   reduce: boolean;
   onSelect: () => void;
+  /** Registers this pill in the tablist's ref array so arrow keys can move DOM
+   *  focus onto it (SC 4.1.2 — see onTabKeyDown in ServicesPortal). */
+  buttonRef: (el: HTMLButtonElement | null) => void;
 }) {
   const Icon = tab.icon;
   return (
     <button
+      ref={buttonRef}
       type="button"
       role="tab"
+      id={`portal-tab-${tab.key}`}
       aria-selected={active}
+      // Only the SELECTED pill claims aria-controls. AnimatePresence mode="wait"
+      // mounts exactly one panel, so on the two inactive pills this attribute
+      // would name an id that isn't in the document — which axe flags as
+      // aria-valid-attr-value, and which the house rule beside the unsubscribe
+      // control already rejects ("pointing at an absent id is worse than omitting
+      // the attribute"). The APG's alternative is to render all three panels and
+      // hide the inactive ones, but that would mean giving up the directional
+      // slide between them, so the attribute yields instead.
+      aria-controls={active ? `portal-panel-${tab.key}` : undefined}
+      // Roving tabindex (SC 4.1.2): the whole pill row is ONE tab stop, entered
+      // at the selected pill, and the arrow keys move within it. Previously every
+      // pill was its own tab stop — which is what a plain button row does, not
+      // what role="tablist" tells a screen reader to expect.
+      tabIndex={active ? 0 : -1}
       onClick={onSelect}
       className={cn(
         "relative inline-flex items-center gap-1.5 rounded-md px-3.5 py-1.5 text-xs font-semibold transition-colors sm:text-[13px]",
@@ -761,11 +903,18 @@ function ServicesPanel({
               </p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {/* SC 2.5.8: these three sat at 18px tall. They are laid out as a row of
+              chips rather than words inside a sentence, so the criterion's "inline"
+              exception does not cover them — py-1 takes each to 26px. The -my-1
+              cancels the added height for layout, so the card is unchanged while the
+              hit areas grow; margin does not clip a box, so the targets stay 26px.
+              gap-y-2 (8px) keeps stacked rows 34px centre-to-centre, clear of the
+              24px-circle rule. Same fix, same reason, as the customer footer. */}
+          <div className="-my-1 flex flex-wrap items-center gap-x-5 gap-y-2">
             <a
               href={COMPANY.phoneHref}
               data-track="portal_phone_click"
-              className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-foreground transition-colors hover:text-primary"
+              className="inline-flex shrink-0 items-center gap-1.5 py-1 text-xs font-semibold text-foreground transition-colors hover:text-primary"
             >
               <Phone className="h-3.5 w-3.5 text-primary" aria-hidden />
               {COMPANY.phone}
@@ -773,7 +922,7 @@ function ServicesPanel({
             <a
               href={`mailto:${COMPANY.contactEmail}`}
               data-track="portal_email_click"
-              className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
+              className="inline-flex shrink-0 items-center gap-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
             >
               <Mail className="h-3.5 w-3.5" aria-hidden />
               {COMPANY.contactEmail}
@@ -783,7 +932,7 @@ function ServicesPanel({
               target="_blank"
               rel="noreferrer"
               data-track="portal_website_click"
-              className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
+              className="inline-flex shrink-0 items-center gap-1.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
             >
               <Globe className="h-3.5 w-3.5" aria-hidden />
               apmgservices.com.au
@@ -840,21 +989,42 @@ function ServiceCard({
   const Icon = service.icon;
   // A button, not a mailto link: opening the enquiry modal keeps the lead on
   // the page (and in our data) instead of bouncing them to a mail client.
-  // `w-full text-left` compensates for the button's native shrink-to-fit
-  // sizing and centred text so the card renders exactly as the <a> did.
   //
-  // Layout: a real APMG job-site PHOTO banner on top (the trust surface — these
-  // are our actual crew in branded workwear), then the text block below on the
-  // solid card so copy stays fully legible. The category icon sits in a chip
-  // that overlaps the banner's lower-left edge, tying photo to text and keeping
-  // its role as a quick visual key. overflow-hidden clips the photo to the
-  // card's rounded corners.
+  // SC 1.3.1 — "STRETCHED LINK" PATTERN. The whole card used to BE the button,
+  // with the <h3> nested inside it. ARIA gives buttons presentational children,
+  // so those eight service names were stripped out of the document's heading
+  // outline entirely: a screen-reader user listing headings saw "Trades we
+  // handle" and then nothing, and the button's own accessible name was the whole
+  // card read as one run-on string (name + blurb + "Enquire").
+  //
+  // So the roles are now split. The wrapper is a plain motion.div that owns all
+  // the card's presentation (hover-lift, ring, rounded corners, overflow-hidden)
+  // and, crucially, `relative` — it is the positioned ancestor. The service name
+  // is a real <h3> in normal flow, and the ONE interactive element is a <button>
+  // nested inside that h3 wrapping just the name text, so the accessible name is
+  // now exactly "Electrical Services". The button's ::after is stretched over the
+  // wrapper (after:absolute after:inset-0) so the ENTIRE card is still a single
+  // click target, which is what keeps the delegated telemetry listener working:
+  // a click anywhere on the card lands on that pseudo-element, whose event target
+  // is the button, and closest("[data-track]") finds the attributes below.
+  //
+  // Stacking matters here and is easy to break. The overlay must be the topmost
+  // thing in the card or clicks would land on whatever sits above it and never
+  // reach the button. Because the overlay is positioned and the h3 is late in
+  // tree order, it paints above the photo banner and above every in-flow
+  // descendant of the text block. That is why the text block below is NO LONGER
+  // `relative` (it would have become the containing block, clamping the overlay
+  // to the text area) and why the icon chip carries `relative` instead — the chip
+  // needs to stay above the photo it straddles, but still below the overlay.
+  //
+  // Layout is otherwise unchanged: a real APMG job-site PHOTO banner on top (the
+  // trust surface — these are our actual crew in branded workwear), then the text
+  // block below on the solid card so copy stays fully legible. The category icon
+  // sits in a chip that overlaps the banner's lower-left edge, tying photo to text
+  // and keeping its role as a quick visual key. overflow-hidden clips the photo to
+  // the card's rounded corners.
   return (
-    <motion.button
-      type="button"
-      onClick={() => onOpen(service)}
-      data-track={openEvent}
-      data-track-service={service.slug}
+    <motion.div
       whileHover={reduce ? undefined : { y: -1 }}
       transition={{ type: "spring", stiffness: 320, damping: 24 }}
       className="group relative flex h-full w-full flex-col overflow-hidden rounded-xl bg-card text-left ring-1 ring-foreground/10 transition-colors hover:ring-primary/40"
@@ -886,15 +1056,34 @@ function ServiceCard({
         />
       </div>
 
-      {/* Text block on the solid card. -mt-6 pulls the icon chip up so it
-          straddles the banner edge; pt keeps the heading clear of it. */}
-      <div className="relative flex flex-1 flex-col gap-3 p-4">
-        <span className="-mt-11 flex h-11 w-11 items-center justify-center rounded-lg bg-accent text-primary shadow-sm ring-1 ring-primary/15">
+      {/* Text block on the solid card. -mt-11 pulls the icon chip up so it
+          straddles the banner edge; the gap keeps the heading clear of it.
+          NOT `relative` — see the stacking note above. */}
+      <div className="flex flex-1 flex-col gap-3 p-4">
+        {/* `relative` earns its place: it lifts the chip into the positioned
+            paint layer so it renders above the photo banner it straddles (the
+            banner is positioned too, but earlier in tree order). It still sits
+            below the h3's click overlay, which is later in tree order again. */}
+        <span className="relative -mt-11 flex h-11 w-11 items-center justify-center rounded-lg bg-accent text-primary shadow-sm ring-1 ring-primary/15">
           <Icon className="h-5 w-5" aria-hidden />
         </span>
         <div className="flex-1">
           <h3 className="font-heading text-sm font-semibold leading-snug text-foreground">
-            {service.name}
+            {/* The card's only interactive element. text-left because the UA
+                centres button text, and the name can wrap to two lines. The
+                after:* quartet is the stretched hit area covering the whole
+                card — the button needs no positioning of its own, the wrapper
+                is the positioned ancestor. The telemetry attributes live HERE,
+                on the real click target, not on the wrapper. */}
+            <button
+              type="button"
+              onClick={() => onOpen(service)}
+              data-track={openEvent}
+              data-track-service={service.slug}
+              className="text-left after:absolute after:inset-0 after:rounded-xl after:content-['']"
+            >
+              {service.name}
+            </button>
           </h3>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
             {service.blurb}
@@ -905,6 +1094,6 @@ function ServiceCard({
           <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" aria-hidden />
         </span>
       </div>
-    </motion.button>
+    </motion.div>
   );
 }

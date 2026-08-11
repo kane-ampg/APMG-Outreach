@@ -91,14 +91,26 @@ export function SectorPlaybooksPage() {
     }
   }, []);
 
+  // Realtime by short poll, paused while the tab is hidden and topped up when it
+  // becomes visible again — same grammar as TelemetryPage/SalesProvider. Polling
+  // a tab nobody is looking at is pure billed transfer.
   useEffect(() => {
     fetchState();
-    const id = setInterval(() => fetchState({ quiet: true }), POLL_MS);
-    const onFocus = () => fetchState({ quiet: true });
-    window.addEventListener("focus", onFocus);
+    const tick = () => {
+      if (document.visibilityState === "hidden") return;
+      fetchState({ quiet: true });
+    };
+    const id = setInterval(tick, POLL_MS);
+    const onActive = () => fetchState({ quiet: true });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") onActive();
+    };
+    window.addEventListener("focus", onActive);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(id);
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", onActive);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [fetchState]);
 

@@ -292,11 +292,16 @@ const SHELL = "flex min-h-full flex-col px-4 py-5 sm:px-6";
  * requests the admin-wide leads table.
  */
 export function OverviewPage({ user }: { user?: SessionUser }) {
+  // The PRIMARY role picks the overview, so somebody who is both Admin and
+  // Sales gets the admin pipeline rather than the rep's queue view — the more
+  // capable surface, matching where landingTab sends them.
   const { role } = useRbac();
   return role === "sales" ? (
     <SalesOverview user={user} />
   ) : (
-    <PipelineOverview role={role} user={user} />
+    // `client` is the fail-closed stand-in for the unreachable no-roles case:
+    // this page is only mounted for someone who can view an overview at all.
+    <PipelineOverview role={role ?? "client"} user={user} />
   );
 }
 

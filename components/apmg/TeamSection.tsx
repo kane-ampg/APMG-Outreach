@@ -121,8 +121,7 @@ export function TeamSection() {
           </h2>
         </div>
         <p className="mt-3 max-w-xl text-xs leading-relaxed text-muted-foreground">
-          A Melbourne-based, family-run team — the same faces you&rsquo;ll deal
-          with from the first call to the job done.
+          Our Melbourne-based teams, across every trade we deliver.
         </p>
       </Reveal>
 
@@ -130,11 +129,27 @@ export function TeamSection() {
         {TEAM.map((group, gi) => (
           <div key={group.label}>
             {/* Simple section label + hairline — structure without the
-                instrument-panel voice. */}
+                instrument-panel voice. The label is a real <h3>, not a styled
+                <span>: seniority tiers are the organising idea of this roster,
+                and as a span that grouping existed only visually (SC 1.3.1) —
+                nothing filed "Jack Wilson" under "Account Managers" for anyone
+                reading the document outline or jumping heading to heading. It
+                nests under the section's <h2> above, which is why the member
+                name inside each card is an <h4>: h2 → h3 → h4, no skipped
+                level. The visual result is byte-identical. Tailwind preflight
+                already zeroes heading font-size/weight/margin so the explicit
+                text-[10px]/font-semibold classes still decide those, and the
+                `font-mono` utility beats the h1–h6 font-family rule in
+                globals.css because the utilities layer wins over base — the
+                mono stamp survives. Layout is untouched as well: a flex item
+                is blockified whichever display it started from, so h3 and span
+                size identically here and the decorative hairline still shares
+                the row (and stays aria-hidden — it carries no meaning the
+                heading does not already carry). */}
             <Reveal delay={0.06 + gi * 0.03} className="mb-4 flex items-center gap-3">
-              <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              <h3 className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
                 {group.label}
-              </span>
+              </h3>
               <span aria-hidden className="h-px flex-1 bg-border" />
             </Reveal>
 
@@ -169,11 +184,18 @@ function MemberCard({ member, reduce }: { member: Member; reduce: boolean }) {
       className="group relative flex h-full flex-col overflow-hidden rounded-xl bg-card ring-1 ring-border transition-colors hover:ring-primary/40"
     >
       <div className="flex flex-1 flex-col items-center px-4 pb-4 pt-6 text-center">
-        {/* Portrait — large and warm; the whole point of the page. */}
+        {/* Portrait — large and warm; the whole point of the page. The alt is
+            deliberately empty (SC 1.1.1): it used to read
+            `${member.name}, ${member.role}`, which is word-for-word the h4 and
+            p rendered immediately below, so a screen reader announced every
+            person twice. With the name and role as adjacent text the portrait
+            adds no information of its own — it is decorative here, and an
+            empty alt drops it from the accessibility tree instead of
+            duplicating the caption. */}
         <div className="relative h-24 w-24 shrink-0 overflow-hidden rounded-full ring-1 ring-border sm:h-28 sm:w-28">
           <Image
             src={member.photo}
-            alt={`${member.name}, ${member.role}`}
+            alt=""
             fill
             placeholder="blur"
             sizes="(min-width: 640px) 112px, 96px"
@@ -181,9 +203,11 @@ function MemberCard({ member, reduce }: { member: Member; reduce: boolean }) {
           />
         </div>
 
-        <h3 className="mt-4 font-heading text-sm font-semibold leading-snug text-foreground">
+        {/* h4, not h3: the tier label above each grid is now the h3, so the
+            name sits one level deeper to keep the outline strictly nested. */}
+        <h4 className="mt-4 font-heading text-sm font-semibold leading-snug text-foreground">
           {member.name}
-        </h3>
+        </h4>
         <p className="mt-1 text-[11px] leading-snug text-muted-foreground">
           {member.role}
         </p>
@@ -193,7 +217,13 @@ function MemberCard({ member, reduce }: { member: Member; reduce: boolean }) {
           identity, the strongest signal on the card. The hairline keeps card
           bottoms aligned across a row regardless of role length. */}
       {member.linkedin ? (
-        <div className="mt-auto flex items-center justify-center border-t border-border/70 px-3.5 py-2.5">
+        /* SC 2.5.8: the link measured 64.4x16.5, and it is a standalone control in
+           its own footer row rather than a word inside a sentence, so the
+           criterion's "inline" exception does not cover it. py-1.5 on the anchor
+           takes the target to 28.5px; the row's own padding drops from py-2.5 to
+           py-1 by exactly the amount the anchor grew, so the footer stays 36.5px
+           and every card keeps its current height (4 + 28.5 + 4 = 10 + 16.5 + 10). */
+        <div className="mt-auto flex items-center justify-center border-t border-border/70 px-3.5 py-1">
           <a
             href={member.linkedin}
             target="_blank"
@@ -201,7 +231,7 @@ function MemberCard({ member, reduce }: { member: Member; reduce: boolean }) {
             data-track="portal_team_linkedin"
             data-track-person={member.name}
             aria-label={`${member.name} on LinkedIn`}
-            className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-primary"
+            className="inline-flex items-center gap-1.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-primary"
           >
             <Linkedin className="h-3.5 w-3.5" aria-hidden />
             LinkedIn

@@ -36,15 +36,16 @@ import { TelemetryPage } from "./TelemetryPage";
  */
 export function DashboardShell({ user }: { user?: SessionUser }) {
   const reduce = useReducedMotion();
-  const { can, role } = useRbac();
-  // Open on the signed-in role's home surface: admins get the console
-  // Overview, sales reps their queue (lib/nav ROLE_LANDING_TAB).
-  const [activeTab, setActiveTab] = useState<TabId>(() => landingTab(role, can));
+  const { can, roles } = useRbac();
+  // Open on the home surface for the roles they hold: admins get the console
+  // Overview, sales reps their queue (lib/nav ROLE_LANDING_TAB). Somebody who
+  // is both lands on the Overview — landingTab resolves by capability.
+  const [activeTab, setActiveTab] = useState<TabId>(() => landingTab(roles, can));
   const [navOpen, setNavOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const fallbackTab = useMemo(() => landingTab(role, can), [role, can]);
+  const fallbackTab = useMemo(() => landingTab(roles, can), [roles, can]);
 
-  // Keep the active tab within what the current role is permitted to open.
+  // Keep the active tab within what their roles permit opening.
   useEffect(() => {
     if (!can(TAB_PERMISSION[activeTab])) setActiveTab(fallbackTab);
   }, [can, activeTab, fallbackTab]);

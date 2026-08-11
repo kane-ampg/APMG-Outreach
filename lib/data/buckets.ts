@@ -41,23 +41,30 @@ function startOfWeek(d: Date): Date {
 const monthDay = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 const monthOnly = (d: Date) => d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
+/** A date carrying a count, so a bucket can be built either from individual
+ *  events (count 1 each) or from counts already grouped by day upstream. */
+interface Weighted {
+  date: Date;
+  count: number;
+}
+
 /**
- * Groups dates by a period key, keeps the most recent `cap` buckets
+ * Groups weighted dates by a period key, keeps the most recent `cap` buckets
  * oldest → newest, and marks the newest as `current`.
  */
-function bucketBy(
-  dates: Date[],
+function bucketWeighted(
+  entries: Weighted[],
   startOf: (d: Date) => Date,
   label: (d: Date) => string,
   cap: number,
 ): Bar[] {
-  const map = new Map<number, { date: Date; count: number }>();
-  for (const d of dates) {
-    const start = startOf(d);
+  const map = new Map<number, Weighted>();
+  for (const e of entries) {
+    const start = startOf(e.date);
     const key = start.getTime();
     const cur = map.get(key);
-    if (cur) cur.count += 1;
-    else map.set(key, { date: start, count: 1 });
+    if (cur) cur.count += e.count;
+    else map.set(key, { date: start, count: e.count });
   }
   const tail = [...map.values()].sort((a, b) => a.date.getTime() - b.date.getTime()).slice(-cap);
   return tail.map((e, i) => ({
@@ -78,12 +85,59 @@ export function parseStamps(stamps: Iterable<string | null | undefined>): Date[]
   return out;
 }
 
+const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(), 1);
+
 /** All three grains from one set of event dates. */
 export function volumeSeries(dates: Date[]): VolumeSeries {
+  const entries = dates.map((date) => ({ date, count: 1 }));
   return {
-    byDay: bucketBy(dates, startOfDay, monthDay, 14),
-    byWeek: bucketBy(dates, startOfWeek, monthDay, 12),
-    byMonth: bucketBy(dates, (d) => new Date(d.getFullYear(), d.getMonth(), 1), monthOnly, 12),
+    byDay: bucketWeighted(entries, startOfDay, monthDay, 14),
+    byWeek: bucketWeighted(entries, startOfWeek, monthDay, 12),
+    byMonth: bucketWeighted(entries, startOfMonth, monthOnly, 12),
+  };
+}
+
+/** One day's total, as `pipeline_lead_stats` returns it: a `YYYY-MM-DD` calendar
+ *  day already cut at local midnight in the VIEWER's zone. */
+export interface DayCount {
+  d: string;
+  n: number;
+}
+
+/**
+ * `YYYY-MM-DD` → that calendar day at LOCAL midnight.
+ *
+ * Built from parts on purpose. `new Date("2026-07-15")` parses as UTC midnight,
+ * which in any negative-offset zone lands on the 14th — so the day the server
+ * cut in the viewer's zone would be relabelled a day earlier, and week/month
+ * rollups would inherit the slip. Returns null for anything unparseable.
+ */
+function localDay(iso: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * All three grains from day-grain counts computed in the database.
+ *
+ * The equivalent of volumeSeries() for data that never reaches the browser as
+ * individual rows — the aggregate KPI path (/api/pipeline/stats). Because the
+ * days were cut in the viewer's own zone, rolling them up into Monday-anchored
+ * weeks and calendar months here is the same operation on the same boundaries
+ * that volumeSeries would have performed over the raw rows.
+ */
+export function volumeSeriesFromDayCounts(days: Iterable<DayCount>): VolumeSeries {
+  const entries: Weighted[] = [];
+  for (const { d, n } of days) {
+    const date = localDay(d);
+    if (date && Number.isFinite(n) && n > 0) entries.push({ date, count: n });
+  }
+  return {
+    byDay: bucketWeighted(entries, startOfDay, monthDay, 14),
+    byWeek: bucketWeighted(entries, startOfWeek, monthDay, 12),
+    byMonth: bucketWeighted(entries, startOfMonth, monthOnly, 12),
   };
 }
 

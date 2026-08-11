@@ -1,8 +1,5 @@
 {
   "permissions": {
-    "additionalDirectories": [
-      "\\tmp"
-    ],
     "allow": [
       "Bash(awk '/^```tsx$/{f++; if\\(f==1\\){next}} /^```$/{if\\(f==1\\){exit}} f==1' .superpowers/sdd/2026-08-04-google-sso-phase-2/task-4-brief.md)",
       "Bash(awk 'NR==14,NR==48' .superpowers/sdd/2026-08-04-google-sso-phase-2/task-6-brief.md)",
@@ -257,7 +254,33 @@
       "PowerShell(Stop-Process -Id 45176 -Force -ErrorAction SilentlyContinue)",
       "PowerShell(taskkill /PID 28640 /F)",
       "PowerShell(taskkill /PID 36060 /F)",
-      "PowerShell(taskkill /PID 8264 /F)"
+      "PowerShell(taskkill /PID 8264 /F)",
+      "Bash(python \"C:/Users/Kane/AppData/Local/Temp/claude/c--Users-Kane-Desktop-APMG-Outreach/1a626cc4-b0d3-47d1-a681-d5bb9a8a0d71/scratchpad/adminusers.py\")",
+      "Bash(curl -s -o /dev/null http://localhost:3007/portal)",
+      "Bash(curl -s -o /dev/null -w \"code=%{http_code}\\\\n\" http://localhost:3007/portal --max-time 60)",
+      "Bash(curl -s -o /dev/null -w \"3007=%{http_code}\\\\n\" http://localhost:3007/portal --max-time 8)",
+      "Bash(curl -s http://localhost:3002/portal --max-time 90 -o /tmp/portal.html -w \"code=%{http_code}\\\\n\")",
+      "Bash(taskkill //PID 20940 //F)",
+      "Bash(sed -i 's/3007/3002/' shot.mjs)",
+      "Bash(node shot.mjs proofband)",
+      "Bash(node shot.cjs proofband)",
+      "Bash(node contrast.js)",
+      "Bash(node rows.cjs)",
+      "Bash(curl -sL -o axe.min.js https://cdn.jsdelivr.net/npm/axe-core@4.10.2/axe.min.js)",
+      "Bash(node axe-scan.js)",
+      "Bash(node verify2.js)",
+      "Bash(node verify3.js)",
+      "Bash(node verify4.js)",
+      "Bash(node shot.js)",
+      "Bash(sed 's/className.*//')",
+      "Bash(node \"C:/Users/Kane/AppData/Local/Temp/claude/c--Users-Kane-Desktop-APMG-Outreach/144eadd5-c5f3-4217-978e-c57108e49ed7/scratchpad/contrast.js\")",
+      "PowerShell(npx tsc --noEmit -p C:\\\\Users\\\\Kane\\\\Desktop\\\\APMG-Outreach\\\\tsconfig.json)",
+      "Bash(node \"C:/Users/Kane/AppData/Local/Temp/claude/c--Users-Kane-Desktop-APMG-Outreach/144eadd5-c5f3-4217-978e-c57108e49ed7/scratchpad/validate.js\")",
+      "PowerShell($out = npx tsc --noEmit; $out | Out-File -Encoding utf8 \"C:\\\\Users\\\\Kane\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-Kane-Desktop-APMG-Outreach\\\\144eadd5-c5f3-4217-978e-c57108e49ed7\\\\scratchpad\\\\tsc.txt\"; \\($out | Measure-Object -Line\\).Lines; $out | Select-Object -First 25)",
+      "Bash(node \"C:/Users/Kane/AppData/Local/Temp/claude/c--Users-Kane-Desktop-APMG-Outreach/144eadd5-c5f3-4217-978e-c57108e49ed7/scratchpad/measure.mjs\")"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }

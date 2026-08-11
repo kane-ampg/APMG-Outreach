@@ -1,5 +1,5 @@
 import { type Permission } from "./permissions";
-import { permissionsForRole, type Role } from "./roles";
+import { permissionsForRole, permissionsForRoles, type Role } from "./roles";
 
 /**
  * Presentation grouping for the Settings → Roles and permissions screen.
@@ -124,7 +124,19 @@ export interface SectionGrant {
  * the same reason PermissionMatrix generates its grid instead of listing it.
  */
 export function sectionGrantsForRole(role: Role): SectionGrant[] {
-  const held = new Set<Permission>(permissionsForRole(role));
+  return sectionGrantsForRoles([role]);
+}
+
+/**
+ * What a SET of roles unlocks between them, grouped for display.
+ *
+ * The union, matching how enforcement actually resolves a multi-role user
+ * (`rolesCan`) — so the screen showing "what can this person reach?" and the
+ * code deciding it are answering the same question. Passing `[]` correctly
+ * yields every section empty: no roles is no access.
+ */
+export function sectionGrantsForRoles(roles: readonly Role[]): SectionGrant[] {
+  const held = new Set<Permission>(permissionsForRoles(roles));
   return PERMISSION_SECTIONS.map((section) => {
     const granted = section.permissions.filter((p) => held.has(p.perm));
     return { section, granted, empty: granted.length === 0 };

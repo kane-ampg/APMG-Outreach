@@ -8,11 +8,11 @@ portfolios.
 
 ## What APMG is
 
-APMG Services (Australian Property Maintenance Group) is a Melbourne-based,
-family-run **multi-trade property maintenance company**, founded in 2015 by
-Farbod Mollaei. It grew from a small painting operation into an end-to-end
-property maintenance provider for facility managers, councils, body corporates,
-and businesses across Melbourne and Victoria.
+APMG Services (Australian Property Maintenance Group) is a Melbourne-based
+**multi-trade property maintenance company**, founded in 2015 by Farbod
+Mollaei. It grew from a painting operation into an end-to-end property
+maintenance provider for facility managers, councils, body corporates, and
+businesses across Melbourne and Victoria.
 
 - Tagline: **"More Than Maintenance. We're Your Property Partner."**
 - Positioning: **"End-to-end property maintenance solutions"** delivered by
@@ -65,7 +65,7 @@ Hospitality · Local Government.
 - One partner for **every trade** — no juggling multiple contractors.
 - Licensed, multi-trade professionals; end-to-end from scheduled maintenance to
   emergency repairs to major upgrades.
-- Family-run since 2015; local, Melbourne-based teams.
+- Operating since 2015; local, Melbourne-based teams.
 
 ## Coverage & contact
 
@@ -85,3 +85,11 @@ Hospitality · Local Government.
   tailor the opening to the recipient's specific business and sector.
 - Keep APMG's real tone: practical, trustworthy, "genuine care" — not salesy
   growth-hacking language.
+- Refer to the company as **APMG Services**, or **Australian Property
+  Maintenance Group** where a more formal register suits the recipient. Do
+  **not** call APMG family-run, family-owned, a small business, or a local
+  outfit — that framing was deliberately removed from this file and the portal
+  on 2026-08-11 in favour of scope and longevity. State longevity as **est.
+  2015** or **operating since 2015**. Scope (eight in-house trades, eight
+  sectors, Melbourne and Victoria-wide) is what conveys scale here; headcount,
+  site counts, and response times are undocumented, so never assert them.

@@ -2,30 +2,44 @@
 
 /**
  * Live lead statistics derived from the SAME data the Pipeline tab writes:
- * Supabase `public.leads`, read back via /api/pipeline/leads (+ /batches for
- * folder counts). This is what makes the Overview KPIs reflect the exact data
- * imported via the pipeline rather than a hardcoded preset.
+ * Supabase `public.leads`. This is what makes the Overview KPIs reflect the exact
+ * data imported via the pipeline rather than a hardcoded preset.
  *
- * `total` is the exact DB count (PostgREST content-range). The derived ratios
- * (with email/phone, avg rating, by-day) are computed over the fetched sample,
- * which the API caps at 2000 rows — equal to `total` until you cross that mark.
+ * ── Why this is a store and not a plain hook ─────────────────────────────────
+ * It used to be a `useState` hook that fetched `/api/pipeline/leads` — the WHOLE
+ * table, LIMIT 10000, ~5.7 MB of JSON at 8k rows — and folded the rows in the
+ * browser. Three components mounted it (Sidebar, PipelinePage, OverviewPage) and
+ * two of them polled every 15s, so every open console tab pulled ~1.4 GB/hour
+ * through Vercel to render a badge and four KPI cards. That is what exhausted the
+ * Fast Origin Transfer allowance.
+ *
+ * Two changes fix it, and both are load-bearing:
+ *   1. the numbers are aggregated in Postgres and read from /api/pipeline/stats
+ *      (~1 KB, ETag-revalidated — see supabase/lead-stats.sql), and
+ *   2. this is now ONE module-level poll shared by every consumer, in the same
+ *      grammar as hotLeads.ts and leadActivityNotifications.ts, instead of one
+ *      independent interval per mount.
+ *
+ * The poll runs only while something subscribes, pauses when the tab is hidden,
+ * and tops up on focus. A failed poll keeps the last good numbers on screen
+ * ("slightly stale", never red) — it never fabricates zeros.
+ *
+ * Bucketing stays client-side. The API returns day-grain counts already cut at
+ * local midnight in the viewer's zone (which it is told), and the week/month
+ * rollup happens here — see the timezone note in lib/data/buckets.ts.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import type { Bar } from "./leads";
-import { parseStamps, volumeSeries } from "./buckets";
+import { volumeSeriesFromDayCounts, type DayCount } from "./buckets";
 import type { LeadView } from "@/components/apmg/pipeline/LeadsTable";
 
-// keep in sync with UNGROUPED in lib/pipeline/server.ts
-const UNGROUPED = "__ungrouped__";
-const DAY_MS = 24 * 60 * 60 * 1000;
+const POLL_MS = 15000;
 
 export interface LeadStatsData {
   mode: "live" | "demo";
-  /** exact total in the DB (authoritative even beyond the 2000-row fetch cap) */
+  /** exact total in the DB */
   total: number;
-  /** rows actually fetched — derived ratios are computed over these */
-  sampled: number;
   withEmail: number;
   withPhone: number;
   withWebsite: number;
@@ -33,7 +47,7 @@ export interface LeadStatsData {
   avgRating: number | null;
   folders: number;
   latestImport: string | null;
-  /** leads created in the last 24h (within the sample) */
+  /** leads created in the last rolling 24h */
   addedToday: number;
   /** leads-by-day, oldest → newest, last ≤ 14 active days */
   byDay: Bar[];
@@ -41,8 +55,11 @@ export interface LeadStatsData {
   byWeek: Bar[];
   /** leads-by-month, oldest → newest, last ≤ 12 active months */
   byMonth: Bar[];
-  /** most-recent rows (the API returns created_at desc) */
+  /** most-recent rows, newest first */
   recent: LeadView[];
+  /** supabase/lead-stats.sql hasn't been applied — avgRating, folders and the
+   *  histogram are unavailable (shown as "—" / empty, never invented) */
+  needsMigration: boolean;
 }
 
 export type LeadStatsState =
@@ -50,165 +67,203 @@ export type LeadStatsState =
   | { status: "error"; error: string }
   | { status: "ready"; data: LeadStatsData };
 
-interface LeadsResponse {
+interface StatsResponse {
   ok?: boolean;
   mode?: "live" | "demo";
-  rows?: LeadView[];
+  needsMigration?: boolean;
   total?: number;
+  withEmail?: number;
+  withPhone?: number;
+  withWebsite?: number;
+  ratedCount?: number;
+  avgRating?: number | null;
+  folders?: number;
+  latestImport?: string | null;
+  addedToday?: number;
+  byDay?: DayCount[];
+  recent?: LeadView[];
   error?: string;
 }
-interface BatchSummary {
-  batch: string;
-  count: number;
-  created: string | null;
-}
-interface BatchesResponse {
-  ok?: boolean;
-  batches?: BatchSummary[];
-  needsMigration?: boolean;
+
+const LOADING: LeadStatsState = { status: "loading" };
+
+/* ── module state (one instance per tab, shared by every consumer) ─────────── */
+
+let snapshot: LeadStatsState = LOADING;
+/** Raw body of the last applied response. The payload is ~1 KB, so comparing it
+ *  verbatim is cheaper than re-folding it, and an unchanged poll then leaves
+ *  `snapshot` identical — which is what keeps useSyncExternalStore quiet and
+ *  stops all three consumers re-rendering every 15s. */
+let lastBody = "";
+const listeners = new Set<() => void>();
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let inflight = false;
+let windowHooked = false;
+
+function emit() {
+  for (const l of listeners) l();
 }
 
-function ratingOf(r: LeadView): number {
-  return typeof r.rating === "number"
-    ? r.rating
-    : typeof r.rating === "string"
-      ? Number.parseFloat(r.rating)
-      : Number.NaN;
+/** The viewer's own zone — the API cuts the daily buckets at local midnight
+ *  there. Falls back to UTC on the rare browser without a resolved zone. */
+function viewerZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  } catch {
+    return "UTC";
+  }
+}
+
+const int = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+function toData(res: StatsResponse): LeadStatsData {
+  const series = volumeSeriesFromDayCounts(Array.isArray(res.byDay) ? res.byDay : []);
+  return {
+    mode: res.mode === "demo" ? "demo" : "live",
+    total: int(res.total),
+    withEmail: int(res.withEmail),
+    withPhone: int(res.withPhone),
+    withWebsite: int(res.withWebsite),
+    ratedCount: int(res.ratedCount),
+    avgRating: typeof res.avgRating === "number" && Number.isFinite(res.avgRating) ? res.avgRating : null,
+    folders: int(res.folders),
+    latestImport: typeof res.latestImport === "string" ? res.latestImport : null,
+    addedToday: int(res.addedToday),
+    byDay: series.byDay,
+    byWeek: series.byWeek,
+    byMonth: series.byMonth,
+    recent: Array.isArray(res.recent) ? res.recent : [],
+    needsMigration: res.needsMigration === true,
+  };
+}
+
+async function poll() {
+  if (inflight || typeof window === "undefined") return;
+  if (document.visibilityState === "hidden") return;
+  inflight = true;
+  const hadData = snapshot.status === "ready";
+  try {
+    // `no-cache`, NOT `no-store`: the browser must be allowed to keep the body
+    // so it can send If-None-Match and take the route's 304 (empty) answer.
+    // `no-store` would forbid the cached copy and force a full body every poll.
+    const res = await fetch(`/api/pipeline/stats?tz=${encodeURIComponent(viewerZone())}`, {
+      cache: "no-cache",
+    });
+    const body = await res.text().catch(() => "");
+    if (!res.ok) {
+      // A poll that fails once we have numbers leaves them on screen; only a
+      // cold start surfaces the error.
+      if (!hadData) {
+        const parsed = (() => {
+          try {
+            return JSON.parse(body) as StatsResponse;
+          } catch {
+            return null;
+          }
+        })();
+        snapshot = { status: "error", error: parsed?.error ?? `Couldn't load lead stats (${res.status}).` };
+        emit();
+      }
+      return;
+    }
+    if (body === lastBody) return; // nothing changed — don't re-render anyone
+
+    const parsed = (() => {
+      try {
+        return JSON.parse(body) as StatsResponse;
+      } catch {
+        return null;
+      }
+    })();
+    if (!parsed?.ok) {
+      if (!hadData) {
+        snapshot = { status: "error", error: parsed?.error ?? "Couldn't load lead stats." };
+        emit();
+      }
+      return;
+    }
+    lastBody = body;
+    snapshot = { status: "ready", data: toData(parsed) };
+    emit();
+  } catch {
+    if (!hadData) {
+      snapshot = { status: "error", error: "Network error loading lead stats." };
+      emit();
+    }
+  } finally {
+    inflight = false;
+  }
+}
+
+function onWindowActive() {
+  void poll();
+}
+
+function startPolling() {
+  if (pollTimer || typeof window === "undefined") return;
+  pollTimer = setInterval(() => void poll(), POLL_MS);
+  if (!windowHooked) {
+    windowHooked = true;
+    window.addEventListener("focus", onWindowActive);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") onWindowActive();
+    });
+  }
+  void poll();
+}
+
+function stopPolling() {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function subscribe(cb: () => void) {
+  listeners.add(cb);
+  startPolling();
+  return () => {
+    listeners.delete(cb);
+    if (listeners.size === 0) stopPolling();
+  };
+}
+
+/* ── public surface ───────────────────────────────────────────────────────── */
+
+/** Force an immediate refresh — the loud manual pull behind a Refresh button
+ *  and the top-up after an import writes new rows. */
+export function reloadLeadStats() {
+  void poll();
 }
 
 /**
- * @param pollMs  when set, silently refetches on this interval (and on window
- *   focus) so a view can show realtime numbers. Background refreshes don't flash
- *   the loading skeleton, and a failed poll keeps the last good numbers.
+ * The shared lead-stats snapshot. Every consumer reads the same poll, so mounting
+ * this in N places costs one request per interval, not N.
+ *
+ * `enabled` gates the subscription entirely: `/api/pipeline/stats` requires
+ * `leads.view`, so a caller without it would 403 every 15s forever to feed a
+ * readout it can never see. Pass `can("leads.view")` from a surface that isn't
+ * already behind that permission; when false the hook never joins the listener
+ * set (so it can't hold the poll timer open) and stays in `loading`.
  */
-export function useLeadStats({ pollMs }: { pollMs?: number } = {}): {
+export function useLeadStats(enabled = true): {
   state: LeadStatsState;
   reload: () => void;
 } {
-  const [state, setState] = useState<LeadStatsState>({ status: "loading" });
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const aliveRef = useRef(true);
+  const sub = useCallback((cb: () => void) => (enabled ? subscribe(cb) : () => {}), [enabled]);
+  const state = useSyncExternalStore(
+    sub,
+    () => (enabled ? snapshot : LOADING),
+    () => LOADING,
+  );
+  return { state, reload: reloadLeadStats };
+}
 
-  const run = useCallback(async () => {
-    // Once we have data, refreshes are silent: no skeleton flash, and a failed
-    // refresh leaves the existing numbers in place rather than erroring out.
-    const hadData = stateRef.current.status === "ready";
-    if (!hadData) setState({ status: "loading" });
-
-    try {
-      const [leadsRes, batchesRes] = await Promise.all([
-        fetch("/api/pipeline/leads", { cache: "no-store" }),
-        fetch("/api/pipeline/batches", { cache: "no-store" }).catch(() => null),
-      ]);
-
-      const leads = (await leadsRes.json().catch(() => null)) as LeadsResponse | null;
-      if (!aliveRef.current) return;
-      if (!leadsRes.ok || !leads?.ok) {
-        if (!hadData) {
-          setState({
-            status: "error",
-            error: leads?.error ?? `Couldn't load leads (${leadsRes.status}).`,
-          });
-        }
-        return;
-      }
-
-      const rows = Array.isArray(leads.rows) ? leads.rows : [];
-      const total = leads.total ?? rows.length;
-      const mode: "live" | "demo" = leads.mode === "demo" ? "demo" : "live";
-
-      let batches: BatchSummary[] = [];
-      if (batchesRes) {
-        const bd = (await batchesRes.json().catch(() => null)) as BatchesResponse | null;
-        if (bd?.ok && Array.isArray(bd.batches)) batches = bd.batches;
-      }
-      if (!aliveRef.current) return;
-
-      const now = Date.now();
-      let withEmail = 0;
-      let withPhone = 0;
-      let withWebsite = 0;
-      let ratedCount = 0;
-      let ratingSum = 0;
-      let addedToday = 0;
-      let latest: number | null = null;
-
-      for (const r of rows) {
-        if (r.emails && r.emails.length > 0) withEmail += 1;
-        if (r.phone) withPhone += 1;
-        if (r.website) withWebsite += 1;
-        const rating = ratingOf(r);
-        if (Number.isFinite(rating)) {
-          ratedCount += 1;
-          ratingSum += rating;
-        }
-        if (r.created_at) {
-          const t = new Date(r.created_at).getTime();
-          if (Number.isFinite(t)) {
-            if (latest === null || t > latest) latest = t;
-            if (now - t <= DAY_MS) addedToday += 1;
-          }
-        }
-      }
-
-      const folders =
-        batches.length > 0
-          ? batches.length
-          : total > 0
-            ? new Set(rows.map((r) => r.batch ?? UNGROUPED)).size
-            : 0;
-
-      const series = volumeSeries(parseStamps(rows.map((r) => r.created_at)));
-
-      setState({
-        status: "ready",
-        data: {
-          mode,
-          total,
-          sampled: rows.length,
-          withEmail,
-          withPhone,
-          withWebsite,
-          ratedCount,
-          avgRating: ratedCount > 0 ? ratingSum / ratedCount : null,
-          folders,
-          latestImport: latest != null ? new Date(latest).toISOString() : null,
-          addedToday,
-          byDay: series.byDay,
-          byWeek: series.byWeek,
-          byMonth: series.byMonth,
-          recent: rows.slice(0, 6),
-        },
-      });
-    } catch {
-      if (aliveRef.current && !hadData) {
-        setState({ status: "error", error: "Network error loading lead stats." });
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    aliveRef.current = true;
-    run();
-    return () => {
-      aliveRef.current = false;
-    };
-  }, [run]);
-
-  // Realtime: poll on an interval + whenever the tab regains focus.
-  useEffect(() => {
-    if (!pollMs) return;
-    const id = setInterval(() => {
-      run();
-    }, pollMs);
-    const onFocus = () => run();
-    window.addEventListener("focus", onFocus);
-    return () => {
-      clearInterval(id);
-      window.removeEventListener("focus", onFocus);
-    };
-  }, [pollMs, run]);
-
-  return { state, reload: run };
+/** Test seam: drop all module state between cases. */
+export function __resetLeadStatsStore() {
+  stopPolling();
+  listeners.clear();
+  snapshot = LOADING;
+  lastBody = "";
+  inflight = false;
 }

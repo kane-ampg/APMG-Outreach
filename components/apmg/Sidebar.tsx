@@ -50,7 +50,11 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
   const { can, roleLabel } = useRbac();
   // Live count for the Pipeline badge — reflects the real public.leads total
   // (polls + refreshes on focus), so the badge is never a stale placeholder.
-  const { state: leadStats } = useLeadStats({ pollMs: 15000 });
+  // One shared store behind every consumer, so this costs no extra request on
+  // top of the Overview/Pipeline reads. Gated on the permission the underlying
+  // route enforces: a Sales rep deliberately has no `leads.view` (lib/rbac/
+  // roles.ts), and would otherwise 403 every 15s to feed a badge they never see.
+  const { state: leadStats } = useLeadStats(can("leads.view"));
   const pipelineBadge = leadStats.status === "ready" ? formatInt(leadStats.data.total) : undefined;
   // Sales badge = real queue size (leads the admin has emailed), hidden at zero.
   const { total: salesQueueTotal } = useSales();

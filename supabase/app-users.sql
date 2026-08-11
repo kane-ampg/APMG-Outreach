@@ -1,6 +1,11 @@
 -- Console users and their roles. Populated automatically on first Google
 -- sign-in (at role 'sales'); roles are then adjusted from the Roles &
 -- Permissions tab. Every read/write goes through the service role.
+--
+-- A user holds a SET of roles (`roles text[]`), and their access is the union
+-- of what those roles grant -- see lib/rbac/roles.ts. The empty set means
+-- revoked. The singular `role` column this table started with is superseded
+-- below.
 
 create table if not exists public.app_users (
   email         text primary key check (email = lower(email)),
@@ -12,23 +17,73 @@ create table if not exists public.app_users (
   last_login_at timestamptz
 );
 
--- New accounts land on 'sales', not 'pending'. The OAuth domain gate
--- (GOOGLE_ALLOWED_DOMAIN, enforced in lib/auth/policy.ts) already means only
--- verified @apmgservices.com.au Workspace accounts ever reach this table, so
--- an admin promotion per colleague gated staff behind a human step without
--- adding a security boundary.
---
--- Stated again as an ALTER because `create table if not exists` above is a
--- no-op on a database that already has the table — without this line, an
--- existing deployment keeps the old 'pending' default. Re-running this file
--- migrates it.
-alter table public.app_users alter column role set default 'sales';
+-- New accounts land on Sales. The OAuth domain gate (GOOGLE_ALLOWED_DOMAIN,
+-- enforced in lib/auth/policy.ts) already means only verified
+-- @apmgservices.com.au Workspace accounts ever reach this table, so an admin
+-- promotion per colleague gated staff behind a human step without adding a
+-- security boundary.
 
--- 'pending' remains a real, assignable role: an admin sets it deliberately to
--- revoke access while keeping the sign-in history (see RolesPermissionsTab).
--- Existing pending rows are therefore left alone — some may be revocations
--- rather than un-triaged newcomers. To promote the ones that aren't:
---   update public.app_users set role = 'sales' where role = 'pending';
+-- MULTIPLE ROLES PER USER.
+--
+-- Replaces the singular `role` column. Somebody can be Sales and Admin at
+-- once, and their permissions are the UNION of both bundles, so adding a role
+-- can only ever widen access — never narrow it.
+--
+-- There is no 'pending' member. It used to be a role doing two jobs at once —
+-- "not triaged yet" and "an admin revoked this" — and inside a SET it would
+-- have been incoherent: {pending, admin} would read as revoked while granting
+-- the whole console. Revocation is now the EMPTY SET, which nothing held
+-- alongside it can contradict.
+alter table public.app_users
+  add column if not exists roles text[] not null default array['sales'];
+
+-- Backfill from the old column, once, for rows that predate `roles`. The
+-- `roles = array['sales']` guard means this only touches rows still sitting on
+-- the column default, so re-running this file can never overwrite a real
+-- assignment an admin has since made.
+--
+-- 'pending' maps to the empty set: that is what it always meant, and it is the
+-- only mapping that keeps a revoked account revoked.
+update public.app_users
+   set roles = case
+                 when role = 'pending' then array[]::text[]
+                 else array[role]
+               end
+ where roles = array['sales']
+   and role is distinct from 'sales';
+
+-- Only real roles, and no duplicates. Enforcement already fails closed on
+-- anything it does not recognise (`parseRoles` in lib/rbac/roles.ts), so this
+-- is the second of two locks rather than the only one.
+--
+-- The no-duplicates half is spelled out one role at a time because a CHECK
+-- constraint may not contain a subquery — the obvious
+-- `array_length(array(select distinct unnest(roles)), 1)` is rejected outright
+-- by Postgres. `array_positions` returns every index at which a value occurs,
+-- so a cardinality above 1 IS the duplicate. Enumerating the three roles is
+-- fine precisely because the first condition already bounds the domain to
+-- them; adding a fourth role means adding a line here, which the `<@` list
+-- above will remind you of.
+alter table public.app_users drop constraint if exists app_users_roles_valid;
+alter table public.app_users add constraint app_users_roles_valid check (
+  roles <@ array['admin', 'sales', 'client']::text[]
+  and cardinality(array_positions(roles, 'admin')) <= 1
+  and cardinality(array_positions(roles, 'sales')) <= 1
+  and cardinality(array_positions(roles, 'client')) <= 1
+);
+
+-- The old singular column is now VESTIGIAL: nothing reads or writes it.
+--
+-- Deliberately NOT dropped in the same migration that adds `roles`. Dropping
+-- it would break any serverless instance still running the previous deploy
+-- mid-rollout — their reads would 400, and role resolution fails closed, so
+-- every one of them would lock its users out for the length of the rollout.
+-- Left in place it simply goes stale, which costs nothing because no code
+-- consults it. Drop it in a follow-up once the deploy has settled:
+--
+--   alter table public.app_users drop column role;
+--
+-- Until then its NOT NULL default keeps working for inserts that omit it.
 
 -- Who pre-assigned this person's role from Settings before they had ever
 -- signed in ("Add by email"). Attribution only -- no code branches on it.
@@ -59,7 +114,7 @@ alter table public.app_users add column if not exists last_seen_at timestamptz;
 -- Cleared on every completed Google sign-in (see upsertOnLogin). That is what
 -- makes the comparison unambiguous despite `iat` having only second
 -- resolution: the stamp exists to kill EXISTING tokens, never to block future
--- logins. Locking someone out is `role = 'pending'`, a separate lever.
+-- logins. Locking someone out is clearing `roles`, a separate lever.
 alter table public.app_users add column if not exists sessions_valid_from timestamptz;
 
 -- RLS on with NO policies: the service role bypasses it, so the app is
@@ -78,6 +133,15 @@ alter table public.app_users enable row level security;
 
 -- The protected main admin. Re-running this file always restores admin, which
 -- is the intended recovery path if the role is ever lost.
-insert into public.app_users (email, name, role)
-values ('kane@apmgservices.com.au', 'Kane Reroma', 'admin')
-on conflict (email) do update set role = 'admin';
+--
+-- Adds admin to whatever they already hold rather than replacing the set, so
+-- running this recovery never silently strips a second role they were given.
+-- The `= any` guard keeps it idempotent: appending unconditionally would build
+-- {admin,admin} on the second run and trip the no-duplicates constraint above.
+insert into public.app_users (email, name, roles)
+values ('kane@apmgservices.com.au', 'Kane Reroma', array['admin'])
+on conflict (email) do update
+  set roles = case
+                when 'admin' = any(public.app_users.roles) then public.app_users.roles
+                else public.app_users.roles || 'admin'
+              end;

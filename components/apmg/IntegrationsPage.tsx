@@ -412,15 +412,27 @@ export function IntegrationsPage() {
     }
   }, []);
 
-  // realtime: load on mount, poll, and refetch when the tab regains focus
+  // realtime: load on mount, poll, and refetch when the tab regains focus.
+  // The tick skips while the tab is hidden and tops up the moment it comes back
+  // (matching TelemetryPage/SalesProvider): a console left open in a background
+  // tab was otherwise polling all night for nobody, which is billed transfer.
   useEffect(() => {
     fetchState();
-    const id = setInterval(() => fetchState({ quiet: true }), POLL_MS);
-    const onFocus = () => fetchState({ quiet: true });
-    window.addEventListener("focus", onFocus);
+    const tick = () => {
+      if (document.visibilityState === "hidden") return;
+      fetchState({ quiet: true });
+    };
+    const id = setInterval(tick, POLL_MS);
+    const onActive = () => fetchState({ quiet: true });
+    const onVisible = () => {
+      if (document.visibilityState === "visible") onActive();
+    };
+    window.addEventListener("focus", onActive);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       clearInterval(id);
-      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("focus", onActive);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [fetchState]);
 

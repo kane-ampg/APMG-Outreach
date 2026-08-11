@@ -52,8 +52,10 @@ function req(body: unknown): Request {
 function allow() {
   mockGuard.mockResolvedValue({
     ok: true,
+    roles: ["sales"],
     role: "sales",
     email: "rep@apmgservices.com.au",
+    trueRoles: ["sales"],
     trueRole: "sales",
     actingAs: null,
   });
@@ -162,8 +164,10 @@ describe("POST /api/sales/status", () => {
   it("carries impersonation into the row when an admin acts as sales", async () => {
     mockGuard.mockResolvedValue({
       ok: true,
+      roles: ["sales"],
       role: "sales",
       email: "kane@apmgservices.com.au",
+      trueRoles: ["admin"],
       trueRole: "admin",
       actingAs: "sales",
     });

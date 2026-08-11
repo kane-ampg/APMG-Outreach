@@ -38,21 +38,46 @@ const PAGE_VARIANTS = {
   exit: (dir: number) => ({ opacity: 0, x: dir >= 0 ? -28 : 28 }),
 };
 
+/**
+ * Star row with a text equivalent.
+ *
+ * SC 1.1.1: the glyphs used to be the whole rating and the entire component was
+ * aria-hidden, so a screen reader got each review's author, date and quote with
+ * no score at all — on the one tab whose entire job is third-party proof. The
+ * glyph row stays aria-hidden (it is decoration once the number is spoken) and
+ * an sr-only sibling states the rating in words. The sr-only text has to sit
+ * OUTSIDE the aria-hidden element, hence the extra wrapper: aria-hidden on an
+ * ancestor would bury the text too.
+ */
 function Stars({ rating, className }: { rating: number; className?: string }) {
   const filled = Math.round(rating);
+  // The spoken rating comes off `rating` itself, not the rounded glyph count:
+  // the glyphs can only show whole stars, but if the listing ever slips to 4.9
+  // the announcement must match the number printed beside it. Whole ratings
+  // drop the ".0" so today's 5.0 is read "5 out of 5 stars", not "5.0".
+  const spokenRating = Number.isInteger(rating) ? `${rating}` : rating.toFixed(1);
   return (
-    <span className={cn("inline-flex items-center gap-0.5", className)} aria-hidden>
-      {Array.from({ length: 5 }, (_, i) => (
-        <Star
-          key={i}
-          className="h-3.5 w-3.5"
-          style={
-            i < filled
-              ? { color: GOOGLE_STAR, fill: GOOGLE_STAR }
-              : { color: "hsl(var(--muted-foreground) / 0.35)" }
-          }
-        />
-      ))}
+    <span className={cn("inline-flex items-center", className)}>
+      <span className="inline-flex items-center gap-0.5" aria-hidden>
+        {Array.from({ length: 5 }, (_, i) => (
+          <Star
+            key={i}
+            className="h-3.5 w-3.5"
+            style={
+              i < filled
+                ? { color: GOOGLE_STAR, fill: GOOGLE_STAR }
+                : // SC 1.4.11 / low-vision legibility: the brand yellow is only
+                  // 1.71:1 on white, so at 0.35 alpha an empty star was barely
+                  // distinguishable from a filled one. Raised to 0.55 so the
+                  // filled/empty split is actually visible. Safe to keep the
+                  // brand yellow because the rating is now exposed as text
+                  // above — the glyphs reinforce it, they don't carry it.
+                  { color: "hsl(var(--muted-foreground) / 0.55)" }
+            }
+          />
+        ))}
+      </span>
+      <span className="sr-only">{spokenRating} out of 5 stars</span>
     </span>
   );
 }
@@ -81,6 +106,14 @@ export function GoogleReviewsPanel() {
     page * PAGE_SIZE + PAGE_SIZE,
   );
 
+  // SC 4.1.3: goTo() replaces all six cards and scrolls, which a sighted user
+  // sees and a screen-reader user previously got nothing at all from. These two
+  // numbers feed the always-mounted live region below. The last page is short
+  // (20 reviews / 6 per page), so the upper bound comes off the slice length
+  // rather than the page arithmetic.
+  const firstShown = page * PAGE_SIZE + 1;
+  const lastShown = page * PAGE_SIZE + pageReviews.length;
+
   return (
     <div>
       <div className="mb-4">
@@ -103,6 +136,12 @@ export function GoogleReviewsPanel() {
               <div className="flex items-center gap-2">
                 <span className="tnum font-heading text-2xl font-bold tracking-tight text-foreground">
                   {GOOGLE_RATING.toFixed(1)}
+                  {/* SC 1.1.1: on its own this is a bare number with nothing to
+                      frame it. Stars announces "5 out of 5 stars" immediately
+                      after, so this only has to supply what that doesn't —
+                      that the figure is the listing's average — rather than
+                      repeat "out of 5" twice in a row. */}
+                  <span className="sr-only"> average rating</span>
                 </span>
                 <Stars rating={GOOGLE_RATING} />
               </div>
@@ -147,6 +186,14 @@ export function GoogleReviewsPanel() {
             ))}
           </motion.div>
         </AnimatePresence>
+      </div>
+
+      {/* SC 4.1.3: the page swap is otherwise silent. This region is rendered
+          unconditionally — a live region has to be in the DOM before its text
+          changes or the announcement is dropped, so it must never be mounted
+          alongside the content it describes. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        Showing reviews {firstShown} to {lastShown} of {GOOGLE_REVIEWS.length}
       </div>
 
       {/* ── Pagination controls ────────────────────────────────────────────── */}
@@ -271,7 +318,16 @@ function ReviewCard({ review }: { review: GoogleReview }) {
           <div className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
             Response from {COMPANY.tradingName}
           </div>
-          <p className="mt-1 line-clamp-4 text-[11px] leading-relaxed text-muted-foreground">
+          {/* No line-clamp. It used to be clamped to 4 lines with no way to
+              expand, so the tail of every long reply was unreachable outright —
+              and because a clamp counts lines, not characters, it swallowed
+              progressively more as the user scaled text up (SC 1.4.4). The
+              replies are the strongest follow-up evidence on the page, so
+              rather than hide them behind a disclosure the full text now
+              renders: the longest reply in googleReviews.ts is ~450 characters
+              (~8 lines here) and the grid is items-start, so cards in a row
+              were never height-matched anyway — a taller card costs nothing. */}
+          <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
             {review.ownerReply}
           </p>
         </div>

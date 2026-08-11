@@ -6,8 +6,8 @@ import {
   signSession,
   verifySession,
 } from "@/lib/auth/session";
-import { getUserRole } from "@/lib/auth/userStore";
-import { isRole, roleCan, type Role } from "@/lib/rbac/roles";
+import { getUserRoles } from "@/lib/auth/userStore";
+import { isRole, rolesCan, type Role } from "@/lib/rbac/roles";
 
 /**
  * Lets an admin preview the console as another role.
@@ -15,8 +15,8 @@ import { isRole, roleCan, type Role } from "@/lib/rbac/roles";
  * Deliberately does NOT use requirePermission (lib/rbac/server.ts): that
  * checks the EFFECTIVE role, which is whatever is currently being previewed.
  * An admin previewing "sales" would then be gated on
- * roleCan("sales", "roles.viewas") — false — and could never switch again or
- * exit. Authorization here always reads trueRole straight from app_users,
+ * rolesCan(["sales"], "roles.viewas") — false — and could never switch again or
+ * exit. Authorization here always reads their true roles straight from app_users,
  * never the active viewAs claim.
  */
 export const runtime = "nodejs";
@@ -64,8 +64,8 @@ export async function POST(req: Request): Promise<Response> {
 
   // Straight from app_users, never the active viewAs on the incoming
   // cookie — see the file comment.
-  const trueRole = await getUserRole(claims.email);
-  if (!roleCan(trueRole, "roles.viewas")) {
+  const trueRoles = await getUserRoles(claims.email);
+  if (!rolesCan(trueRoles, "roles.viewas")) {
     return json({ error: "Forbidden — missing permission: roles.viewas" }, 403);
   }
 

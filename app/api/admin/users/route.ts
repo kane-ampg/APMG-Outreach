@@ -2,12 +2,12 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 import { MAIN_ADMIN_EMAIL, denyRoleChange, type RoleChangeDenial } from "@/lib/auth/policy";
 import { allowedDomain } from "@/lib/auth/google";
 import {
-  DEFAULT_SIGNUP_ROLE,
-  createUserWithRole,
+  DEFAULT_SIGNUP_ROLES,
+  createUserWithRoles,
   listUsers,
-  setUserRole,
+  setUserRoles,
 } from "@/lib/auth/userStore";
-import { assignableRoles, isRole } from "@/lib/rbac/roles";
+import { assignableRoles, parseRoles, type Role } from "@/lib/rbac/roles";
 import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import { fetchWorkspaceDirectory } from "@/lib/google/directory";
 
@@ -16,7 +16,12 @@ import { fetchWorkspaceDirectory } from "@/lib/google/directory";
  *
  *   GET   → every user, plus the facts the UI needs to disable the right
  *           controls (who is acting, who the protected main admin is).
- *   PATCH → change one user's role.
+ *   PATCH → replace one user's whole role set.
+ *
+ * PATCH takes the FINAL set, not a delta. The Settings screen shows every role
+ * with a tick, so what it submits is the intended end state — and a
+ * replace-the-set write is idempotent, whereas "add this one / remove that one"
+ * from two admins at once can interleave into a set neither of them chose.
  *
  * Both require `users.manage` (admin only). The three lockout protections are
  * applied by `denyRoleChange` — the single tested implementation — and are NOT
@@ -31,9 +36,9 @@ function json(body: unknown, status = 200): Response {
 
 /** Operator-facing copy for each refusal. Keyed so the UI can style by reason. */
 const DENIAL: Record<Exclude<RoleChangeDenial, null>, string> = {
-  "main-admin": `${MAIN_ADMIN_EMAIL} is the protected main admin and cannot be changed. This is deliberate — it is the account that can always recover access.`,
-  self: "You can't change your own role. Ask another admin, so nobody can lock themselves out.",
-  "last-admin": "This is the only admin left. Promote someone else to admin first, or there would be no way back in.",
+  "main-admin": `${MAIN_ADMIN_EMAIL} is the protected main admin and must keep the Admin role. This is deliberate — it is the account that can always recover access. Other roles can still be added.`,
+  self: "You can't change your own roles. Ask another admin, so nobody can lock themselves out.",
+  "last-admin": "This is the only admin left, so Admin can't be removed. Make someone else an admin first, or there would be no way back in.",
 };
 
 export async function GET(req: Request): Promise<Response> {
@@ -86,7 +91,7 @@ export async function GET(req: Request): Promise<Response> {
     // So the UI can say "Sales on first sign-in" for someone with no row,
     // rather than the flat "no roles" that would imply they arrive with no
     // access at all.
-    defaultRoleOnSignIn: DEFAULT_SIGNUP_ROLE,
+    defaultRolesOnSignIn: DEFAULT_SIGNUP_ROLES,
     assignableRoles: assignableRoles(),
     users,
     usersError,
@@ -106,26 +111,34 @@ export async function PATCH(req: Request): Promise<Response> {
   } catch {
     return json({ error: "Invalid JSON body." }, 400);
   }
-  const raw = (body ?? {}) as { email?: unknown; role?: unknown };
+  const raw = (body ?? {}) as { email?: unknown; roles?: unknown };
 
   if (typeof raw.email !== "string" || !raw.email.trim()) {
     return json({ error: "An email address is required." }, 400);
   }
-  // isRole is an own-property check, so inherited names like "constructor"
-  // cannot slip through as a role here.
-  if (!isRole(raw.role)) {
-    return json({ error: "Unknown role." }, 400);
+  if (!Array.isArray(raw.roles)) {
+    return json({ error: "A list of roles is required." }, 400);
   }
-  // isRole only proves the value is a real role in the catalog; assignableRoles()
-  // is the separate business rule for which of those roles a UI may currently
-  // hand out. Every role is enabled today, so this can't yet reject anything --
-  // but this route claims to be the enforcement point, and must not defer that
-  // rule to the UI even while the rule is dormant.
-  if (!assignableRoles().includes(raw.role)) {
-    return json({ error: "That role is not currently assignable." }, 400);
+  // parseRoles drops anything the catalog doesn't know — including inherited
+  // names like "constructor" — so `nextRoles` can only ever contain real
+  // roles. A body carrying junk alongside real roles is REJECTED rather than
+  // quietly narrowed: silently saving a smaller set than the admin submitted
+  // is how somebody ends up with access nobody meant to leave them.
+  const nextRoles: Role[] = parseRoles(raw.roles);
+  if (nextRoles.length !== new Set(raw.roles).size) {
+    return json({ error: "That request contained a role this console doesn't recognise." }, 400);
+  }
+  // The catalog says a role EXISTS; assignableRoles() is the separate business
+  // rule for which of them a UI may currently hand out. Every role is enabled
+  // today, so this can't yet reject anything — but this route claims to be the
+  // enforcement point, and must not defer that rule to the UI even while the
+  // rule is dormant.
+  const assignable = assignableRoles();
+  const refused = nextRoles.filter((r) => !assignable.includes(r));
+  if (refused.length > 0) {
+    return json({ error: `Not currently assignable: ${refused.join(", ")}.` }, 400);
   }
   const email = raw.email.trim().toLowerCase();
-  const nextRole = raw.role;
 
   // One read serves both the existence check and the admin census that
   // denyRoleChange needs, so the two can never disagree with each other.
@@ -156,7 +169,7 @@ export async function PATCH(req: Request): Promise<Response> {
     if (!email.endsWith(`@${domain}`)) {
       return json(
         {
-          error: `Only @${domain} addresses can be given a role. Anyone else is refused at sign-in, so the grant would never take effect.`,
+          error: `Only @${domain} addresses can be given roles. Anyone else is refused at sign-in, so the grant would never take effect.`,
         },
         400,
       );
@@ -175,8 +188,8 @@ export async function PATCH(req: Request): Promise<Response> {
   const denial = denyRoleChange({
     actorEmail: guard.email,
     targetEmail: email,
-    nextRole,
-    adminEmails: users.filter((u) => u.role === "admin").map((u) => u.email),
+    nextRoles,
+    adminEmails: users.filter((u) => u.roles.includes("admin")).map((u) => u.email),
   });
   if (denial) return json({ error: DENIAL[denial], reason: denial }, 409);
 
@@ -186,19 +199,19 @@ export async function PATCH(req: Request): Promise<Response> {
   // load-bearing coincidence: the day a fourth rule is added, a brand-new user
   // would silently skip it.
   if (!exists) {
-    const created = await createUserWithRole({ email, role: nextRole, invitedBy: guard.email });
+    const created = await createUserWithRoles({ email, roles: nextRoles, invitedBy: guard.email });
     if (created === "demo") {
       return json({ error: "Supabase isn't configured, so this can't be saved." }, 503);
     }
     if (created === "error") {
       return json({ error: "Couldn't add that person. Please try again." }, 500);
     }
-    if (created === "ok") return json({ ok: true, email, role: nextRole, created: true });
+    if (created === "ok") return json({ ok: true, email, roles: nextRoles, created: true });
     // "conflict": another admin created the row between our read and our
-    // insert. The row exists now, so setting the role below is exactly right.
+    // insert. The row exists now, so setting the roles below is exactly right.
   }
 
-  const result = await setUserRole(email, nextRole);
+  const result = await setUserRoles(email, nextRoles);
   if (result === "demo") {
     return json({ error: "Supabase isn't configured, so this can't be saved." }, 503);
   }
@@ -208,5 +221,5 @@ export async function PATCH(req: Request): Promise<Response> {
   if (result === "error") {
     return json({ error: "Couldn't save the change. Please try again." }, 500);
   }
-  return json({ ok: true, email, role: nextRole });
+  return json({ ok: true, email, roles: nextRoles });
 }

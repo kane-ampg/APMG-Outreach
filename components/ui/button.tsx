@@ -18,8 +18,13 @@ const base =
 const VARIANT: Record<Variant, string> = {
   default:
     "bg-primary-solid text-primary-foreground shadow-sm shadow-signal-900/30 hover:bg-primary-solid/90",
+  /* SC 1.4.11: the boundary is drawn with --input (the form-control token, rated
+     to 3:1) rather than the decorative --border (1.36:1). The token choice is
+     deliberate: an outline button sitting on a similar-toned ground is
+     identifiable ONLY by this border, because its bare text label would
+     otherwise read as static text. */
   outline:
-    "border border-border bg-background hover:bg-muted hover:text-foreground",
+    "border border-input bg-background hover:bg-muted hover:text-foreground",
   secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
   ghost: "hover:bg-muted hover:text-foreground",
   destructive: "bg-destructive/10 text-destructive hover:bg-destructive/20",

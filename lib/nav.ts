@@ -16,7 +16,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { type Permission } from "@/lib/rbac/permissions";
-import { type Role } from "@/lib/rbac/roles";
+import { primaryRole, type Role } from "@/lib/rbac/roles";
 
 export type TabId =
   | "services"
@@ -119,13 +119,20 @@ export const ROLE_LANDING_TAB: Record<Role, TabId> = {
   admin: "overview",
   client: "overview",
   sales: "sales",
-  pending: "overview",
 };
 
-/** The role's home tab, falling back to the first tab it may open. */
-export function landingTab(role: Role, can: (perm: Permission) => boolean): TabId {
-  const home = ROLE_LANDING_TAB[role];
-  return home && can(TAB_PERMISSION[home]) ? home : firstAllowedTab(can);
+/**
+ * Where to open, for the roles this user holds.
+ *
+ * Keyed on `primaryRole`, so somebody who is both Admin and Sales lands on the
+ * console Overview rather than on whichever role happened to be stored first.
+ * `can` still decides — the union of their roles is what opens the tab, and an
+ * unreachable home falls back to the first tab they may open.
+ */
+export function landingTab(roles: readonly Role[], can: (perm: Permission) => boolean): TabId {
+  const home = primaryRole(roles);
+  const tab = home ? ROLE_LANDING_TAB[home] : null;
+  return tab && can(TAB_PERMISSION[tab]) ? tab : firstAllowedTab(can);
 }
 
 export const TAB_LABEL: Record<TabId, string> = {

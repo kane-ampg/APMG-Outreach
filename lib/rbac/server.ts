@@ -1,25 +1,35 @@
 import "server-only";
 import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
-import { effectiveRole } from "@/lib/auth/policy";
-import { getUserRole } from "@/lib/auth/userStore";
+import { effectiveRoles } from "@/lib/auth/policy";
+import { getUserRoles } from "@/lib/auth/userStore";
 import { type Permission } from "./permissions";
-import { roleCan, type Role } from "./roles";
+import { primaryRole, rolesCan, type Role } from "./roles";
 
 /**
  * Server-side permission guard for Route Handlers.
  *
- * The role is read from app_users on every call rather than trusted from the
+ * Roles are read from app_users on every call rather than trusted from the
  * cookie, so an admin's role change takes effect on the very next request.
  * The previous implementation read a CLIENT-SET `apmg-role` cookie, which was
  * a complete authorization bypass — that cookie is now ignored entirely.
+ *
+ * A user holds a SET of roles and may act on the union of what they grant, so
+ * every enforcement decision here goes through `rolesCan` over `roles`. The
+ * singular `role` fields alongside them are DISPLAY derivations (`primaryRole`)
+ * for surfaces that can only show one — a label, an audit line — and are never
+ * what a permission check consults.
  */
 
 export interface ResolvedSession {
   email: string;
-  /** What the database says they are. */
-  trueRole: Role;
+  /** Every role the database says they hold. Empty means revoked. */
+  trueRoles: Role[];
   /** What enforcement should use — differs only during an authorised view-as. */
-  role: Role;
+  roles: Role[];
+  /** Most capable held role, or null when they hold none. Display only. */
+  trueRole: Role | null;
+  /** Most capable effective role, or null. Display only. */
+  role: Role | null;
   /** Display name from the Google profile, carried in the session cookie.
    *  Display-only — never used for authorization. Absent for sessions minted
    *  before this field existed, or a Google account with no name claim. */
@@ -52,11 +62,14 @@ export async function resolveSession(req: Request): Promise<ResolvedSession | nu
   const claims = await verifySession(token);
   if (!claims) return null;
 
-  const trueRole = await getUserRole(claims.email);
+  const trueRoles = await getUserRoles(claims.email);
+  const roles = effectiveRoles(trueRoles, claims.viewAs ?? null);
   return {
     email: claims.email,
-    trueRole,
-    role: effectiveRole(trueRole, claims.viewAs ?? null),
+    trueRoles,
+    roles,
+    trueRole: primaryRole(trueRoles),
+    role: primaryRole(roles),
     name: claims.name,
   };
 }
@@ -64,10 +77,22 @@ export async function resolveSession(req: Request): Promise<ResolvedSession | nu
 export type GuardResult =
   | {
       ok: true;
-      /** effective role — what enforcement actually used */
+      /**
+       * Effective roles — the set enforcement actually used. THIS is what a
+       * caller should consult to decide anything further.
+       */
+      roles: Role[];
+      /**
+       * Most capable effective role. Display and attribution only (an audit
+       * line reads better as "sales" than as a set), and non-null by
+       * construction: passing the guard requires holding a permission, which
+       * requires holding at least one role.
+       */
       role: Role;
       email: string;
-      /** what app_users says they are, regardless of any view-as */
+      /** what app_users says they hold, regardless of any view-as */
+      trueRoles: Role[];
+      /** most capable true role — display only, non-null for the same reason */
       trueRole: Role;
       /**
        * The role being previewed, or null when they are simply themselves.
@@ -87,16 +112,36 @@ export async function requirePermission(
 ): Promise<GuardResult> {
   const session = await resolveSession(req);
   if (!session) return { ok: false, status: 401, error: "Not authenticated" };
-  if (!roleCan(session.role, perm)) {
+  if (!rolesCan(session.roles, perm)) {
+    return { ok: false, status: 403, error: `Forbidden — missing permission: ${perm}` };
+  }
+  // Holding a permission means holding a role that grants it, so both primaries
+  // are non-null here. Narrowed rather than asserted, so that if that ever
+  // stops being true the guard refuses instead of shipping a null role into
+  // the audit trail.
+  const role = primaryRole(session.roles);
+  const trueRole = primaryRole(session.trueRoles);
+  if (!role || !trueRole) {
     return { ok: false, status: 403, error: `Forbidden — missing permission: ${perm}` };
   }
   return {
     ok: true,
-    role: session.role,
+    roles: session.roles,
+    role,
     email: session.email,
-    trueRole: session.trueRole,
-    actingAs: session.role === session.trueRole ? null : session.role,
+    trueRoles: session.trueRoles,
+    trueRole,
+    // A preview is the only way the effective set differs from what they hold,
+    // and it is always exactly one role — so naming it is unambiguous.
+    actingAs: sameRoles(session.roles, session.trueRoles) ? null : role,
   };
+}
+
+/** Set equality. Both sides come from `parseRoles`/`effectiveRoles`, so both
+ *  are already deduplicated and in canonical order — but comparing by content
+ *  rather than by reference keeps that an optimisation, not a requirement. */
+function sameRoles(a: readonly Role[], b: readonly Role[]): boolean {
+  return a.length === b.length && a.every((r) => b.includes(r));
 }
 
 /**

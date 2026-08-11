@@ -6,6 +6,7 @@ import {
   BadgeCheck,
   Clock,
   ShieldCheck,
+  Radio,
   Settings as SettingsIcon,
   UserRoundX,
   Users,
@@ -39,6 +40,7 @@ export function SettingsPage() {
     withRoles: 0,
     pending: 0,
     neverSignedIn: 0,
+    online: 0,
   });
 
   if (!can("users.manage")) {
@@ -77,6 +79,11 @@ export function SettingsPage() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {/* Only when somebody actually is. A permanent "Online 0" reads as
+                a broken feature; its absence reads as an empty office. */}
+            {stats.online > 0 && (
+              <StatChip icon={Radio} label="Online now" value={stats.online} tone="green" />
+            )}
             <StatChip icon={Users} label="People" value={stats.directory} />
             <StatChip icon={BadgeCheck} label="With roles" value={stats.withRoles} />
             {/* Granted access that has never been used. Shown only when there
@@ -118,6 +125,12 @@ export function SettingsPage() {
   );
 }
 
+const TONE = {
+  muted: "text-muted-foreground",
+  amber: "text-amber-600 dark:text-amber-400",
+  green: "text-emerald-600 dark:text-emerald-400",
+} as const;
+
 /**
  * Header tallies. Small and quiet on purpose: they answer "how big is this
  * roster" at a glance, and are not the thing an admin came here to click.
@@ -131,15 +144,12 @@ function StatChip({
   icon: LucideIcon;
   label: string;
   value: number;
-  tone?: "muted" | "amber";
+  tone?: "muted" | "amber" | "green";
 }) {
   return (
     <div className="flex items-center gap-2 rounded-lg bg-card px-2.5 py-1.5 ring-1 ring-foreground/10">
       <Icon
-        className={cn(
-          "h-3.5 w-3.5",
-          tone === "amber" ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground",
-        )}
+        className={cn("h-3.5 w-3.5", TONE[tone])}
         aria-hidden
       />
       <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
@@ -148,7 +158,7 @@ function StatChip({
       <span
         className={cn(
           "tnum font-mono text-xs font-bold",
-          tone === "amber" ? "text-amber-600 dark:text-amber-400" : "text-foreground",
+          tone === "muted" ? "text-foreground" : TONE[tone],
         )}
       >
         {value}

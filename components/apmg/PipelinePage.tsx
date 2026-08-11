@@ -201,6 +201,7 @@ function SubTabPill({
 function PipelineLeads() {
   const reduce = !!useReducedMotion();
   const inputRef = useRef<HTMLInputElement>(null);
+  const { can } = useRbac();
 
   const [file, setFile] = useState<File | null>(null);
   const [parsed, setParsed] = useState<ParsedCsv | null>(null);
@@ -219,9 +220,11 @@ function PipelineLeads() {
   // true when the `batch` column is missing (folders migration not yet run)
   const [needsMigration, setNeedsMigration] = useState(false);
 
-  // Live database counts shown above the flow — polls every 15s (and on focus)
-  // so the numbers stay realtime; also refreshed the instant an import finishes.
-  const { state: statsState, reload: reloadStats } = useLeadStats({ pollMs: 15000 });
+  // Live database counts shown above the flow — the shared store polls every 15s
+  // (and on focus) so the numbers stay realtime; also refreshed the instant an
+  // import finishes. Shared with the sidebar badge and the Overview KPIs: one
+  // request per interval however many surfaces are reading it.
+  const { state: statsState, reload: reloadStats } = useLeadStats(can("leads.view"));
 
   // Unmount / re-run guards. DashboardShell unmounts this page on tab switch
   // (AnimatePresence mode="wait"), so any in-flight rAF / awaited fetch must not

@@ -1,8 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const getUserRole = vi.fn();
+const getUserRoles = vi.fn();
 vi.mock("@/lib/auth/userStore", () => ({
-  getUserRole: (...a: unknown[]) => getUserRole(...a),
+  getUserRoles: (...a: unknown[]) => getUserRoles(...a),
 }));
 
 import { SESSION_COOKIE, signSession, verifySession } from "@/lib/auth/session";
@@ -42,13 +42,13 @@ function setCookieValue(res: Response): string {
 
 describe("POST /api/auth/view-as — same-origin floor", () => {
   it("rejects a cross-origin Origin header even with a valid admin session", async () => {
-    getUserRole.mockResolvedValue("admin");
+    getUserRoles.mockResolvedValue(["admin"]);
     const token = await signSession({ email: ADMIN });
     const res = await POST(
       reqWith({ cookie: `${SESSION_COOKIE}=${token}`, origin: "https://evil.example" }, { role: "sales" }),
     );
     expect(res.status).toBe(403);
-    expect(getUserRole).not.toHaveBeenCalled();
+    expect(getUserRoles).not.toHaveBeenCalled();
   });
 });
 
@@ -56,7 +56,7 @@ describe("POST /api/auth/view-as — authentication", () => {
   it("401s with no session cookie", async () => {
     const res = await POST(reqWith({}, { role: "sales" }));
     expect(res.status).toBe(401);
-    expect(getUserRole).not.toHaveBeenCalled();
+    expect(getUserRoles).not.toHaveBeenCalled();
   });
 
   it("401s a garbage cookie value", async () => {
@@ -67,19 +67,19 @@ describe("POST /api/auth/view-as — authentication", () => {
 
 describe("POST /api/auth/view-as — authorization uses trueRole, not the effective role", () => {
   it("403s a real 'sales' trueRole even for an otherwise-valid session", async () => {
-    getUserRole.mockResolvedValue("sales");
+    getUserRoles.mockResolvedValue(["sales"]);
     const res = await POST(await reqAs(REP, { role: "client" }));
     expect(res.status).toBe(403);
   });
 
   it("403s pending", async () => {
-    getUserRole.mockResolvedValue("pending");
+    getUserRoles.mockResolvedValue([]);
     const res = await POST(await reqAs(REP, { role: "sales" }));
     expect(res.status).toBe(403);
   });
 
   it("allows a real admin", async () => {
-    getUserRole.mockResolvedValue("admin");
+    getUserRoles.mockResolvedValue(["admin"]);
     const res = await POST(await reqAs(ADMIN, { role: "sales" }));
     expect(res.status).toBe(200);
   });
@@ -90,14 +90,14 @@ describe("POST /api/auth/view-as — authorization uses trueRole, not the effect
     // role is "sales". If this route mistakenly gated on the effective role
     // (the way requirePermission does), a previewing admin could never
     // switch again or exit — exactly the trap design doc §9 warns about.
-    getUserRole.mockResolvedValue("admin");
+    getUserRoles.mockResolvedValue(["admin"]);
     const res = await POST(await reqAs(ADMIN, { role: "client" }, "sales"));
     expect(res.status).toBe(200);
   });
 });
 
 describe("POST /api/auth/view-as — validation", () => {
-  beforeEach(() => getUserRole.mockResolvedValue("admin"));
+  beforeEach(() => getUserRoles.mockResolvedValue(["admin"]));
 
   it("rejects a role outside the catalog", async () => {
     const res = await POST(await reqAs(ADMIN, { role: "superuser" }));
@@ -133,7 +133,7 @@ describe("POST /api/auth/view-as — validation", () => {
 });
 
 describe("POST /api/auth/view-as — the re-signed session cookie", () => {
-  beforeEach(() => getUserRole.mockResolvedValue("admin"));
+  beforeEach(() => getUserRoles.mockResolvedValue(["admin"]));
 
   it("carries the requested viewAs", async () => {
     const res = await POST(await reqAs(ADMIN, { role: "sales" }));

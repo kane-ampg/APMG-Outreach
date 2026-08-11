@@ -1,4 +1,4 @@
-import { roleCan, type Role } from "@/lib/rbac/roles";
+import { rolesCan, type Role } from "@/lib/rbac/roles";
 
 /**
  * Pure security decisions, deliberately free of Next, cookies and the network
@@ -35,14 +35,23 @@ export function assertWorkspaceIdentity(
 }
 
 /**
- * The role enforcement should use. `trueRole` comes from the database; `viewAs`
- * comes from the (signed) session cookie. The roleCan check — NOT the signature
- * — is the real gate: a rep who forged viewAs:"admin" still resolves to their
- * own role, because their true role lacks roles.viewas.
+ * The role set enforcement should use. `trueRoles` comes from the database;
+ * `viewAs` comes from the (signed) session cookie. The `rolesCan` check — NOT
+ * the signature — is the real gate: a rep who forged viewAs:"admin" still
+ * resolves to their own roles, because nothing they hold grants roles.viewas.
+ *
+ * An authorised preview COLLAPSES to the single previewed role rather than
+ * adding to what they hold. That is the whole point — an admin previewing
+ * Sales must see what a rep sees, not a rep's console with their own admin
+ * powers still quietly attached. It also caps the blast radius: the result of
+ * a preview can never be a larger set than one role grants.
  */
-export function effectiveRole(trueRole: Role, viewAs: Role | null | undefined): Role {
-  if (!viewAs || viewAs === trueRole) return trueRole;
-  return roleCan(trueRole, "roles.viewas") ? viewAs : trueRole;
+export function effectiveRoles(
+  trueRoles: readonly Role[],
+  viewAs: Role | null | undefined,
+): Role[] {
+  if (!viewAs) return [...trueRoles];
+  return rolesCan(trueRoles, "roles.viewas") ? [viewAs] : [...trueRoles];
 }
 
 export type RoleChangeDenial = "main-admin" | "self" | "last-admin" | null;
@@ -50,22 +59,27 @@ export type RoleChangeDenial = "main-admin" | "self" | "last-admin" | null;
 /**
  * Three ways to lock everyone out of the console, all refused here rather than
  * in the UI — the UI merely mirrors these answers.
+ *
+ * Every rule is now phrased as "does the NEW SET still contain admin?", which
+ * is what actually matters once roles are a set. Adding Sales to the only
+ * admin is a widening and must be allowed; taking admin away from them — by
+ * swapping it for another role or by clearing the set entirely — is the
+ * lockout, and both spellings are caught by the same check.
  */
 export function denyRoleChange(args: {
   actorEmail: string;
   targetEmail: string;
-  nextRole: Role;
+  nextRoles: readonly Role[];
   adminEmails: readonly string[];
 }): RoleChangeDenial {
   const actor = args.actorEmail.trim().toLowerCase();
   const target = args.targetEmail.trim().toLowerCase();
   const admins = args.adminEmails.map((e) => e.trim().toLowerCase());
+  const keepsAdmin = args.nextRoles.includes("admin");
 
-  if (target === MAIN_ADMIN_EMAIL && args.nextRole !== "admin") return "main-admin";
+  if (target === MAIN_ADMIN_EMAIL && !keepsAdmin) return "main-admin";
   if (actor === target) return "self";
-  if (args.nextRole !== "admin" && admins.length === 1 && admins[0] === target) {
-    return "last-admin";
-  }
+  if (!keepsAdmin && admins.length === 1 && admins[0] === target) return "last-admin";
   return null;
 }
 

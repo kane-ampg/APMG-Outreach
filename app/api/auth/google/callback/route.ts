@@ -16,6 +16,7 @@ import {
   signSession,
 } from "@/lib/auth/session";
 import { upsertOnLogin } from "@/lib/auth/userStore";
+import { primaryRole } from "@/lib/rbac/roles";
 
 export const runtime = "nodejs";
 
@@ -74,7 +75,7 @@ export async function GET(req: NextRequest): Promise<Response> {
   const identity = assertWorkspaceIdentity(claims, allowedDomain());
   if (!identity.ok) return fail(req, identity.reason);
 
-  const role = await upsertOnLogin({
+  const roles = await upsertOnLogin({
     email: identity.email,
     name: claims.name,
     picture: claims.picture,
@@ -88,8 +89,11 @@ export async function GET(req: NextRequest): Promise<Response> {
     await signSession({ email: identity.email, name: claims.name, picture: claims.picture }),
     sessionCookieOptions(),
   );
-  // Pre-paint theme for this role — reps work in daylight and get light.
-  res.cookies.set(THEME_SEED_COOKIE, role === "sales" ? "light" : "dark", {
+  // Pre-paint theme for this user — reps work in daylight and get light.
+  // Keyed on the most capable role they hold, so somebody who is both Admin
+  // and Sales opens the dark console they actually administer rather than the
+  // rep's daylight theme.
+  res.cookies.set(THEME_SEED_COOKIE, primaryRole(roles) === "sales" ? "light" : "dark", {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",

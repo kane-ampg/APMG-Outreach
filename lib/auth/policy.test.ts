@@ -3,7 +3,7 @@ import {
   MAIN_ADMIN_EMAIL,
   assertWorkspaceIdentity,
   denyRoleChange,
-  effectiveRole,
+  effectiveRoles,
   isSafeNextPath,
 } from "./policy";
 
@@ -55,66 +55,136 @@ describe("assertWorkspaceIdentity", () => {
   });
 });
 
-describe("effectiveRole", () => {
-  it("returns the true role when not viewing as anything", () => {
-    expect(effectiveRole("admin", null)).toBe("admin");
+describe("effectiveRoles", () => {
+  it("returns the held roles when not previewing anything", () => {
+    expect(effectiveRoles(["admin"], null)).toEqual(["admin"]);
+    expect(effectiveRoles(["client", "sales"], null)).toEqual(["client", "sales"]);
   });
 
-  it("honours viewAs for a role that may impersonate", () => {
-    expect(effectiveRole("admin", "sales")).toBe("sales");
+  it("collapses to the single previewed role for someone who may impersonate", () => {
+    // The point of a preview is to see LESS than you have. Keeping the admin's
+    // own roles alongside the previewed one would show them a console no rep
+    // could ever see, which is the opposite of the feature.
+    expect(effectiveRoles(["admin"], "sales")).toEqual(["sales"]);
+    expect(effectiveRoles(["admin", "sales"], "client")).toEqual(["client"]);
   });
 
-  it("IGNORES a forged viewAs from a role that may not impersonate", () => {
-    expect(effectiveRole("sales", "admin")).toBe("sales");
-    expect(effectiveRole("pending", "admin")).toBe("pending");
+  it("IGNORES a forged viewAs from someone who may not impersonate", () => {
+    expect(effectiveRoles(["sales"], "admin")).toEqual(["sales"]);
+    expect(effectiveRoles(["client", "sales"], "admin")).toEqual(["client", "sales"]);
+    expect(effectiveRoles([], "admin")).toEqual([]);
   });
 
-  it("is a no-op when viewAs equals the true role", () => {
-    expect(effectiveRole("admin", "admin")).toBe("admin");
+  it("does not let a previewing admin escalate beyond one real role", () => {
+    // viewAs is a single role by construction, so even an authorised preview
+    // can never resolve to a set larger than what one role grants.
+    expect(effectiveRoles(["admin"], "sales")).toHaveLength(1);
+  });
+
+  it("is a no-op when the preview is a role they already hold alone", () => {
+    expect(effectiveRoles(["admin"], "admin")).toEqual(["admin"]);
   });
 });
 
 describe("denyRoleChange", () => {
-  const base = { actorEmail: "other@apmgservices.com.au", adminEmails: [MAIN_ADMIN_EMAIL, "other@apmgservices.com.au"] };
+  const base = {
+    actorEmail: "other@apmgservices.com.au",
+    adminEmails: [MAIN_ADMIN_EMAIL, "other@apmgservices.com.au"],
+  };
 
-  it("blocks demoting the main admin", () => {
+  it("blocks taking admin away from the main admin", () => {
     expect(
-      denyRoleChange({ ...base, targetEmail: MAIN_ADMIN_EMAIL, nextRole: "sales" }),
+      denyRoleChange({ ...base, targetEmail: MAIN_ADMIN_EMAIL, nextRoles: ["sales"] }),
     ).toBe("main-admin");
   });
 
-  it("blocks changing your own role", () => {
+  it("blocks revoking the main admin entirely", () => {
+    expect(denyRoleChange({ ...base, targetEmail: MAIN_ADMIN_EMAIL, nextRoles: [] })).toBe(
+      "main-admin",
+    );
+  });
+
+  it("allows the main admin to gain a role, as long as admin is kept", () => {
     expect(
-      denyRoleChange({ ...base, targetEmail: "other@apmgservices.com.au", nextRole: "sales" }),
+      denyRoleChange({ ...base, targetEmail: MAIN_ADMIN_EMAIL, nextRoles: ["admin", "sales"] }),
+    ).toBeNull();
+  });
+
+  it("blocks changing your own roles", () => {
+    expect(
+      denyRoleChange({ ...base, targetEmail: "other@apmgservices.com.au", nextRoles: ["sales"] }),
     ).toBe("self");
   });
 
-  it("blocks demoting the last remaining admin", () => {
+  it("blocks taking admin from the last remaining admin", () => {
     expect(
       denyRoleChange({
         actorEmail: "someone@apmgservices.com.au",
         targetEmail: "solo@apmgservices.com.au",
-        nextRole: "sales",
+        nextRoles: ["sales"],
         adminEmails: ["solo@apmgservices.com.au"],
       }),
     ).toBe("last-admin");
   });
 
-  it("allows a normal promotion", () => {
+  it("blocks revoking the last remaining admin outright", () => {
     expect(
-      denyRoleChange({ ...base, targetEmail: "nicole@apmgservices.com.au", nextRole: "sales" }),
+      denyRoleChange({
+        actorEmail: "someone@apmgservices.com.au",
+        targetEmail: "solo@apmgservices.com.au",
+        nextRoles: [],
+        adminEmails: ["solo@apmgservices.com.au"],
+      }),
+    ).toBe("last-admin");
+  });
+
+  it("allows the last admin to gain roles while staying admin", () => {
+    // Adding Sales to the only admin must not read as demoting them — this is
+    // the case a naive "did the set change?" check would refuse.
+    expect(
+      denyRoleChange({
+        actorEmail: "someone@apmgservices.com.au",
+        targetEmail: "solo@apmgservices.com.au",
+        nextRoles: ["admin", "sales"],
+        adminEmails: ["solo@apmgservices.com.au"],
+      }),
     ).toBeNull();
   });
 
-  it("allows setting the main admin to admin (a no-op change)", () => {
+  it("allows demoting an admin while another admin remains", () => {
     expect(
-      denyRoleChange({ ...base, targetEmail: MAIN_ADMIN_EMAIL, nextRole: "admin" }),
+      denyRoleChange({
+        actorEmail: "someone@apmgservices.com.au",
+        targetEmail: "one@apmgservices.com.au",
+        nextRoles: ["sales"],
+        adminEmails: ["one@apmgservices.com.au", "two@apmgservices.com.au"],
+      }),
+    ).toBeNull();
+  });
+
+  it("allows a normal grant", () => {
+    expect(
+      denyRoleChange({
+        ...base,
+        targetEmail: "nicole@apmgservices.com.au",
+        nextRoles: ["sales", "client"],
+      }),
+    ).toBeNull();
+  });
+
+  it("allows revoking somebody who is not an admin", () => {
+    expect(
+      denyRoleChange({ ...base, targetEmail: "nicole@apmgservices.com.au", nextRoles: [] }),
     ).toBeNull();
   });
 
   it("compares case-insensitively", () => {
     expect(
-      denyRoleChange({ ...base, targetEmail: MAIN_ADMIN_EMAIL.toUpperCase(), nextRole: "client" }),
+      denyRoleChange({
+        ...base,
+        targetEmail: MAIN_ADMIN_EMAIL.toUpperCase(),
+        nextRoles: ["client"],
+      }),
     ).toBe("main-admin");
   });
 });

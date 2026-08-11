@@ -2,10 +2,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const getUserRole = vi.fn();
+const getUserRoles = vi.fn();
 const touchLastSeen = vi.fn();
 vi.mock("@/lib/auth/userStore", () => ({
-  getUserRole: (...a: unknown[]) => getUserRole(...a),
+  getUserRoles: (...a: unknown[]) => getUserRoles(...a),
   touchLastSeen: (...a: unknown[]) => touchLastSeen(...a),
 }));
 
@@ -42,7 +42,7 @@ beforeAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getUserRole.mockResolvedValue("sales");
+  getUserRoles.mockResolvedValue(["sales"]);
   touchLastSeen.mockResolvedValue("ok");
 });
 
@@ -88,13 +88,13 @@ describe("POST /api/auth/heartbeat — who may be marked present", () => {
   });
 
   it("attributes a view-as preview to the admin actually at the keyboard", async () => {
-    getUserRole.mockResolvedValue("admin");
+    getUserRoles.mockResolvedValue(["admin"]);
     await POST(await beatAs(ADMIN, undefined, "sales"));
     expect(touchLastSeen).toHaveBeenCalledWith(ADMIN);
   });
 
-  it("lets a revoked (pending) user beat — presence is not a permission", async () => {
-    getUserRole.mockResolvedValue("pending");
+  it("lets a revoked (no-roles) user beat — presence is not a permission", async () => {
+    getUserRoles.mockResolvedValue([]);
     const rep = freshRep();
     const res = await POST(await beatAs(rep));
     expect(res.status).toBe(200);

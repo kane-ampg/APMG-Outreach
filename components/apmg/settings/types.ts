@@ -7,15 +7,20 @@ import type { Role } from "@/lib/rbac/roles";
  * Deliberately wider than `AppUserRow`, because the pane shows people who have
  * no `app_users` row at all — colleagues pulled from the Workspace directory
  * who have never signed in, and addresses an admin typed into "Add by email"
- * this session. `role: null` means exactly that: no stored row, so no stored
- * role. It is NOT the same as `role: "pending"`, which is a deliberate
- * revocation an admin performed.
+ * this session.
+ *
+ * `roles: null` and `roles: []` are DIFFERENT and must stay that way. `null`
+ * means there is no stored row, so nothing has been decided — signing in would
+ * grant them the default. `[]` means a row exists whose roles an admin
+ * deliberately cleared, which is revocation. Collapsing the two would render a
+ * revoked colleague as "Sales on first sign-in".
  */
 export interface Person {
   email: string;
   name: string | null;
-  /** `null` when this person has no app_users row yet. */
-  role: Role | null;
+  /** Every role held. `null` when this person has no app_users row at all;
+   *  `[]` when they have one and an admin revoked their access. */
+  roles: Role[] | null;
   department: string | null;
   lastLoginAt: string | null;
   /**
@@ -41,7 +46,7 @@ export function personFromAppUser(row: AppUserRow): Person {
   return {
     email: row.email,
     name: row.name,
-    role: row.role,
+    roles: row.roles,
     department: null,
     lastLoginAt: row.last_login_at,
     lastSeenAt: row.last_seen_at,

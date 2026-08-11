@@ -6,29 +6,32 @@ import { useRbac } from "@/lib/rbac/RbacProvider";
 import { requestViewAs } from "@/lib/rbac/viewAs";
 import { ROLES, type Role } from "@/lib/rbac/roles";
 
-// Admin is listed first as the way back to the real console — selecting it
-// clears the preview rather than setting a viewAs claim (see selectRole), so
-// it's an alternative to ViewAsBanner's Exit, not a no-op. Pending is left
-// out: it holds no permissions, so previewing it just shows an empty shell.
+// The whole catalog, admin first as the way back to the real console.
+// Selecting the role you already lead with clears the preview rather than
+// setting a viewAs claim (see selectRole), so it is an alternative to
+// ViewAsBanner's Exit, not a no-op.
 const PREVIEW_ROLES: readonly Role[] = ["admin", "sales", "client"];
 
 /**
- * Lets an admin preview the console as another role. Rendering here is a UI
- * convenience only — POST /api/auth/view-as re-checks roleCan(trueRole,
- * "roles.viewas") itself, so a forged request from a non-admin is refused
- * regardless of what this component does or doesn't show.
+ * Lets an admin preview the console as ONE other role. A preview is
+ * deliberately single-role even for a user who holds several: the point is to
+ * see what a colleague with that one role sees.
+ *
+ * Rendering here is a UI convenience only — POST /api/auth/view-as re-checks
+ * rolesCan(trueRoles, "roles.viewas") itself, so a forged request from a
+ * non-admin is refused regardless of what this component does or doesn't show.
  */
 export function RoleSwitcher() {
-  const { role, trueRole, canViewAs } = useRbac();
+  const { previewing, trueRole, canViewAs } = useRbac();
   const [pending, setPending] = useState(false);
 
   if (!canViewAs) return null;
 
   async function selectRole(next: Role) {
     setPending(true);
-    // Picking your own role means "stop previewing", so send null (exit)
-    // rather than a viewAs claim that would resolve to the same role anyway
-    // — this keeps the session cookie free of a redundant claim.
+    // Picking the role they normally lead with means "stop previewing", so
+    // send null (exit) rather than a viewAs claim — which also restores every
+    // OTHER role they hold, instead of pinning them to just this one.
     const ok = await requestViewAs(next === trueRole ? null : next);
     if (!ok) setPending(false);
   }
@@ -41,7 +44,10 @@ export function RoleSwitcher() {
       <div className="flex gap-1">
         {PREVIEW_ROLES.map((r) => {
           const def = ROLES[r];
-          const isActive = r === role;
+          // While previewing, the previewed role is active. Otherwise the one
+          // they lead with — a user holding Admin + Sales is not "in" either
+          // preview, and highlighting both would suggest they were.
+          const isActive = previewing ? r === previewing : r === trueRole;
           return (
             <button
               key={r}

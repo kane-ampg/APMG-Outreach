@@ -183,11 +183,20 @@ export function LegalLink({
                     <div
                       className={cn(
                         "text-sm leading-relaxed text-muted-foreground",
-                        "[&_a]:text-primary [&_a]:underline [&_h1]:mb-2 [&_h1]:mt-6 [&_h1]:font-heading [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:text-foreground [&_h1:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-5 [&_h2]:font-heading [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground [&_h2:first-child]:mt-0 [&_li]:mb-1 [&_p]:mb-3 [&_strong]:text-foreground [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5",
+                        "[&_a]:text-primary [&_a]:underline [&_h1]:mb-1.5 [&_h1]:mt-5 [&_h1]:font-heading [&_h1]:text-base [&_h1]:font-semibold [&_h1]:text-foreground [&_h1:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-5 [&_h2]:font-heading [&_h2]:text-base [&_h2]:font-semibold [&_h2]:text-foreground [&_h2:first-child]:mt-0 [&_li]:mb-1 [&_p]:mb-3 [&_strong]:text-foreground [&_ul]:mb-3 [&_ul]:list-disc [&_ul]:pl-5",
                       )}
                       // Operator-authored, lawyer-reviewed policy text from the
                       // Legal Documents store (trusted source — same as the
                       // enquiry modal and the /portal/terms page).
+                      //
+                      // [&_h1] is styled identically to [&_h2] on purpose, and
+                      // must stay in step with LegalDocPage, which carries the
+                      // full reasoning: the stored document repeats its own title
+                      // as a heading, and this surface already titles itself (the
+                      // dialog's h2 in the header above), so an injected h1 is
+                      // rendered as an ordinary section heading rather than a
+                      // second, larger title inside the scroll region. Same HTML
+                      // in two places must not render at two heading scales.
                       dangerouslySetInnerHTML={{ __html: html }}
                     />
                   ) : (
@@ -204,7 +213,13 @@ export function LegalLink({
                     rel="noopener"
                     className="text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
                   >
-                    Open as full page ↗
+                    {/* SC 1.3.1: the bare ↗ is presentation, not content, but it
+                        sat in the text node so screen readers appended "north
+                        east arrow" to the link's accessible name. Hiding just the
+                        glyph leaves the name as exactly the visible "Open as full
+                        page", which also keeps SC 2.5.3 (Label in Name) satisfied
+                        — the visible words are still the whole name. */}
+                    Open as full page <span aria-hidden="true">↗</span>
                   </a>
                 </div>
               </motion.div>

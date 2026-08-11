@@ -28,20 +28,20 @@ vi.mock("@/lib/auth/session", async (importOriginal) => {
   return { ...actual, verifySession: vi.fn() };
 });
 
-// getUserRole is the only export lib/rbac/server.ts uses from this module;
+// getUserRoles is the only export lib/rbac/server.ts uses from this module;
 // a full replacement avoids ever touching Supabase or the network.
-vi.mock("@/lib/auth/userStore", () => ({ getUserRole: vi.fn() }));
+vi.mock("@/lib/auth/userStore", () => ({ getUserRoles: vi.fn() }));
 
 import { SESSION_COOKIE, verifySession, type SessionClaims } from "@/lib/auth/session";
-import { getUserRole } from "@/lib/auth/userStore";
+import { getUserRoles } from "@/lib/auth/userStore";
 import { guardResponse, requirePermission, resolveSession } from "./server";
 
 const mockVerifySession = vi.mocked(verifySession);
-const mockGetUserRole = vi.mocked(getUserRole);
+const mockGetUserRoles = vi.mocked(getUserRoles);
 
 beforeEach(() => {
   mockVerifySession.mockReset();
-  mockGetUserRole.mockReset();
+  mockGetUserRoles.mockReset();
 });
 
 function reqWithCookie(cookieHeader?: string): Request {
@@ -60,7 +60,7 @@ describe("resolveSession", () => {
     const session = await resolveSession(reqWithCookie(undefined));
     expect(session).toBeNull();
     expect(mockVerifySession).toHaveBeenCalledWith(undefined);
-    expect(mockGetUserRole).not.toHaveBeenCalled();
+    expect(mockGetUserRoles).not.toHaveBeenCalled();
   });
 
   it("returns null when verifySession rejects the token (garbage/tampered/expired)", async () => {
@@ -68,19 +68,19 @@ describe("resolveSession", () => {
     const session = await resolveSession(reqWithCookie(`${SESSION_COOKIE}=garbage-token`));
     expect(session).toBeNull();
     expect(mockVerifySession).toHaveBeenCalledWith("garbage-token");
-    expect(mockGetUserRole).not.toHaveBeenCalled();
+    expect(mockGetUserRoles).not.toHaveBeenCalled();
   });
 
   it("reads the session cookie correctly when other cookies surround it", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("rep@apmgservices.com.au"));
-    mockGetUserRole.mockResolvedValue("sales");
+    mockGetUserRoles.mockResolvedValue(["sales"]);
     await resolveSession(reqWithCookie(`foo=1; ${SESSION_COOKIE}=valid-token; bar=2`));
     expect(mockVerifySession).toHaveBeenCalledWith("valid-token");
   });
 
   it("decodes a percent-encoded cookie value before verifying it (Important 1 regression)", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("rep@apmgservices.com.au"));
-    mockGetUserRole.mockResolvedValue("sales");
+    mockGetUserRoles.mockResolvedValue(["sales"]);
     // %2F is "/". A raw, undecoded read would hand verifySession "abc%2Fdef"
     // instead — the same encode/decode mismatch that silently broke the
     // OAuth `next` cookie one commit earlier in this branch.
@@ -90,21 +90,25 @@ describe("resolveSession", () => {
 
   it("forged viewAs cannot escalate: a real 'sales' claiming viewAs:admin still resolves to sales", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("rep@apmgservices.com.au", "admin"));
-    mockGetUserRole.mockResolvedValue("sales");
+    mockGetUserRoles.mockResolvedValue(["sales"]);
     const session = await resolveSession(reqWithCookie(`${SESSION_COOKIE}=valid-token`));
     expect(session).toEqual({
       email: "rep@apmgservices.com.au",
+      trueRoles: ["sales"],
+      roles: ["sales"], // NOT admin — the single most important case in the file
       trueRole: "sales",
-      role: "sales", // NOT "admin" — this is the single most important case in the file
+      role: "sales",
     });
   });
 
   it("legitimate view-as: a real admin viewing as sales resolves to sales", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("kane@apmgservices.com.au", "sales"));
-    mockGetUserRole.mockResolvedValue("admin");
+    mockGetUserRoles.mockResolvedValue(["admin"]);
     const session = await resolveSession(reqWithCookie(`${SESSION_COOKIE}=valid-token`));
     expect(session).toEqual({
       email: "kane@apmgservices.com.au",
+      trueRoles: ["admin"],
+      roles: ["sales"],
       trueRole: "admin",
       role: "sales",
     });
@@ -127,9 +131,9 @@ describe("requirePermission", () => {
     expect(guard).toEqual({ ok: false, status: 401, error: expect.any(String) });
   });
 
-  it("403s a valid session whose stored role is pending — never a pass", async () => {
+  it("403s a valid session that holds NO roles — never a pass", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("new-hire@apmgservices.com.au"));
-    mockGetUserRole.mockResolvedValue("pending");
+    mockGetUserRoles.mockResolvedValue([]);
     const guard = await requirePermission(
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "sales.view",
@@ -139,15 +143,17 @@ describe("requirePermission", () => {
 
   it("allows a real role that holds the permission, returning that role and email", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("rep@apmgservices.com.au"));
-    mockGetUserRole.mockResolvedValue("sales");
+    mockGetUserRoles.mockResolvedValue(["sales"]);
     const guard = await requirePermission(
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "sales.view",
     );
     expect(guard).toEqual({
       ok: true,
+      roles: ["sales"],
       role: "sales",
       email: "rep@apmgservices.com.au",
+      trueRoles: ["sales"],
       trueRole: "sales",
       actingAs: null,
     });
@@ -155,7 +161,7 @@ describe("requirePermission", () => {
 
   it("403s a real role that does not hold the permission", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("rep@apmgservices.com.au"));
-    mockGetUserRole.mockResolvedValue("sales");
+    mockGetUserRoles.mockResolvedValue(["sales"]);
     const guard = await requirePermission(
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "users.manage", // admin-only; sales does not hold it
@@ -165,7 +171,7 @@ describe("requirePermission", () => {
 
   it("forged viewAs: sales claiming viewAs:admin is refused an admin-only permission", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("rep@apmgservices.com.au", "admin"));
-    mockGetUserRole.mockResolvedValue("sales");
+    mockGetUserRoles.mockResolvedValue(["sales"]);
     const guard = await requirePermission(
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "users.manage",
@@ -175,7 +181,7 @@ describe("requirePermission", () => {
 
   it("legitimate view-as: admin viewing as sales gets sales's access", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("kane@apmgservices.com.au", "sales"));
-    mockGetUserRole.mockResolvedValue("admin");
+    mockGetUserRoles.mockResolvedValue(["admin"]);
     const guard = await requirePermission(
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "sales.view",
@@ -184,8 +190,10 @@ describe("requirePermission", () => {
     // able to say this was kane@ wearing that hat, not the rep whose seat it is.
     expect(guard).toEqual({
       ok: true,
+      roles: ["sales"],
       role: "sales",
       email: "kane@apmgservices.com.au",
+      trueRoles: ["admin"],
       trueRole: "admin",
       actingAs: "sales",
     });
@@ -193,7 +201,7 @@ describe("requirePermission", () => {
 
   it("legitimate view-as: admin viewing as sales loses admin-only access", async () => {
     mockVerifySession.mockResolvedValue(claimsFor("kane@apmgservices.com.au", "sales"));
-    mockGetUserRole.mockResolvedValue("admin");
+    mockGetUserRoles.mockResolvedValue(["admin"]);
     const guard = await requirePermission(
       reqWithCookie(`${SESSION_COOKIE}=valid-token`),
       "users.manage",

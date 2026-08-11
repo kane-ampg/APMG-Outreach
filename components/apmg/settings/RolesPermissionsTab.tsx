@@ -5,6 +5,7 @@ import { AlertTriangle, Check, CloudOff, Loader2, RefreshCw, ShieldAlert } from 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import type { AppUserRow } from "@/lib/auth/userStore";
+import { isOnline } from "@/lib/auth/signIn";
 import { useServerClock } from "@/lib/auth/usePresence";
 import { ROLES, type Role } from "@/lib/rbac/roles";
 import { Reveal } from "../Reveal";
@@ -39,7 +40,7 @@ interface ApiState {
   actorEmail: string;
   mainAdminEmail: string;
   allowedDomain: string;
-  defaultRoleOnSignIn: Role;
+  defaultRolesOnSignIn: Role[];
   assignableRoles: Role[];
   users: AppUserRow[];
   usersError?: boolean;
@@ -65,6 +66,21 @@ type Load =
   | { status: "error"; error: string }
   | ({ status: "ready" } & ApiState);
 
+/**
+ * What to say after a save. States the resulting SET rather than the one role
+ * that changed — "Kane is now Admin" would be a half-truth for somebody who
+ * also holds Sales, and the set is what the admin needs to confirm.
+ */
+function savedMessage(email: string, roles: readonly Role[], created: boolean): string {
+  if (roles.length === 0) {
+    return `${email} now holds no roles, so their console access is revoked.`;
+  }
+  const labels = roles.map((r) => ROLES[r].label).join(" + ");
+  return created
+    ? `${email} will be ${labels} — waiting for their first sign-in.`
+    : `${email} now holds ${labels}.`;
+}
+
 /** Roughly two presence beats — often enough that somebody arriving shows up
  *  promptly, rarely enough to be invisible in load terms. */
 const ROSTER_POLL_MS = 60_000;
@@ -78,6 +94,8 @@ export interface RosterStats {
    *  in and were never meant to, and counting them would drown the ones whose
    *  granted access is sitting unused. */
   neverSignedIn: number;
+  /** On the console right now, by heartbeat. Never inferred from a sign-in. */
+  online: number;
 }
 
 export function RolesPermissionsTab({
@@ -162,7 +180,7 @@ export function RolesPermissionsTab({
         merged.set(d.email, {
           email: d.email,
           name: d.name,
-          role: null,
+          roles: null,
           department: d.department,
           lastLoginAt: null,
           lastSeenAt: null,
@@ -178,7 +196,7 @@ export function RolesPermissionsTab({
       merged.set(email, {
         email,
         name: null,
-        role: null,
+        roles: null,
         department: null,
         lastLoginAt: null,
         lastSeenAt: null,
@@ -194,13 +212,14 @@ export function RolesPermissionsTab({
     () => ({
       directory: people.length,
       // "With roles" counts real access, so pending — a revocation — is not one.
-      withRoles: people.filter((p) => p.role && p.role !== "pending").length,
-      pending: people.filter((p) => p.role === "pending").length,
-      neverSignedIn: people.filter(
-        (p) => p.role && p.role !== "pending" && !p.lastLoginAt,
-      ).length,
+      // A stored row with an EMPTY set is a revocation; `null` is somebody the
+      // directory knows about who has no row at all. Only the first is "revoked".
+      withRoles: people.filter((p) => (p.roles?.length ?? 0) > 0).length,
+      pending: people.filter((p) => p.roles !== null && p.roles.length === 0).length,
+      neverSignedIn: people.filter((p) => (p.roles?.length ?? 0) > 0 && !p.lastLoginAt).length,
+      online: people.filter((p) => isOnline(p, now)).length,
     }),
-    [people],
+    [people, now],
   );
 
   useEffect(() => {
@@ -222,7 +241,7 @@ export function RolesPermissionsTab({
       if (!email) return "Enter an email address.";
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return "That doesn't look like an email address.";
       if (!email.endsWith(`@${load.allowedDomain}`)) {
-        return `Only @${load.allowedDomain} addresses can be given a role — anyone else is refused at sign-in.`;
+        return `Only @${load.allowedDomain} addresses can be given roles — anyone else is refused at sign-in.`;
       }
       if (people.some((p) => p.email === email)) {
         setSelectedEmail(email);
@@ -235,26 +254,33 @@ export function RolesPermissionsTab({
     [load, people],
   );
 
-  async function assignRole(person: Person, role: Role) {
+  /**
+   * Turn one role on or off, by submitting the person's WHOLE resulting set.
+   *
+   * The API replaces the set rather than applying a delta, so the request has
+   * to carry the full intended state. Building it from `person.roles` — the
+   * server's last word, not a local copy — means a tick can never be computed
+   * from a stale set, and `savingRole` blocks a second toggle while one is in
+   * flight so two writes can't race to decide the same column.
+   */
+  async function toggleRole(person: Person, role: Role, next: boolean) {
+    const held = person.roles ?? [];
+    const nextRoles = next ? [...new Set([...held, role])] : held.filter((r) => r !== role);
+
     setSaving({ email: person.email, role });
     setNotice(null);
     try {
       const res = await fetch("/api/admin/users", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: person.email, role }),
+        body: JSON.stringify({ email: person.email, roles: nextRoles }),
       });
       const body = (await res.json().catch(() => ({}))) as { error?: string; created?: boolean };
       if (!res.ok) {
         setNotice({ kind: "err", text: body.error ?? `Couldn't save (${res.status}).` });
         return;
       }
-      setNotice({
-        kind: "ok",
-        text: body.created
-          ? `${person.email} will be ${ROLES[role].label} — the role is waiting for their first sign-in.`
-          : `${person.email} is now ${ROLES[role].label}.`,
-      });
+      setNotice({ kind: "ok", text: savedMessage(person.email, nextRoles, body.created === true) });
       await refresh();
     } catch {
       setNotice({ kind: "err", text: "Couldn't reach the server." });
@@ -387,10 +413,11 @@ export function RolesPermissionsTab({
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
           <PeopleList
             people={people}
+            now={now}
             selectedEmail={selectedEmail}
             assignableRoles={load.assignableRoles}
             allowedDomain={load.allowedDomain}
-            defaultRoleOnSignIn={load.defaultRoleOnSignIn}
+            defaultRolesOnSignIn={load.defaultRolesOnSignIn}
             suspendedHidden={
               load.directory.state === "synced" ? load.directory.suspendedHidden : 0
             }
@@ -402,12 +429,13 @@ export function RolesPermissionsTab({
           />
           <RoleAssignments
             person={selectedPerson}
+            now={now}
             actorEmail={load.actorEmail}
             mainAdminEmail={load.mainAdminEmail}
             assignableRoles={load.assignableRoles}
-            defaultRoleOnSignIn={load.defaultRoleOnSignIn}
+            defaultRolesOnSignIn={load.defaultRolesOnSignIn}
             savingRole={saving?.email === selectedPerson?.email ? (saving?.role ?? null) : null}
-            onAssign={(p, role) => void assignRole(p, role)}
+            onToggleRole={(p, role, next) => void toggleRole(p, role, next)}
           />
         </div>
       </Reveal>

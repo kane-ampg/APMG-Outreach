@@ -43,6 +43,14 @@ const ICONS = {
  * real before they enquire; live socials are third-party-checkable proof, so
  * this sits on the customer-facing portal (hero + footer). Clicks land in the
  * lead's telemetry trail as `portal_social_click` with the network as a prop.
+ *
+ * SIZING CONTRACT: preflight renders the glyph as a block, so the anchor's box
+ * IS the icon unless the caller pads it — a bare linkClassName yields a 16px
+ * target and fails SC 2.5.8 (Target Size Minimum). Every call site must pass
+ * padding that brings the anchor to 24x24 or more: the hero uses p-2 on a
+ * 14-16px glyph (30-34px) and the footer p-1.5 on 14px (26px). Pass the
+ * padding through linkClassName rather than iconClassName — growing the glyph
+ * instead would change the visual weight of both surfaces.
  */
 export function SocialLinks({
   className,

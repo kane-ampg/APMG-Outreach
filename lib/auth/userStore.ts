@@ -1,83 +1,143 @@
 import { supabaseTarget } from "@/lib/pipeline/server";
 import { MAIN_ADMIN_EMAIL } from "@/lib/auth/policy";
-import { isRole, type Role } from "@/lib/rbac/roles";
+import { parseRoles, type Role } from "@/lib/rbac/roles";
 
 /**
  * All app_users access. Server-only (uses the service-role key).
  *
+ * A user holds a SET of roles. Every read funnels through `parseRoles`, so
+ * anything the database hands back that enforcement does not recognise -- a
+ * typo, a role retired from the catalog, the old 'pending' value -- becomes
+ * "no roles" rather than a guess. The failure direction is always "no access".
+ *
  * DEMO MODE: local development frequently runs without Supabase configured
  * (supabaseTarget() -> "demo"), and auth must not hard-fail there or the app
  * becomes undevelopable. In demo mode the main admin resolves to admin and
- * every other authenticated address to pending, with no persistence.
+ * every other authenticated address to no roles, with no persistence.
  */
 
 const TABLE = "app_users";
 
 /**
- * The role a first-time Google sign-in lands on.
+ * The roles a first-time Google sign-in lands on.
  *
- * A MIRROR of `app_users.role`'s column default in supabase/app-users.sql —
+ * A MIRROR of the `app_users.roles` column default in supabase/app-users.sql —
  * the database is what actually applies it, since `upsertOnLogin` deliberately
  * never writes the column. Kept here so the Settings screen can say "Sales on
  * first sign-in" out loud instead of rendering somebody who has never signed in
  * as though they had no access coming. Change the SQL and this together.
  */
-export const DEFAULT_SIGNUP_ROLE: Role = "sales";
+export const DEFAULT_SIGNUP_ROLES: readonly Role[] = ["sales"];
 
 function authHeaders(key: string): Record<string, string> {
   return { apikey: key, Authorization: `Bearer ${key}` };
 }
 
-function demoRole(email: string): Role {
-  return email.trim().toLowerCase() === MAIN_ADMIN_EMAIL ? "admin" : "pending";
+function demoRoles(email: string): Role[] {
+  return email.trim().toLowerCase() === MAIN_ADMIN_EMAIL ? ["admin"] : [];
 }
 
-/** The user's stored role. Unknown or unreadable resolves to `pending` — the
+/**
+ * Whether `app_users.roles` exists yet: `null` = not yet known, `false` = the
+ * multi-role migration hasn't been run against this database.
+ *
+ * See `rolesFromLegacyColumn` for why a fallback exists at all.
+ */
+let rolesColumn: boolean | null = null;
+
+/** PostgREST reports an unknown column as 42703 / "does not exist". Matched on
+ *  the column name too, so an unrelated 42703 is never mistaken for this. */
+function isMissingRolesColumn(detail: string): boolean {
+  return (
+    detail.includes("app_users.roles") &&
+    (detail.includes("42703") || detail.includes("does not exist"))
+  );
+}
+
+/**
+ * LEGACY FALLBACK — delete once supabase/app-users.sql has been run everywhere.
+ *
+ * The singular `role` column read as a one-element set, with the retired
+ * 'pending' mapping to no roles. This exists because `roles` is a hard
+ * dependency of every access decision: without a fallback, deploying this code
+ * against an un-migrated database resolves EVERY user — including the main
+ * admin — to no roles, and the only person who could fix it is locked out of
+ * the screen that fixes it. Failing closed is the right instinct everywhere
+ * else; here it would fail closed on the recovery path too.
+ *
+ * Unlike the presence fallback, this one is load-bearing for authorization, so
+ * it is deliberately narrow: it triggers only on a confirmed missing-column
+ * error, reads only the old column, and passes through `parseRoles` like every
+ * other path.
+ */
+function rolesFromLegacyColumn(role: unknown): Role[] {
+  return parseRoles([role]);
+}
+
+/** The roles this user holds. Unknown or unreadable resolves to NO roles — the
  *  failure direction must be "no access", never "admin". */
-export async function getUserRole(email: string): Promise<Role> {
+export async function getUserRoles(email: string): Promise<Role[]> {
   const key = email.trim().toLowerCase();
   const target = supabaseTarget();
-  if (target.state !== "ok") return demoRole(key);
+  if (target.state !== "ok") return demoRoles(key);
+  const where = `email=eq.${encodeURIComponent(key)}`;
   try {
-    const res = await fetch(
-      `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(key)}&select=role&limit=1`,
+    if (rolesColumn !== false) {
+      const res = await fetch(
+        `${target.base}/rest/v1/${TABLE}?${where}&select=roles&limit=1`,
+        { headers: authHeaders(target.key), cache: "no-store" },
+      );
+      if (res.ok) {
+        rolesColumn = true;
+        const rows = (await res.json().catch(() => [])) as Array<{ roles?: unknown }>;
+        return parseRoles(rows[0]?.roles);
+      }
+      const detail = await res.text().catch(() => "");
+      if (!isMissingRolesColumn(detail)) return [];
+      console.warn(
+        "[auth] app_users.roles is missing — run supabase/app-users.sql. " +
+          "Falling back to the legacy single `role` column until then.",
+      );
+      rolesColumn = false;
+    }
+    const legacy = await fetch(
+      `${target.base}/rest/v1/${TABLE}?${where}&select=role&limit=1`,
       { headers: authHeaders(target.key), cache: "no-store" },
     );
-    if (!res.ok) return "pending";
-    const rows = (await res.json().catch(() => [])) as Array<{ role: string }>;
-    const role = rows[0]?.role;
-    return isRole(role) ? role : "pending";
+    if (!legacy.ok) return [];
+    const rows = (await legacy.json().catch(() => [])) as Array<{ role?: unknown }>;
+    return rolesFromLegacyColumn(rows[0]?.role);
   } catch {
-    return "pending";
+    return [];
   }
 }
 
 /**
- * Record a sign-in: create the row on first sight (at the column's `pending`
- * default), refresh the profile fields, stamp `last_login_at`.
+ * Record a sign-in: create the row on first sight (at the column's default),
+ * refresh the profile fields, stamp `last_login_at`.
  *
- * `role` is NEVER written here, and that is structural, not incidental.
- * `getUserRole` collapses every failure — 5xx, rate limit, schema-cache reload,
- * a dropped connection — into `"pending"`, which is indistinguishable from a
- * genuinely pending user. Reading the role and writing it back through an
- * upsert would therefore demote a real admin to `pending` on a transient blip
- * during their own sign-in, locking out the very account that must never be
- * lockable. Splitting this into an insert that ignores conflicts plus a PATCH
- * that omits `role` makes that class of bug impossible rather than guarded
- * against: no code path here can write the column at all. Roles change only by
- * explicit admin action.
+ * `roles` is NEVER written here, and that is structural, not incidental.
+ * `getUserRoles` collapses every failure - 5xx, rate limit, schema-cache
+ * reload, a dropped connection - into `[]`, which is indistinguishable from a
+ * genuinely revoked user. Reading the roles and writing them back through an
+ * upsert would therefore wipe a real admin's access on a transient blip during
+ * their own sign-in, locking out the very account that must never be lockable.
+ * Splitting this into an insert that ignores conflicts plus a PATCH that omits
+ * `roles` makes that class of bug impossible rather than guarded against: no
+ * code path here can write the column at all. Roles change only by explicit
+ * admin action.
  */
 export async function upsertOnLogin(u: {
   email: string;
   name?: string;
   picture?: string;
-}): Promise<Role> {
+}): Promise<Role[]> {
   const email = u.email.trim().toLowerCase();
   const target = supabaseTarget();
-  if (target.state !== "ok") return demoRole(email);
+  if (target.state !== "ok") return demoRoles(email);
 
   // First sight only. `ignore-duplicates` leaves an existing row untouched, so
-  // a returning user's stored role is never in the write path.
+  // a returning user's stored roles are never in the write path.
   try {
     const res = await fetch(`${target.base}/rest/v1/${TABLE}?on_conflict=email`, {
       method: "POST",
@@ -96,7 +156,7 @@ export async function upsertOnLogin(u: {
     console.error("[auth] app_users insert failed:", e);
   }
 
-  // Profile refresh — deliberately no `role` key in this body.
+  // Profile refresh - deliberately no `roles` key in this body.
   try {
     const res = await fetch(
       `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(email)}`,
@@ -122,17 +182,18 @@ export async function upsertOnLogin(u: {
     console.error("[auth] app_users profile refresh failed:", e);
   }
 
-  // Read the role back rather than assuming it. A failure here returns
-  // "pending", which is only used to seed the starting theme — never persisted
-  // — so a blip costs a dark theme, not an account.
-  return getUserRole(email);
+  // Read the roles back rather than assuming them. A failure here returns [],
+  // which is only used to seed the starting theme - never persisted - so a
+  // blip costs a dark theme, not an account.
+  return getUserRoles(email);
 }
 
 export interface AppUserRow {
   email: string;
   name: string | null;
   picture_url: string | null;
-  role: Role;
+  /** Every role this user holds. Empty means revoked - see lib/rbac/roles.ts. */
+  roles: Role[];
   created_at: string;
   last_login_at: string | null;
   /**
@@ -144,29 +205,29 @@ export interface AppUserRow {
    * added to stop.
    */
   last_seen_at: string | null;
-  /** Set when an admin pre-assigned this role before the person ever signed
-   *  in. Display-only: `last_login_at === null` is what "never signed in"
+  /** Set when an admin pre-assigned roles before the person ever signed in.
+   *  Display-only: `last_login_at === null` is what "never signed in"
    *  actually means. */
   invited_by: string | null;
 }
 
 /**
- * Pre-assign a role to somebody who has never signed in ("Add by email").
+ * Pre-assign roles to somebody who has never signed in ("Add by email").
  *
  * A plain INSERT, not an upsert, and that matters: `Prefer:
  * resolution=merge-duplicates` would stamp `invited_by` onto an EXISTING row,
  * relabelling a colleague who signed in normally months ago as though an admin
  * had invited them. Callers establish non-existence first and treat the
  * duplicate-key case as the race it is — see the PATCH handler, which falls
- * back to `setUserRole`.
+ * back to `setUserRoles`.
  *
- * Writing `role` here is safe in a way it is not in `upsertOnLogin`: this runs
- * only from an explicit admin action that names the role, never from a read
- * that could have failed closed to "pending".
+ * Writing `roles` here is safe in a way it is not in `upsertOnLogin`: this runs
+ * only from an explicit admin action that names the roles, never from a read
+ * that could have failed closed to "no access".
  */
-export async function createUserWithRole(args: {
+export async function createUserWithRoles(args: {
   email: string;
-  role: Role;
+  roles: readonly Role[];
   invitedBy: string;
 }): Promise<"ok" | "demo" | "conflict" | "error"> {
   const target = supabaseTarget();
@@ -181,12 +242,12 @@ export async function createUserWithRole(args: {
         Prefer: "return=minimal",
       },
       body: JSON.stringify([
-        { email, role: args.role, invited_by: args.invitedBy.trim().toLowerCase() },
+        { email, roles: [...args.roles], invited_by: args.invitedBy.trim().toLowerCase() },
       ]),
     });
     if (res.ok) return "ok";
     // 23505 = unique_violation. Two admins adding the same address at once:
-    // the row now exists, so the caller can simply set the role on it.
+    // the row now exists, so the caller can simply set the roles on it.
     const detail = await res.text().catch(() => "");
     if (res.status === 409 || detail.includes("23505")) return "conflict";
     console.error(`[auth] app_users invite ${res.status}:`, detail.slice(0, 500));
@@ -208,10 +269,12 @@ export async function createUserWithRole(args: {
  */
 let presenceColumn: boolean | null = null;
 
-const LIST_COLUMNS = "email,name,picture_url,role,created_at,last_login_at,invited_by";
+const LIST_COLUMNS = "email,name,picture_url,created_at,last_login_at,invited_by";
 
-function listUrl(base: string, withPresence: boolean): string {
-  const select = withPresence ? `${LIST_COLUMNS},last_seen_at` : LIST_COLUMNS;
+function listUrl(base: string, withPresence: boolean, withRoles: boolean): string {
+  // `role` (singular) is the legacy fallback — see rolesFromLegacyColumn.
+  const select =
+    `${LIST_COLUMNS},${withRoles ? "roles" : "role"}` + (withPresence ? ",last_seen_at" : "");
   return `${base}/rest/v1/${TABLE}?select=${select}&order=last_login_at.desc.nullslast`;
 }
 
@@ -270,10 +333,10 @@ export async function touchLastSeen(email: string): Promise<"ok" | "demo" | "mis
 }
 
 /**
- * Every console user, most-recent sign-in first. Rows whose stored role is not
- * in the catalog are coerced to `pending` rather than dropped — an operator
- * needs to SEE a row with a bad role in order to fix it, and hiding it would
- * make the account invisible while it still exists.
+ * Every console user, most-recent sign-in first. Stored roles the catalog does
+ * not recognise are dropped from the set by `parseRoles`, but the ROW is never
+ * dropped — an operator needs to SEE an account with a broken role in order to
+ * fix it, and hiding it would make the account invisible while it still exists.
  *
  * Returns the literal `"error"` — never `[]` — when the query itself fails
  * (non-2xx response or a thrown error). `[]` is reserved for the demo/
@@ -288,35 +351,54 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
   const target = supabaseTarget();
   if (target.state !== "ok") return [];
   try {
-    let res = await fetch(listUrl(target.base, presenceColumn !== false), {
+    // Two columns here are newer than this code's first deployment, so a
+    // console pointed at a database that hasn't run supabase/app-users.sql must
+    // still render its roster — otherwise the screen an admin would use to fix
+    // things is the one thing they cannot open. Each missing column downgrades
+    // the SELECT once and retries; anything else is a genuine error.
+    //
+    // The loop reads each failure body EXACTLY once. An earlier version had two
+    // sequential `if (!res.ok)` blocks that each called `res.text()`, and the
+    // second always saw an already-consumed body — silently disabling the
+    // second fallback.
+    let res = await fetch(listUrl(target.base, presenceColumn !== false, rolesColumn !== false), {
       headers: authHeaders(target.key),
       cache: "no-store",
     });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      // The presence column is newer than this code's first deployment, so a
-      // console pointed at a database that hasn't run the migration must still
-      // render its roster. Falling through to "error" here would black out the
-      // whole Roles and Permissions screen over one optional column.
-      if (presenceColumn !== false && isMissingPresenceColumn(detail)) {
+    let lastDetail = "";
+    // At most two downgrades are possible, so this cannot spin.
+    for (let attempt = 0; attempt < 2 && !res.ok; attempt += 1) {
+      lastDetail = await res.text().catch(() => "");
+      let downgraded = false;
+      if (rolesColumn !== false && isMissingRolesColumn(lastDetail)) {
+        console.warn(
+          "[auth] app_users.roles is missing — run supabase/app-users.sql. " +
+            "Reading the legacy single `role` column until then.",
+        );
+        rolesColumn = false;
+        downgraded = true;
+      }
+      if (presenceColumn !== false && isMissingPresenceColumn(lastDetail)) {
         console.warn(
           "[auth] app_users.last_seen_at is missing — run supabase/app-users.sql. " +
             "Presence will read as 'never observed online' until then.",
         );
         presenceColumn = false;
-        res = await fetch(listUrl(target.base, false), {
-          headers: authHeaders(target.key),
-          cache: "no-store",
-        });
+        downgraded = true;
       }
-      if (!res.ok) {
-        const retryDetail = await res.text().catch(() => "");
-        console.error(`[auth] app_users list ${res.status}:`, (retryDetail || detail).slice(0, 500));
-        return "error";
-      }
-    } else if (presenceColumn === null) {
-      presenceColumn = true;
+      if (!downgraded) break;
+      res = await fetch(listUrl(target.base, presenceColumn !== false, rolesColumn !== false), {
+        headers: authHeaders(target.key),
+        cache: "no-store",
+      });
     }
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => "")) || lastDetail;
+      console.error(`[auth] app_users list ${res.status}:`, detail.slice(0, 500));
+      return "error";
+    }
+    if (presenceColumn === null) presenceColumn = true;
+    if (rolesColumn === null) rolesColumn = true;
     const rows = (await res.json().catch(() => [])) as unknown;
     if (!Array.isArray(rows)) return [];
     return rows.map((r) => {
@@ -325,7 +407,8 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
         email: typeof row.email === "string" ? row.email : "",
         name: typeof row.name === "string" ? row.name : null,
         picture_url: typeof row.picture_url === "string" ? row.picture_url : null,
-        role: isRole(row.role) ? row.role : "pending",
+        // `role` is only present on the legacy fallback read.
+        roles: rolesColumn === false ? rolesFromLegacyColumn(row.role) : parseRoles(row.roles),
         created_at: typeof row.created_at === "string" ? row.created_at : "",
         last_login_at: typeof row.last_login_at === "string" ? row.last_login_at : null,
         last_seen_at: typeof row.last_seen_at === "string" ? row.last_seen_at : null,
@@ -339,7 +422,13 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
 }
 
 /**
- * Change one user's role.
+ * Replace one user's whole role set.
+ *
+ * REPLACE, not merge, and that is the point: the Settings screen shows every
+ * role with a tick, so what the admin submits IS the intended final state.
+ * Merging would make unticking a role impossible to express, and an "add one /
+ * remove one" API would let two admins editing the same person interleave into
+ * a set neither of them chose.
  *
  * Callers MUST have run `denyRoleChange` first — this function deliberately
  * enforces nothing, so that every lockout rule lives in exactly one tested
@@ -349,9 +438,9 @@ export async function listUsers(): Promise<AppUserRow[] | "error"> {
  * `return=representation`: a silent no-op on a typo'd address would otherwise
  * look identical to success.
  */
-export async function setUserRole(
+export async function setUserRoles(
   email: string,
-  role: Role,
+  roles: readonly Role[],
 ): Promise<"ok" | "demo" | "missing" | "error"> {
   const target = supabaseTarget();
   if (target.state !== "ok") return "demo";
@@ -365,18 +454,18 @@ export async function setUserRole(
           "Content-Type": "application/json",
           Prefer: "return=representation",
         },
-        body: JSON.stringify({ role }),
+        body: JSON.stringify({ roles: [...roles] }),
       },
     );
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      console.error(`[auth] app_users role update ${res.status}:`, detail.slice(0, 500));
+      console.error(`[auth] app_users roles update ${res.status}:`, detail.slice(0, 500));
       return "error";
     }
     const rows = (await res.json().catch(() => [])) as unknown;
     return Array.isArray(rows) && rows.length > 0 ? "ok" : "missing";
   } catch (e) {
-    console.error("[auth] app_users role update failed:", e);
+    console.error("[auth] app_users roles update failed:", e);
     return "error";
   }
 }

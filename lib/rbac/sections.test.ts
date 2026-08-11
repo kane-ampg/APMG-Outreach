@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { NAV } from "@/lib/nav";
 import { ALL_PERMISSIONS, type Permission } from "./permissions";
-import { PERMISSION_SECTIONS, sectionGrantsForRole } from "./sections";
+import { PERMISSION_SECTIONS, sectionGrantsForRole, sectionGrantsForRoles } from "./sections";
 import { assignableRoles, permissionsForRole, roleCan } from "./roles";
 
 const sectioned = PERMISSION_SECTIONS.flatMap((s) => s.permissions.map((p) => p.perm));
@@ -66,11 +66,24 @@ describe("sectionGrantsForRole", () => {
     }
   });
 
-  it("marks pending as empty in every section", () => {
-    for (const grant of sectionGrantsForRole("pending")) {
+  it("marks every section empty for a role holding nothing", () => {
+    // There is no longer a `pending` role to stand in for "no access" — the
+    // empty ROLE SET is that state, and it grants nothing in any section.
+    for (const grant of sectionGrantsForRoles([])) {
       expect(grant.empty).toBe(true);
       expect(grant.granted).toEqual([]);
     }
+  });
+
+  it("unions the grants of several roles", () => {
+    // Sales cannot see the Leads tab and Client cannot see the Sales queue;
+    // somebody holding both must show BOTH in the Monitor and Sell sections,
+    // or the screen would understate what they can actually reach.
+    const both = sectionGrantsForRoles(["client", "sales"]);
+    const perms = both.flatMap((g) => g.granted.map((p) => p.perm));
+    expect(perms).toContain("leads.view");
+    expect(perms).toContain("sales.view");
+    expect(new Set(perms).size).toBe(perms.length);
   });
 
   it("marks no section empty for admin, which holds everything", () => {

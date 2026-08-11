@@ -7,15 +7,15 @@ import { requestViewAs } from "@/lib/rbac/viewAs";
 import { ROLES } from "@/lib/rbac/roles";
 
 /**
- * Keyed off trueRole, not the effective role — an admin previewing any
- * non-admin role (every role but their own) would otherwise have no way
- * back, since none of those roles hold roles.viewas themselves.
+ * Keyed off `canViewAs` (which reads their TRUE roles) rather than the
+ * effective set — an admin previewing any non-admin role would otherwise have
+ * no way back, since none of those roles hold roles.viewas themselves.
  */
 export function ViewAsBanner() {
-  const { role, trueRole, canViewAs } = useRbac();
+  const { previewing, canViewAs } = useRbac();
   const [exiting, setExiting] = useState(false);
 
-  if (!canViewAs || role === trueRole) return null;
+  if (!canViewAs || !previewing) return null;
 
   async function exit() {
     setExiting(true);
@@ -29,7 +29,7 @@ export function ViewAsBanner() {
       className="relative z-[60] flex shrink-0 items-center justify-center gap-3 bg-primary-solid px-3 py-1.5 text-xs font-medium text-primary-foreground"
     >
       <span>
-        Viewing as <span className="font-semibold">{ROLES[role].label}</span>
+        Viewing as <span className="font-semibold">{ROLES[previewing].label}</span>
       </span>
       <Button
         type="button"

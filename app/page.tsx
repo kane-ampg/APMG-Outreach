@@ -16,7 +16,9 @@ export default async function Page() {
   // means the cookie expired between the two — send them back to the door.
   const session = await resolveSession(new Request("http://local/", { headers: await headers() }));
   if (!session) return <PendingAccess email="unknown" />;
-  if (session.role === "pending") return <PendingAccess email={session.email} />;
+  // No roles is the revoked/not-yet-granted state, and the only one — there is
+  // no longer a `pending` role that could contradict what else they hold.
+  if (session.roles.length === 0) return <PendingAccess email={session.email} />;
 
   // Prefer the Google-provided display name carried in the session cookie;
   // fall back to an email-derived name for a session minted before this
@@ -31,7 +33,7 @@ export default async function Page() {
   };
 
   return (
-    <RbacProvider role={session.role} trueRole={session.trueRole}>
+    <RbacProvider roles={session.roles} trueRoles={session.trueRoles}>
       <SalesProvider>
         <DashboardShell user={user} />
       </SalesProvider>

@@ -14,9 +14,11 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { ROLES, type Role } from "@/lib/rbac/roles";
 import {
+  PRESENCE_WINDOW_MS,
   SIGN_IN_LABEL,
+  agoText,
   exactTime,
-  lastSignIn,
+  lastSeenIso,
   signInStatus,
   type SignInStatus,
 } from "@/lib/auth/signIn";
@@ -34,12 +36,19 @@ import { displayName, initialsFor, relativeTime } from "./types";
 
 const PAGE_SIZE = 10;
 
+/** Holds at least one role. `null` (no stored row) and `[]` (revoked) are both
+ *  "no roles" for filtering purposes, even though they read differently. */
+function hasAnyRole(person: Person): boolean {
+  return (person.roles?.length ?? 0) > 0;
+}
+
 export function PeopleList({
   people,
+  now,
   selectedEmail,
   assignableRoles,
   allowedDomain,
-  defaultRoleOnSignIn,
+  defaultRolesOnSignIn,
   suspendedHidden,
   syncedAt,
   refreshing,
@@ -48,11 +57,14 @@ export function PeopleList({
   onAddEmail,
 }: {
   people: readonly Person[];
+  /** Server-frame clock (see useServerClock). Every presence decision on this
+   *  screen is made against it, never against Date.now(). */
+  now: number;
   selectedEmail: string | null;
   assignableRoles: readonly Role[];
   allowedDomain: string;
   /** What a first sign-in lands on — mirrored from the server, never assumed. */
-  defaultRoleOnSignIn: Role;
+  defaultRolesOnSignIn: readonly Role[];
   /** Suspended/archived domain accounts the directory left out. */
   suspendedHidden: number;
   /** When the Workspace directory was last read, or null if it wasn't. */
@@ -84,10 +96,15 @@ export function PeopleList({
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return people.filter((p) => {
-      if (withRolesOnly && !p.role) return false;
-      if (roleFilter === "none" && p.role) return false;
-      if (roleFilter !== "all" && roleFilter !== "none" && p.role !== roleFilter) return false;
-      if (signInFilter !== "all" && signInStatus(p.lastLoginAt) !== signInFilter) return false;
+      // `roleFilter` asks "does this person HOLD role X?", which for a set is
+      // membership rather than equality — an admin who is also Sales must
+      // appear under both.
+      if (withRolesOnly && !hasAnyRole(p)) return false;
+      if (roleFilter === "none" && hasAnyRole(p)) return false;
+      if (roleFilter !== "all" && roleFilter !== "none" && !(p.roles ?? []).includes(roleFilter)) {
+        return false;
+      }
+      if (signInFilter !== "all" && signInStatus(p, now) !== signInFilter) return false;
       if (deptFilter !== "all" && p.department !== deptFilter) return false;
       if (!q) return true;
       return (
@@ -96,7 +113,7 @@ export function PeopleList({
         (p.department ?? "").toLowerCase().includes(q)
       );
     });
-  }, [people, search, roleFilter, signInFilter, deptFilter, withRolesOnly]);
+  }, [people, now, search, roleFilter, signInFilter, deptFilter, withRolesOnly]);
 
   // Clamp rather than reset: an admin who filters a 4-page list down to 1 page
   // while sitting on page 3 should land on the last page that still has rows,
@@ -105,16 +122,22 @@ export function PeopleList({
   const safePage = Math.min(page, pageCount);
   const pageRows = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
   const customCount = people.filter((p) => p.source === "custom").length;
-  const withRoles = people.filter((p) => p.role).length;
+  const withRoles = people.filter(hasAnyRole).length;
 
   // Counted across the whole roster rather than the current page, because the
   // question these answer — "how many of these accounts is nobody using?" —
   // is asked before any filter is applied, not after.
   const signInCounts = useMemo(() => {
-    const counts: Record<SignInStatus, number> = { active: 0, dormant: 0, never: 0, unknown: 0 };
-    for (const p of people) counts[signInStatus(p.lastLoginAt)] += 1;
+    const counts: Record<SignInStatus, number> = {
+      online: 0,
+      recent: 0,
+      dormant: 0,
+      never: 0,
+      unknown: 0,
+    };
+    for (const p of people) counts[signInStatus(p, now)] += 1;
     return counts;
-  }, [people]);
+  }, [people, now]);
 
   function resetToFirstPage<T>(apply: (value: T) => void) {
     return (value: T) => {
@@ -255,16 +278,17 @@ export function PeopleList({
               {ROLES[r].label}
             </option>
           ))}
-          <option value="none">No role yet</option>
+          <option value="none">No roles</option>
         </select>
         <select
           value={signInFilter}
           onChange={(e) => resetToFirstPage(setSignInFilter)(e.target.value as "all" | SignInStatus)}
-          aria-label="Filter by sign-in status"
+          aria-label="Filter by online and sign-in status"
           className="h-8 shrink-0 rounded-lg border border-border bg-background px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <option value="all">Any sign-in</option>
-          <option value="active">Active ({signInCounts.active})</option>
+          <option value="all">Any status</option>
+          <option value="online">Online now ({signInCounts.online})</option>
+          <option value="recent">Signed in recently ({signInCounts.recent})</option>
           <option value="dormant">Dormant ({signInCounts.dormant})</option>
           <option value="never">Never signed in ({signInCounts.never})</option>
           {/* Only offered when such a row exists — an option that can only ever
@@ -316,8 +340,9 @@ export function PeopleList({
               <PersonRow
                 key={p.email}
                 person={p}
+                now={now}
                 selected={p.email === selectedEmail}
-                defaultRoleOnSignIn={defaultRoleOnSignIn}
+                defaultRolesOnSignIn={defaultRolesOnSignIn}
                 onSelect={() => onSelect(p)}
               />
             ))}
@@ -369,13 +394,15 @@ export function PeopleList({
 
 function PersonRow({
   person,
+  now,
   selected,
-  defaultRoleOnSignIn,
+  defaultRolesOnSignIn,
   onSelect,
 }: {
   person: Person;
+  now: number;
   selected: boolean;
-  defaultRoleOnSignIn: Role;
+  defaultRolesOnSignIn: readonly Role[];
   onSelect: () => void;
 }) {
   return (
@@ -414,86 +441,120 @@ function PersonRow({
               {person.department}
             </span>
           )}
-          <SignInLine person={person} />
+          <SignInLine person={person} now={now} />
         </span>
-        <RoleChip person={person} defaultRoleOnSignIn={defaultRoleOnSignIn} />
+        <RoleChips person={person} defaultRolesOnSignIn={defaultRolesOnSignIn} />
       </button>
     </li>
   );
 }
 
-/** Dot colours per sign-in state. Never is hollow rather than grey-filled: an
- *  account that has never been used is an absence, not a third activity level. */
+/**
+ * Dot colours.
+ *
+ * GREEN IS RESERVED FOR `online` AND NOTHING ELSE. Every other state is a
+ * statement about the past and is coloured like one — someone who signed in an
+ * hour ago is grey, not green, because they are not here now. `never` is
+ * hollow rather than grey-filled: an account nobody has ever used is an
+ * absence, not a quieter grade of activity.
+ */
 const DOT: Record<SignInStatus, string> = {
-  active: "bg-emerald-500",
+  online: "bg-emerald-500",
+  recent: "bg-muted-foreground/50",
   dormant: "bg-amber-500",
   never: "border border-muted-foreground/50",
   unknown: "bg-muted-foreground/50",
 };
 
+/** Seconds, for the tooltip that explains what green actually promises. */
+const PRESENCE_WINDOW_SECONDS = Math.round(PRESENCE_WINDOW_MS / 1000);
+
 /**
- * "Active · 2h ago" under each row.
+ * The status line under each row: "Online now", or "Signed in · 2h ago".
  *
- * The word is about their LAST SIGN-IN, never about a live session — nothing in
- * this app knows who is signed in at this moment (the cookie is a stateless
- * 12-hour JWT with no server-side registry), so nothing here says so. The exact
- * timestamp is on the tooltip, since the relative form is the readable one but
- * the absolute one is what an access review needs.
+ * `Online now` comes from a heartbeat sent by an open console tab within the
+ * last PRESENCE_WINDOW_SECONDS, and from nothing else — a sign-in five seconds
+ * ago still reads grey. The tooltip states the window out loud so the claim
+ * can be checked rather than trusted.
  */
-function SignInLine({ person }: { person: Person }) {
-  const status = signInStatus(person.lastLoginAt);
+function SignInLine({ person, now }: { person: Person; now: number }) {
+  const status = signInStatus(person, now);
+  const online = status === "online";
+  const seen = lastSeenIso(person);
   return (
     <span
-      className="mt-1 flex items-center gap-1.5 text-[10px] text-muted-foreground"
+      className={cn(
+        "mt-1 flex items-center gap-1.5 text-[10px]",
+        online ? "font-medium text-emerald-700 dark:text-emerald-400" : "text-muted-foreground",
+      )}
       title={
-        person.lastLoginAt
-          ? `Last signed in ${exactTime(person.lastLoginAt)}`
-          : "No sign-in has ever been recorded for this address."
+        online
+          ? `Has the console open — last heartbeat ${exactTime(person.lastSeenAt)}. Goes grey within ${PRESENCE_WINDOW_SECONDS}s of the tab closing.`
+          : seen
+            ? `Last seen ${exactTime(seen)}. Not on the console now.`
+            : "No sign-in has ever been recorded for this address."
       }
     >
-      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT[status])} aria-hidden />
+      <span
+        className={cn(
+          "h-1.5 w-1.5 shrink-0 rounded-full",
+          DOT[status],
+          // Only the live state moves. A pulsing dot reads as "happening now",
+          // so anything else wearing it would be the same lie as the colour.
+          online && "animate-pulse",
+        )}
+        aria-hidden
+      />
       <span className="truncate">
         {SIGN_IN_LABEL[status]}
-        {status !== "never" && ` · ${lastSignIn(person.lastLoginAt)}`}
+        {status !== "never" && !online && ` · ${agoText(seen, now)}`}
       </span>
     </span>
   );
 }
 
 /**
- * The role column, and the one place this screen has to be careful about
+ * The roles column, and the one place this screen has to be careful about
  * telling the truth.
  *
- * A person with no `app_users` row has no role — but they are NOT "no access".
- * `app_users.role` defaults to 'sales', so the moment they sign in with Google
- * they become a rep. Rendering that as "No roles" would be a lie an admin
- * could reasonably act on, so the default is spelled out instead.
+ * THREE STATES, NOT TWO. Somebody with no `app_users` row has no roles, but
+ * they are NOT revoked: `roles` defaults to Sales, so the moment they sign in
+ * with Google they become a rep. Somebody whose row exists with an EMPTY set
+ * is the opposite — an admin took their access away. Rendering both as "No
+ * roles" would be a lie an admin could reasonably act on, so each says what it
+ * actually means.
  */
-function RoleChip({
+function RoleChips({
   person,
-  defaultRoleOnSignIn,
+  defaultRolesOnSignIn,
 }: {
   person: Person;
-  defaultRoleOnSignIn: Role;
+  defaultRolesOnSignIn: readonly Role[];
 }) {
-  if (!person.role) {
+  if (person.roles === null) {
     return (
       <span className="shrink-0 whitespace-nowrap rounded-full border border-dashed border-border px-1.5 py-px text-[10px] font-medium text-muted-foreground">
-        {ROLES[defaultRoleOnSignIn].label} on first sign-in
+        {defaultRolesOnSignIn.map((r) => ROLES[r].label).join(" + ") || "No roles"} on first sign-in
       </span>
     );
   }
-  const isPending = person.role === "pending";
+  if (person.roles.length === 0) {
+    return (
+      <span className="shrink-0 whitespace-nowrap rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+        No access
+      </span>
+    );
+  }
   return (
-    <span
-      className={cn(
-        "shrink-0 whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold",
-        isPending
-          ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
-          : "bg-muted text-foreground",
-      )}
-    >
-      {ROLES[person.role].label}
+    <span className="flex shrink-0 flex-wrap justify-end gap-1">
+      {person.roles.map((r) => (
+        <span
+          key={r}
+          className="whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px] font-semibold text-foreground"
+        >
+          {ROLES[r].label}
+        </span>
+      ))}
     </span>
   );
 }
