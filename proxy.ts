@@ -22,9 +22,12 @@ import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
  */
 
 // Exact customer hostnames (comma-separated env override wins). The Vercel
-// project URL is the default; add a custom domain here once it's attached.
+// project URL plus the customer-facing custom domain are the defaults; a host
+// missing from this list is treated as an admin host, so the auth gate would
+// bounce a client to /login instead of the portal — add every hostname a
+// client is ever given, not just the one Vercel generated.
 const CUSTOMER_HOSTS = (process.env.CUSTOMER_PORTAL_HOSTS ||
-  "customers-apmg-services.vercel.app")
+  "customers-apmg-services.vercel.app,customer.apmgservices.com.au")
   .split(",")
   .map((h) => h.trim().toLowerCase())
   .filter(Boolean);
