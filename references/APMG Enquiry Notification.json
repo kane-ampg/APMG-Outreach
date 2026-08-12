@@ -3,18 +3,17 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## APMG - Enquiry Notification\n\n**Trigger:** the app POSTs a landed portal enquiry here (app/api/portal/inquiries), so you get emailed when someone submits the services-portal form.\n\n**Setup (once):**\n1. Open **Send Notification** and select your Gmail (OAuth2) credential.\n2. (Recommended) Send Webhook node > Authentication > Header Auth (header `x-apmg-secret`), and set the same value as `N8N_WEBHOOK_SECRET` in the app env.\n3. Activate, copy the **Production URL**, and paste it on the app's Integrations tab > Enquiry Notification card. Set the notification email(s) there too - comma-separated for multiple recipients.\n\n**Request body:** `{ notifyTo, enquiry: { id, service, name, email, phone, message, business, category, campaign, source } }`\n**Response:** `{ ok: true }`\n\n`notifyTo` is ONE address or a COMMA-SEPARATED LIST. With a list, every recipient gets the same single email and they all appear on the To: line - one Gmail send, not one per person. The Gmail node splits `sendTo` on commas itself, so this workflow needs no changes to support multiple recipients.\n\nThe customer's email is shown in the body with a one-click Reply button.",
-        "height": 560,
-        "width": 460,
-        "color": 4
+        "content": "## APMG Enquiry Notification\n\nPOST /webhook/enquiry-notify\n\nBody: { notifyTo, enquiry: { id, service, name, email, phone, message,\nbusiness, category, campaign, source } }\n\n`notifyTo` may be a comma-separated list - the Gmail node splits it and puts\nevery recipient on ONE To: header, so a list costs one Gmail send, not one\nper address. No re-paste needed when the operator adds addresses.\n\nNOTE: this webhook has NO authentication. The app already sends the\nx-apmg-secret header; adding Header Auth here would close it.",
+        "height": 440,
+        "width": 470
       },
-      "id": "a1111111-1111-4111-8111-111111111111",
+      "id": "sticky-34013637",
       "name": "Sticky Note",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        0,
-        100
+        2740,
+        380
       ]
     },
     {
@@ -24,27 +23,27 @@
         "responseMode": "responseNode",
         "options": {}
       },
-      "id": "a2222222-2222-4222-8222-222222222222",
-      "name": "Send Webhook",
+      "id": "72601c44-d1ec-4e63-a3b2-023ee8e54207",
+      "name": "Send Enquiry",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        0,
-        640
+        3232,
+        4592
       ],
       "webhookId": "b1c2d3e4-f5a6-4b7c-8d9e-0f1a2b3c4d5e"
     },
     {
       "parameters": {
-        "jsCode": "// Format one landed portal enquiry into an internal notification email.\n// Body in:  { notifyTo, enquiry: { id, service, name, email, phone, message, business, category, campaign, source } }\n// Body out: { to, subject, html }\n// The customer's own email is set as replyTo-style content in the body; the\n// email is SENT to notifyTo (the operator's configured address, or a\n// comma-separated list of them). `to` is passed through verbatim - the Gmail\n// node splits it on commas and puts every recipient on one To: header, so a\n// list costs one Gmail send, not one per recipient.\n\nconst BRAND = { color: \"#c8102e\" };\n\nconst esc = (s) =>\n  (s == null ? \"\" : s.toString())\n    .replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\")\n    .replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\");\n\nconst first = $input.first().json;\nconst body = first.body ?? first;\nconst to = (body.notifyTo || \"\").toString().trim();\nconst e = (body.enquiry && typeof body.enquiry === \"object\") ? body.enquiry : {};\n\n// Guard: without a destination address there is nothing to send.\nif (!to) { return []; }\n\nconst svc = esc(e.service || \"General enquiry\");\nconst name = esc(e.name || \"(not given)\");\nconst email = esc(e.email || \"(not given)\");\nconst phone = esc(e.phone || \"(not given)\");\nconst business = esc(e.business || \"\");\nconst category = esc(e.category || \"\");\nconst campaign = esc(e.campaign || \"\");\nconst message = esc(e.message || \"\").replace(/\\n/g, \"<br>\");\n\nconst subject = \"New enquiry: \" + (e.service || \"General\") + (e.name ? \" - \" + e.name : \"\");\n\nfunction row(label, val) {\n  if (!val || val === \"(not given)\") {\n    val = '<span style=\"color:#9ca3af;\">' + (val || \"-\") + '</span>';\n  }\n  return '<tr>' +\n    '<td style=\"padding:6px 12px 6px 0;font-size:13px;color:#6b7280;white-space:nowrap;vertical-align:top;\">' + label + '</td>' +\n    '<td style=\"padding:6px 0;font-size:14px;color:#111111;\">' + val + '</td>' +\n  '</tr>';\n}\n\nconst html =\n'<!doctype html><html><head><meta charset=\"utf-8\"></head>' +\n'<body style=\"margin:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Roboto,Helvetica,Arial,sans-serif;\">' +\n'<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"padding:24px 12px;\"><tr><td align=\"center\">' +\n'<table role=\"presentation\" width=\"560\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:560px;width:100%;background:#fff;border-radius:12px;overflow:hidden;\">' +\n'<tr><td style=\"background:#111;padding:16px 24px;color:#fff;font-size:16px;font-weight:700;\">New portal enquiry</td></tr>' +\n'<tr><td style=\"height:3px;background:' + BRAND.color + ';font-size:0;line-height:0;\">&nbsp;</td></tr>' +\n'<tr><td style=\"padding:20px 24px;\">' +\n'<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\">' +\nrow(\"Service\", svc) +\nrow(\"Name\", name) +\nrow(\"Email\", '<a href=\"mailto:' + email + '\" style=\"color:' + BRAND.color + ';\">' + email + '</a>') +\nrow(\"Phone\", phone) +\n(business ? row(\"Business\", business) : \"\") +\n(category ? row(\"Category\", category) : \"\") +\n(campaign ? row(\"Campaign\", campaign) : \"\") +\n'</table>' +\n'<div style=\"margin-top:16px;padding-top:14px;border-top:1px solid #ececec;\">' +\n'<div style=\"font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;\">Message</div>' +\n'<div style=\"font-size:14px;color:#111;line-height:1.6;\">' + (message || '<span style=\"color:#9ca3af;\">(no message)</span>') + '</div>' +\n'</div>' +\n'<div style=\"margin-top:18px;\">' +\n'<a href=\"mailto:' + email + '?subject=' + encodeURIComponent(\"Re: your APMG Services enquiry\") + '\" ' +\n'style=\"display:inline-block;background:' + BRAND.color + ';color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 20px;border-radius:8px;\">Reply to customer</a>' +\n'</div>' +\n'</td></tr>' +\n'<tr><td style=\"background:#fafafa;border-top:1px solid #ececec;padding:14px 24px;font-size:11px;color:#9ca3af;\">' +\n'APMG Services - automated enquiry notification. Reply directly to the customer at the address above.' +\n'</td></tr>' +\n'</table></td></tr></table></body></html>';\n\nreturn [{ json: { to, subject, html } }];\n"
+        "jsCode": "// Format one landed portal enquiry into an internal notification email.\n// Body in:  { notifyTo, enquiry: { id, service, name, email, phone, message, business, category, campaign, source } }\n// Body out: { to, subject, html }\n// The customer's own email is set as replyTo-style content in the body; the\n// email is SENT to notifyTo (the operator's configured address, or a\n// comma-separated list of them). `to` is passed through verbatim - the Gmail\n// node splits it on commas and puts every recipient on one To: header, so a\n// list costs one Gmail send, not one per recipient.\n\nconst BRAND = { color: \"#c8102e\" };\n\nconst esc = (s) =>\n  (s == null ? \"\" : s.toString())\n    .replace(/&/g, \"&amp;\").replace(/</g, \"&lt;\")\n    .replace(/>/g, \"&gt;\").replace(/\"/g, \"&quot;\");\n\nconst first = $input.first().json;\nconst body = first.body ?? first;\nconst to = (body.notifyTo || \"\").toString().trim();\nconst e = (body.enquiry && typeof body.enquiry === \"object\") ? body.enquiry : {};\n\n// Guard: without a destination address there is nothing to send.\nif (!to) { return []; }\n\nconst svc = esc(e.service || \"General enquiry\");\nconst name = esc(e.name || \"(not given)\");\nconst email = esc(e.email || \"(not given)\");\nconst phone = esc(e.phone || \"(not given)\");\nconst business = esc(e.business || \"\");\nconst category = esc(e.category || \"\");\nconst campaign = esc(e.campaign || \"\");\nconst source = esc(e.source || \"\");\nconst message = esc(e.message || \"\").replace(/\\n/g, \"<br>\");\n\nconst subject = \"New enquiry: \" + (e.service || \"General\") + (e.name ? \" - \" + e.name : \"\");\n\nfunction row(label, val) {\n  if (!val || val === \"(not given)\") {\n    val = '<span style=\"color:#9ca3af;\">' + (val || \"-\") + '</span>';\n  }\n  return '<tr>' +\n    '<td style=\"padding:6px 12px 6px 0;font-size:13px;color:#6b7280;white-space:nowrap;vertical-align:top;\">' + label + '</td>' +\n    '<td style=\"padding:6px 0;font-size:14px;color:#111111;\">' + val + '</td>' +\n  '</tr>';\n}\n\nconst html =\n'<!doctype html><html><head><meta charset=\"utf-8\"></head>' +\n'<body style=\"margin:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Roboto,Helvetica,Arial,sans-serif;\">' +\n'<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"padding:24px 12px;\"><tr><td align=\"center\">' +\n'<table role=\"presentation\" width=\"560\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:560px;width:100%;background:#fff;border-radius:12px;overflow:hidden;\">' +\n'<tr><td style=\"background:#111;padding:16px 24px;color:#fff;font-size:16px;font-weight:700;\">New portal enquiry</td></tr>' +\n'<tr><td style=\"height:3px;background:' + BRAND.color + ';font-size:0;line-height:0;\">&nbsp;</td></tr>' +\n'<tr><td style=\"padding:20px 24px;\">' +\n'<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\">' +\nrow(\"Service\", svc) +\nrow(\"Name\", name) +\nrow(\"Email\", '<a href=\"mailto:' + email + '\" style=\"color:' + BRAND.color + ';\">' + email + '</a>') +\nrow(\"Phone\", phone) +\n(business ? row(\"Business\", business) : \"\") +\n(category ? row(\"Category\", category) : \"\") +\n(campaign ? row(\"Campaign\", campaign) : \"\") +\n(source ? row(\"Source\", source) : \"\") +\n'</table>' +\n'<div style=\"margin-top:16px;padding-top:14px;border-top:1px solid #ececec;\">' +\n'<div style=\"font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;\">Message</div>' +\n'<div style=\"font-size:14px;color:#111;line-height:1.6;\">' + (message || '<span style=\"color:#9ca3af;\">(no message)</span>') + '</div>' +\n'</div>' +\n'<div style=\"margin-top:18px;\">' +\n'<a href=\"mailto:' + email + '?subject=' + encodeURIComponent(\"Re: your APMG Services enquiry\") + '\" ' +\n'style=\"display:inline-block;background:' + BRAND.color + ';color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:10px 20px;border-radius:8px;\">Reply to customer</a>' +\n'</div>' +\n'</td></tr>' +\n'<tr><td style=\"background:#fafafa;border-top:1px solid #ececec;padding:14px 24px;font-size:11px;color:#9ca3af;\">' +\n'APMG Services - automated enquiry notification. Reply directly to the customer at the address above.' +\n'</td></tr>' +\n'</table></td></tr></table></body></html>';\n\nreturn [{ json: { to, subject, html } }];\n"
       },
-      "id": "a3333333-3333-4333-8333-333333333333",
+      "id": "01320253-4d8b-4121-b805-bc2394c312ce",
       "name": "Format Enquiry",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        260,
-        640
+        3536,
+        4592
       ]
     },
     {
@@ -57,14 +56,21 @@
           "appendAttribution": false
         }
       },
-      "id": "a4444444-4444-4444-8444-444444444444",
+      "id": "7959452c-32a6-49a0-8cb4-94bba46188a1",
       "name": "Send Notification",
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
       "position": [
-        520,
-        640
+        3776,
+        4592
       ],
+      "webhookId": "5a7173c6-8564-49d0-8479-f5709339ed33",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "kskI74Hc193Yl8SU",
+          "name": "APMG - Official Lead Gen Mail"
+        }
+      },
       "onError": "continueRegularOutput"
     },
     {
@@ -73,18 +79,18 @@
         "responseBody": "={{ { ok: true } }}",
         "options": {}
       },
-      "id": "a5555555-5555-4555-8555-555555555555",
+      "id": "f2647a5e-255c-4adf-a391-32019a86a480",
       "name": "Respond OK",
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        780,
-        640
+        4048,
+        4592
       ]
     }
   ],
   "connections": {
-    "Send Webhook": {
+    "Send Enquiry": {
       "main": [
         [
           {
@@ -118,7 +124,9 @@
       ]
     }
   },
+  "pinData": {},
   "meta": {
-    "templateCredsSetupCompleted": false
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6b20b77d7a3fd2e31fd7b0cb44dc61b514009ab3b55c1ea8d1896a9a48a5c090"
   }
 }
