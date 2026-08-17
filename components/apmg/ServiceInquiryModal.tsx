@@ -79,9 +79,13 @@ export function ServiceInquiryModal({
 }: {
   service: InquiryService | null;
   onClose: () => void;
-  /** True on the public /portal host. Gates the customer-facing consent
-   *  requirement + the `consent_accept` funnel event (the internal "Our
-   *  Services" demo tab must not require consent nor pollute the funnel). */
+  /** True on the public /portal host. Gates ONLY the `consent_accept` funnel
+   *  event (the internal "Our Services" demo tab must not pollute the funnel).
+   *  The consent checkbox itself renders and gates Send on BOTH hosts: the
+   *  server refuses to store any enquiry without a valid current consent
+   *  version, and the internal tab exists to demo exactly what customers see —
+   *  a consent-less demo modal misled the operator into thinking the checkbox
+   *  was missing from the product. */
   standalone?: boolean;
 }) {
   const reduce = useReducedMotion();
@@ -171,12 +175,13 @@ export function ServiceInquiryModal({
     }
   }, [service]);
 
-  // Fetch the current published legal docs when the modal opens (customer host
-  // only — the internal demo tab neither gates nor records consent). We pin the
-  // returned `version` onto the submission; the server re-validates it against
-  // the live version, so a stale fetch can't smuggle bad consent through.
+  // Fetch the current published legal docs when the modal opens — BOTH hosts:
+  // the server requires a valid current consent version on every insert, so an
+  // internal demo submission without one would 409. We pin the returned
+  // `version` onto the submission; the server re-validates it against the live
+  // version, so a stale fetch can't smuggle bad consent through.
   useEffect(() => {
-    if (!service || !standalone) return;
+    if (!service) return;
     let cancelled = false;
     fetch("/api/portal/legal", { headers: { "Content-Type": "application/json" } })
       .then((r) => (r.ok ? r.json() : null))
@@ -191,12 +196,12 @@ export function ServiceInquiryModal({
       })
       .catch(() => {
         /* leave legal null → the consent block shows a soft "unavailable" note
-           and the submit stays gated (fail-closed) on the customer host */
+           and the submit stays gated (fail-closed) */
       });
     return () => {
       cancelled = true;
     };
-  }, [service, standalone]);
+  }, [service]);
 
   useEffect(() => {
     if (!service) return;
@@ -227,26 +232,25 @@ export function ServiceInquiryModal({
   /** Started typing but under the minimum — surface WHY Send is disabled
    *  instead of leaving a silently-dead button on a conversion-critical form. */
   const showMessageHint = messageLength > 0 && messageLength < MIN_MESSAGE;
-  /** On the customer host consent is mandatory: a real (non-placeholder) policy
-   *  must be loaded AND the box ticked. On the internal demo tab it's not
-   *  required. If the policy fetch failed or is a placeholder, consent can't be
-   *  validly given, so the gate stays closed (matches the server's fail-closed
-   *  rule) — the customer sees why. */
+  /** Consent is mandatory on BOTH hosts: a real (non-placeholder) policy must
+   *  be loaded AND the box ticked — the server refuses every insert without a
+   *  valid current version, so gating only the customer host just moved the
+   *  failure from the checkbox to a confusing post-submit error. If the policy
+   *  fetch failed or is a placeholder, consent can't be validly given, so the
+   *  gate stays closed (matches the server's fail-closed rule). */
   const consentReady = !!legal && !legal.placeholder;
-  const consentSatisfied = !standalone || (consentReady && consentChecked);
+  const consentSatisfied = consentReady && consentChecked;
   const valid = emailValid && messageLength >= MIN_MESSAGE && consentSatisfied;
   /** SC 3.3.1: the email and message gates each explain themselves inline, but
    *  an unticked consent box just left Send dead with no stated reason. This
    *  fires only once NOTHING ELSE is missing, so the hint never competes with
    *  the email/message hints for the visitor's attention — an unticked box is
    *  genuinely the one thing standing between them and a sent enquiry. Gated on
-   *  `standalone` + `consentReady` because those are the only conditions under
-   *  which ticking is possible at all (the internal host doesn't ask for
-   *  consent, and a missing/placeholder policy shows its own "unavailable" note
-   *  instead — nagging someone to tick a box that isn't rendered would be a
-   *  worse lie than silence). */
+   *  `consentReady` because that is the only condition under which ticking is
+   *  possible at all (a missing/placeholder policy shows its own "unavailable"
+   *  note instead — nagging someone to tick a box that isn't rendered would be
+   *  a worse lie than silence). */
   const consentBlocking =
-    standalone &&
     consentReady &&
     !consentChecked &&
     emailValid &&
@@ -274,10 +278,11 @@ export function ServiceInquiryModal({
           email: email.trim(),
           phone: phone.trim() || undefined,
           message: message.trim(),
-          // The pinned legal version the customer ticked (customer host only).
-          // The server re-validates it against the live published version and
-          // refuses to store PII without a valid, current match.
-          consentVersion: standalone ? legal?.version : undefined,
+          // The pinned legal version the enquirer ticked — sent from BOTH
+          // hosts, because the server re-validates it against the live
+          // published version and refuses to store PII without a valid,
+          // current match (internal demo submissions included).
+          consentVersion: legal?.version,
           // The honeypot rides along untouched; the server silently drops
           // any submission where a "visitor" filled it in.
           website,
@@ -440,8 +445,12 @@ export function ServiceInquiryModal({
                     void submit();
                   }}
                 >
-                  {/* body — capped height so the modal survives short viewports */}
-                  <div className="max-h-[min(62vh,540px)] min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+                  {/* body — no height cap of its own: the dialog's max-h + the
+                      min-h-0 flex chain shrink and scroll it on short viewports,
+                      and on roomy ones the full form shows with zero scrolling.
+                      (A vestigial max-h here used to force needless internal
+                      scroll even when the viewport had space for everything.) */}
+                  <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
                     {/* Service description — the site detail-page copy, so the
                         enquiry opens on what the trade actually covers. On
                         desktop the book's photo panel carries it (hidden here);
@@ -586,15 +595,76 @@ export function ServiceInquiryModal({
                       </p>
                     </div>
 
-                    {/* Consent gate — customer host only. Mandatory active
+                    {/* Honeypot. Visually hidden and out of the tab order —
+                        real visitors never see it, automated form-fillers do,
+                        and the server silently drops any submission that
+                        carries a value here. Never referenced in visible copy. */}
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none absolute -left-[9999px] top-0 h-px w-px overflow-hidden"
+                    >
+                      <label htmlFor="enquiry-website">Website</label>
+                      <input
+                        id="enquiry-website"
+                        name="website"
+                        type="text"
+                        tabIndex={-1}
+                        autoComplete="off"
+                        value={website}
+                        onChange={(e) => setWebsite(e.target.value)}
+                      />
+                    </div>
+
+                    {status === "error" && (
+                      /* Red discipline (§15): red icon + solid-surface text,
+                         never red text on a /10 tint. The typed values are
+                         untouched — this panel only adds a second path out. */
+                      <div
+                        ref={errorRef}
+                        tabIndex={-1}
+                        role="alert"
+                        className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-background p-3 outline-none"
+                      >
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
+                        <div className="min-w-0 text-xs leading-relaxed text-foreground">
+                          We couldn&rsquo;t send your enquiry just now. Everything you typed is
+                          still here — please try again, or{" "}
+                          <a
+                            href={mailtoFallback}
+                            data-track="portal_inquiry_mailto"
+                            data-track-service={service.slug}
+                            className="font-medium text-primary underline underline-offset-2"
+                          >
+                            email us directly
+                          </a>{" "}
+                          and we&rsquo;ll pick it up from there.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* footer. flex-wrap + each block's w-full stacks the consent
+                      gate and the hint on their own lines ABOVE the buttons
+                      without squeezing them. Everything a visitor must act on to
+                      send — the consent checkbox, the reason Send is dead, and
+                      Send itself — lives HERE, outside the scrolling body, so
+                      none of it can hide below the fold. (The checkbox used to
+                      sit at the bottom of the scrolling body; visitors who never
+                      scrolled couldn't see why their enquiry wouldn't send and
+                      walked away.) */}
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
+                    {/* Consent gate — BOTH hosts (the internal demo tab shows
+                        exactly what customers see; only the consent_accept
+                        funnel event stays customer-host-only). Mandatory active
                         opt-in to the current Terms & Privacy Policy before any
                         PII is collected. The disclosure buttons BENEATH the
                         checkbox (they used to sit inside its label — see below)
                         expand the exact published text inline so consent is
                         informed; the version is pinned onto the submission and
-                        re-checked server-side. */}
-                    {standalone && (
-                      <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+                        re-checked server-side. bg-background (not the old
+                        bg-muted/30) so the box reads as a distinct card against
+                        the footer's tinted band. */}
+                    <div className="w-full space-y-2 rounded-lg border border-border bg-background p-3">
                         {consentReady ? (
                           <>
                             {/* SC 4.1.2 + SC 1.3.1: the two doc-disclosure buttons used
@@ -668,7 +738,11 @@ export function ServiceInquiryModal({
                             {openDoc && legal && (
                               <div
                                 id="enquiry-legal-doc"
-                                className="max-h-72 overflow-y-auto rounded-md border border-border bg-background p-3.5 text-[12px] leading-relaxed text-muted-foreground [&_a]:text-primary [&_a]:underline [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-[13px] [&_h2]:font-semibold [&_h2]:text-foreground [&_h2:first-child]:mt-0 [&_p]:mb-2.5 [&_strong]:text-foreground"
+                                // Height is viewport-aware now the panel lives in the
+                                // non-scrolling footer: on short viewports (landscape
+                                // phones) a fixed 18rem would crowd out the buttons, so
+                                // it yields to 30dvh and scrolls internally instead.
+                                className="max-h-[min(18rem,30dvh)] overflow-y-auto rounded-md border border-border bg-muted/30 p-3.5 text-[12px] leading-relaxed text-muted-foreground [&_a]:text-primary [&_a]:underline [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-[13px] [&_h2]:font-semibold [&_h2]:text-foreground [&_h2:first-child]:mt-0 [&_p]:mb-2.5 [&_strong]:text-foreground"
                                 // Operator-authored, lawyer-reviewed policy text
                                 // from the Legal Documents tab (trusted source).
                                 dangerouslySetInnerHTML={{
@@ -692,62 +766,7 @@ export function ServiceInquiryModal({
                             and we&rsquo;ll help you directly.
                           </p>
                         )}
-                      </div>
-                    )}
-
-                    {/* Honeypot. Visually hidden and out of the tab order —
-                        real visitors never see it, automated form-fillers do,
-                        and the server silently drops any submission that
-                        carries a value here. Never referenced in visible copy. */}
-                    <div
-                      aria-hidden="true"
-                      className="pointer-events-none absolute -left-[9999px] top-0 h-px w-px overflow-hidden"
-                    >
-                      <label htmlFor="enquiry-website">Website</label>
-                      <input
-                        id="enquiry-website"
-                        name="website"
-                        type="text"
-                        tabIndex={-1}
-                        autoComplete="off"
-                        value={website}
-                        onChange={(e) => setWebsite(e.target.value)}
-                      />
                     </div>
-
-                    {status === "error" && (
-                      /* Red discipline (§15): red icon + solid-surface text,
-                         never red text on a /10 tint. The typed values are
-                         untouched — this panel only adds a second path out. */
-                      <div
-                        ref={errorRef}
-                        tabIndex={-1}
-                        role="alert"
-                        className="flex items-start gap-2.5 rounded-lg border border-destructive/40 bg-background p-3 outline-none"
-                      >
-                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden />
-                        <div className="min-w-0 text-xs leading-relaxed text-foreground">
-                          We couldn&rsquo;t send your enquiry just now. Everything you typed is
-                          still here — please try again, or{" "}
-                          <a
-                            href={mailtoFallback}
-                            data-track="portal_inquiry_mailto"
-                            data-track-service={service.slug}
-                            className="font-medium text-primary underline underline-offset-2"
-                          >
-                            email us directly
-                          </a>{" "}
-                          and we&rsquo;ll pick it up from there.
-                        </div>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* footer. flex-wrap + the hint's w-full puts the consent hint on
-                      its own line ABOVE the buttons without squeezing them, and it
-                      lives in the footer (not the scrolling body) so the reason Send
-                      is dead is on screen whenever Send itself is. */}
-                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
                     {/* SC 3.3.1 + SC 4.1.3: names the outstanding action instead of
                         leaving a silently-dead button, and announces itself when it
                         appears. The role="status" wrapper is mounted UNCONDITIONALLY

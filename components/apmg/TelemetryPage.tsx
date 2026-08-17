@@ -477,7 +477,7 @@ const LeadRow = memo(function LeadRow({
         <div className="flex flex-wrap items-center gap-2 border-t border-destructive/40 bg-destructive/[0.04] px-4 py-2">
           <Trash2 className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
           <span className="text-[12px] text-foreground">
-            Permanently delete {name}&rsquo;s click activity?
+            Permanently delete {name}&rsquo;s click activity and enquiries?
           </span>
           {deleteError && (
             <span role="alert" className="font-mono text-[10.5px] text-destructive">
@@ -553,18 +553,95 @@ function LeadListSkeleton() {
 
 /* ───────────────────────────  anonymous visitors card  ─────────────────────────── */
 
-function AnonymousPanel({ anonymous }: { anonymous: AnonymousActivity }) {
+function AnonymousPanel({
+  anonymous,
+  canClear,
+  onClear,
+}: {
+  anonymous: AnonymousActivity;
+  /** Live mode with something to clear — demo zeros get no destructive control. */
+  canClear: boolean;
+  /** Resolves an error message to keep the strip up, or null on success. */
+  onClear: () => Promise<string | null>;
+}) {
   const max = Math.max(1, ...anonymous.topServices.map((s) => s.opens));
+  /** Same grammar as a lead row's delete: quiet trash → confirm strip → busy. */
+  const [clearPhase, setClearPhase] = useState<null | "confirm" | "busy">(null);
+  const [clearError, setClearError] = useState<string | null>(null);
+  const confirmClear = async () => {
+    setClearPhase("busy");
+    setClearError(null);
+    const err = await onClear();
+    if (err) {
+      setClearPhase("confirm");
+      setClearError(err);
+    } else {
+      setClearPhase(null);
+    }
+  };
   return (
     <section className="flex min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10">
       <PanelHead
         title="Anonymous portal visitors"
         meta={
-          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-            untracked
+          <span className="flex items-center gap-1">
+            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+              untracked
+            </span>
+            {canClear && (
+              <button
+                type="button"
+                onClick={() => {
+                  setClearError(null);
+                  setClearPhase((p) => (p ? null : "confirm"));
+                }}
+                disabled={clearPhase === "busy"}
+                aria-label="Clear anonymous portal activity"
+                data-track="telemetry_anon_clear"
+                className="rounded p-1 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            )}
           </span>
         }
       />
+      {/* inline destructive confirm (same grammar as the lead rows) — clearing
+          wipes every unattributed portal event, so it sits behind a strip. */}
+      {clearPhase && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-destructive/40 bg-destructive/[0.04] px-4 py-2">
+          <Trash2 className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+          <span className="text-[12px] text-foreground">
+            Permanently delete all anonymous portal activity? Enquiries are kept.
+          </span>
+          {clearError && (
+            <span role="alert" className="font-mono text-[10.5px] text-destructive">
+              {clearError}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setClearPhase(null)}
+              disabled={clearPhase === "busy"}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={confirmClear}
+              disabled={clearPhase === "busy"}
+              data-track="telemetry_anon_clear_confirm"
+              className="gap-1.5"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              {clearPhase === "busy" ? "Clearing…" : "Clear"}
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="flex flex-1 flex-col px-4 py-4">
         {/* twin readouts, fused like the KPI panel */}
         <div className="grid grid-cols-2 divide-x divide-border overflow-hidden rounded-lg border border-border bg-background">
@@ -908,6 +985,29 @@ export function TelemetryPage() {
     },
     [fetchAll, removeLeadLocally],
   );
+
+  /** Clear the anonymous block server-side; zero it locally on success and
+   *  silently refetch so the KPI totals drop in the same breath. Resolves an
+   *  error message (the panel keeps its strip up) or null on success. */
+  const clearAnonymous = useCallback(async (): Promise<string | null> => {
+    try {
+      const res = await fetch("/api/portal/lead-activity?anonymous=1", {
+        method: "DELETE",
+        headers: adminHeaders(),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) return data?.error ?? `Clear failed (${res.status}).`;
+      setLoad((prev) =>
+        prev.status === "ready"
+          ? { ...prev, anonymous: { visitors: 0, events: 0, topServices: [] } }
+          : prev,
+      );
+      fetchAll({ silent: true });
+      return null;
+    } catch {
+      return "Network error while clearing anonymous activity.";
+    }
+  }, [fetchAll]);
 
   const ready = load.status === "ready" ? load : null;
   const leads = ready?.leads ?? [];
@@ -1341,7 +1441,18 @@ export function TelemetryPage() {
             </Reveal>
 
             <Reveal delay={0.14} className="min-w-0">
-              {ready ? <AnonymousPanel anonymous={ready.anonymous} /> : <AnonymousSkeleton />}
+              {ready ? (
+                <AnonymousPanel
+                  anonymous={ready.anonymous}
+                  canClear={
+                    ready.mode === "live" &&
+                    (ready.anonymous.visitors > 0 || ready.anonymous.events > 0)
+                  }
+                  onClear={clearAnonymous}
+                />
+              ) : (
+                <AnonymousSkeleton />
+              )}
             </Reveal>
           </div>
 

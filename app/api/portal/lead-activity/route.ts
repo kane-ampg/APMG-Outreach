@@ -360,13 +360,47 @@ export async function GET(req: Request): Promise<Response> {
   return Response.json({ ok: true, mode: "live", leads, anonymous });
 }
 
-// DELETE /api/portal/lead-activity?leadId=<uuid> — remove ONE lead's click
-// trail from the Telemetry tab. Deletes every portal_events row carrying that
-// lead_id (customer-journey events AND any cookie-stamped dashboard noise), so
-// the lead drops out of this page and out of /api/portal/summary's attributed
-// totals alike. The leads table itself is untouched — this erases activity,
-// not the lead. Same gates as the GET: sameOrigin floor + PORTAL_ADMIN_KEY
-// shared secret (a delete is at least as sensitive as the per-lead read).
+// DELETE /api/portal/lead-activity — two scopes, one per thing this page shows:
+//   ?leadId=<uuid>  — remove ONE lead's click trail. Deletes every portal_events
+//                     row carrying that lead_id (customer-journey events AND any
+//                     cookie-stamped dashboard noise) AND the lead's
+//                     portal_inquiries rows, so the lead drops out of this page,
+//                     the Enquiries tab, and /api/portal/summary's KPI totals
+//                     alike — a delete here must never leave a ghost count on
+//                     the KPI cards. The leads table itself is untouched — this
+//                     erases activity, not the lead.
+//   ?anonymous=1    — clear the anonymous-visitors block: every lead_id-null
+//                     portal_events row the portal emits (the panel's display
+//                     predicate plus the enquiry-submission companions), which
+//                     otherwise keep feeding the summary's views/opens KPIs
+//                     forever with no way to remove them. Anonymous
+//                     portal_inquiries rows are deliberately NOT touched — an
+//                     unattributed enquiry is still a real person's contact
+//                     request, deletable only per-row on the Enquiries tab.
+// Same gates as the GET: sameOrigin floor + PORTAL_ADMIN_KEY shared secret
+// (a delete is at least as sensitive as the per-lead read).
+
+/** Everything the portal emits without a lead — the anonymous panel's display
+ *  predicate (ANON_OR_FILTER) widened with the enquiry-submission companion
+ *  events (client dup, consent echo, done/cancel, chat open/close, tab nav)
+ *  that ride the same visit but carry no `view` meta. `view.eq.portal` keeps
+ *  catching any view-tagged stragglers (whatsapp/linkedin clicks etc.). */
+const ANON_PURGE_FILTER =
+  "lead_id=is.null&or=(view.eq.portal,event.in.(portal_view,portal_service_open," +
+  "portal_inquiry,legal_ack,portal_consent_accept,portal_inquiry_submit,consent_accept," +
+  "portal_inquiry_done,portal_inquiry_cancel,portal_chat_open,portal_chat_close,portal_tab))";
+
+function restDelete(base: string, key: string, pathAndQuery: string): Promise<Response> {
+  return fetch(`${base}/rest/v1/${pathAndQuery}`, {
+    method: "DELETE",
+    headers: {
+      apikey: key,
+      Authorization: `Bearer ${key}`,
+      Prefer: "return=representation", // deleted rows back → an honest count
+    },
+  });
+}
+
 export async function DELETE(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, deleted: 0, mode: "live", error: "Forbidden." }, { status: 403 });
@@ -381,9 +415,11 @@ export async function DELETE(req: Request): Promise<Response> {
     return Response.json({ ok: true, deleted: 0, mode: "demo" });
   }
 
-  const leadId = new URL(req.url).searchParams.get("leadId");
+  const url = new URL(req.url);
+  const anonymous = url.searchParams.get("anonymous") === "1";
+  const leadId = url.searchParams.get("leadId");
   // isUuid also makes the eq. interpolation safe (uuids never need quoting).
-  if (!isUuid(leadId)) {
+  if (!anonymous && !isUuid(leadId)) {
     return Response.json(
       { ok: false, deleted: 0, mode: "live", error: "A valid lead id is required." },
       { status: 400 },
@@ -400,16 +436,13 @@ export async function DELETE(req: Request): Promise<Response> {
     );
   }
 
+  const eventsQuery = anonymous
+    ? `portal_events?${ANON_PURGE_FILTER}&select=id`
+    : `portal_events?lead_id=eq.${leadId}&select=id`;
+
   let res: Response;
   try {
-    res = await fetch(`${target.base}/rest/v1/portal_events?lead_id=eq.${leadId}&select=id`, {
-      method: "DELETE",
-      headers: {
-        apikey: target.key,
-        Authorization: `Bearer ${target.key}`,
-        Prefer: "return=representation",
-      },
-    });
+    res = await restDelete(target.base, target.key, eventsQuery);
   } catch (e) {
     console.error("[portal/lead-activity] delete fetch failed:", e);
     return Response.json(
@@ -432,5 +465,50 @@ export async function DELETE(req: Request): Promise<Response> {
 
   const deletedRows = await res.json().catch(() => []);
   const deleted = Array.isArray(deletedRows) ? deletedRows.length : 0;
-  return Response.json({ ok: true, deleted, mode: "live" });
+
+  // Anonymous scope stops at events — enquiry rows stay (see the contract above).
+  if (anonymous) {
+    return Response.json({ ok: true, deleted, mode: "live" });
+  }
+
+  // Lead scope: cascade into the lead's enquiry rows so the summary's
+  // enquiries KPI (counted off portal_inquiries, the canonical store) drops
+  // with the trail instead of ghosting. Ordered events-first so a failure here
+  // leaves a retryable state: the retry deletes 0 events, then the enquiries.
+  let inqRes: Response;
+  try {
+    inqRes = await restDelete(target.base, target.key, `portal_inquiries?lead_id=eq.${leadId}&select=id`);
+  } catch (e) {
+    console.error("[portal/lead-activity] enquiries delete fetch failed:", e);
+    return Response.json(
+      {
+        ok: false,
+        deleted,
+        mode: "live",
+        error: "Deleted the click trail, but couldn't reach the database for the lead's enquiries — retry to finish.",
+      },
+      { status: 502 },
+    );
+  }
+  if (!inqRes.ok) {
+    const detail = await inqRes.text().catch(() => "");
+    console.error(`[portal/lead-activity] Supabase enquiries DELETE ${inqRes.status}:`, detail.slice(0, 1000));
+    // Enquiries table not migrated in yet = nothing there to delete — the
+    // trail delete above already succeeded, so this is a completed delete.
+    if (isMissingPortalTable(inqRes.status, detail)) {
+      return Response.json({ ok: true, deleted, inquiriesDeleted: 0, mode: "live" });
+    }
+    return Response.json(
+      {
+        ok: false,
+        deleted,
+        mode: "live",
+        error: "Deleted the click trail, but the lead's enquiries couldn't be deleted — retry to finish.",
+      },
+      { status: 502 },
+    );
+  }
+  const inqRows = await inqRes.json().catch(() => []);
+  const inquiriesDeleted = Array.isArray(inqRows) ? inqRows.length : 0;
+  return Response.json({ ok: true, deleted, inquiriesDeleted, mode: "live" });
 }
