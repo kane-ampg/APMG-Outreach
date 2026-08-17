@@ -1,137 +1,122 @@
-// One item per message → branded APMG HTML email (PDF shown as a downloadable file card, linked not attached).
+// One item per message → PLAIN-TEXT APMG email (no HTML, no images, no buttons).
 // Body in:  { campaign, messages: [{ to, leadId, subject, text, attachment?: { url, filename }, hero?, hero_alt? }] }
-// Body out: { campaign, to, leadId, subject, html, text, attachment_url, attachment_name }
-// `hero`/`hero_alt` (optional, per message) swap the hero band to that service's
-// photo — the app sends them when a service template is picked on Step 2
-// Compose (lib/pipeline/services.ts), so the image matches the pitched service.
+// Body out: { campaign, to, leadId, subject, text, attachment_url, attachment_name }
+//
+// The paired Gmail node MUST be set to emailType "text" with message
+// {{ $json.text }}. Leaving it on "html" renders this body as one unbroken wall
+// with no line breaks.
+//
+// WHY PLAIN TEXT: the sending domain has no warm-up history. An image-heavy
+// table-layout HTML email (hosted logo, 600px hero photo, red CTA button) is the
+// classic template-blast fingerprint, and plain text is normal practice for cold
+// outreach. `hero`/`hero_alt` are still accepted in the payload and deliberately
+// IGNORED — the app still sends them when a service template is picked, and this
+// node no longer renders an image.
+//
+// INTERIM NODE. Per docs/superpowers/specs/2026-08-16-plain-text-outreach-design.md
+// the app will eventually build the whole body itself (signature + sender identity
+// + unsubscribe) and this node will shrink to a URL normaliser. Until that ships,
+// this node owns the footer, exactly as the branded version did — so the
+// unsubscribe link (Spam Act 2003) can never go missing.
 
 const BRAND = {
-  color: "#c8102e",
-  logo: "https://www.apmgservices.com.au/images/apmg-logo.png",
-  // Hero band under the header — the DEFAULT team + fleet photo (hosted in
-  // Supabase Storage, public bucket), used when a message carries no `hero` of
-  // its own. Set to "" to hide the default hero entirely.
-  hero: "https://iskvglrdgqubwcmyjsbq.supabase.co/storage/v1/object/public/sector-assets/apmgteam.jpg",
-  heroAlt: "The APMG Services team in front of our head office and fleet",
   website: "https://www.apmgservices.com.au/",
-  facebook: "https://www.facebook.com/p/APMG-Services-100072630217180/",
-  instagram: "https://www.instagram.com/apmg.services",
-  location: "1 Tesmar Cct, Chirnside Park, VIC, Australia",
   // Sender identification (Spam Act 2003). Append " · ABN <number>" here
   // once the ABN is registered — keep it accurate, do not invent one.
   sender: "APMG Services · 1 Tesmar Cct, Chirnside Park, VIC, Australia",
-  // Deployed customer-portal origin. Used as the unsubscribe/PDF host FALLBACK
-  // when the CTA link can't be scraped from the body, so the unsubscribe link
-  // (Spam Act 2003) ALWAYS renders regardless of the email's body shape.
-  portalBase: "https://customers-apmg-services.vercel.app",
+  // Canonical customer-portal origin — the branded domain customers see.
+  // Used as the unsubscribe/PDF host fallback AND as the host every outgoing
+  // link is normalised onto (see canonicalUrl below).
+  portalBase: "https://customer.apmgservices.com.au",
 };
 
-const esc = (s) =>
-  (s || "").toString()
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+// WHO signs the cold emails. In plain text this is a few lines, not a card.
+// The email address is the outreach mailbox these campaigns actually send
+// from, NOT farbod@ — replies must land in the mailbox the sender persona
+// answers. The 0450 mobile from the original signature is deliberately
+// omitted (it is not this persona's number); add a `mobile` field here and a
+// line in signature() if a dedicated number is ever provisioned.
+const SIG = {
+  name: "George Collins",
+  title: "Managing Director, APMG Services",
+  phone: "1300 97 97 40",
+  email: "outreach@apmgmaintenance.com.au",
+  websiteLabel: "www.apmgservices.com.au",
+};
 
-function bodyBlocks(text) {
-  const paras = (text || "").toString().split(/\n{2,}/).map((p) => p.trim()).filter(Boolean);
-  const rows = [];
-  for (const p of paras) {
-    const cta = p.match(/^(.*?)\s*\((https?:\/\/[^\s)]+)\)\s*$/s);
-    if (cta) {
-      const label = esc(cta[1].replace(/[→–—\-\s]+$/, "").trim()) || "Learn more";
-      const url = esc(cta[2]);
-      rows.push(
-        '<tr><td style="padding:6px 0 22px;">' +
-          '<a href="' + url + '" style="display:inline-block;background:' + BRAND.color + ';color:#ffffff;' +
-          'text-decoration:none;font-weight:600;font-size:15px;padding:12px 24px;border-radius:8px;">' +
-          label + ' &rarr;</a>' +
-        '</td></tr>'
-      );
-    } else {
-      rows.push(
-        '<tr><td style="padding:0 0 16px;font-size:15px;line-height:1.65;color:#1a1a1a;">' +
-          esc(p).replace(/\n/g, "<br>") + '</td></tr>'
-      );
-    }
+// Hosts that USED to serve the customer portal. Any customer-facing link that
+// lands on one of these is rewritten onto BRAND.portalBase before send.
+//
+// WHY THIS EXISTS: the app builds its tracked CTA links from
+// NEXT_PUBLIC_TRACK_BASE, which Next.js inlines at BUILD time — changing that
+// variable in Vercel has no effect until a fresh deploy. A stale host can
+// therefore sit in live emails with no visible error, because the old host
+// still answers. This node is the last thing to touch every URL before the
+// email goes out, so normalising here guarantees a customer can only ever
+// land on the branded portal, whatever the app sent us.
+const LEGACY_PORTAL_HOSTS = ["customers-apmg-services.vercel.app"];
+
+function canonicalUrl(u) {
+  const raw = (u == null ? "" : u.toString()).trim();
+  if (!raw) return raw;
+  try {
+    const url = new URL(raw);
+    const stale =
+      LEGACY_PORTAL_HOSTS.indexOf(url.hostname) !== -1 ||
+      url.hostname.endsWith(".vercel.app");
+    if (!stale) return raw;
+    const canon = new URL(BRAND.portalBase);
+    url.protocol = canon.protocol;
+    url.hostname = canon.hostname;
+    url.port = canon.port;
+    return url.toString();
+  } catch (e) {
+    return raw;
   }
-  return rows.join("");
 }
 
-function pdfCard(href, attName) {
-  if (!href) return "";
-  const name = esc(attName || "APMG capability statement.pdf");
-  return '<tr><td style="padding:4px 28px 26px;">' +
-    '<a href="' + esc(href) + '" style="text-decoration:none;color:inherit;display:block;">' +
-      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;">' +
-        '<tr>' +
-          '<td width="58" style="padding:12px 0 12px 14px;vertical-align:middle;">' +
-            '<table role="presentation" cellpadding="0" cellspacing="0"><tr>' +
-              '<td width="42" height="50" align="center" valign="middle" style="width:42px;height:50px;background:' + BRAND.color + ';border-radius:6px;color:#ffffff;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:700;letter-spacing:1px;line-height:50px;">PDF</td>' +
-            '</tr></table>' +
-          '</td>' +
-          '<td style="padding:12px 14px;vertical-align:middle;">' +
-            '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#111111;line-height:1.3;">' + name + '</div>' +
-            '<div style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#6b7280;margin-top:2px;">PDF document</div>' +
-          '</td>' +
-          '<td width="120" style="padding:12px 16px 12px 8px;vertical-align:middle;text-align:right;">' +
-            '<span style="font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;font-size:13px;font-weight:600;color:' + BRAND.color + ';white-space:nowrap;">Download &darr;</span>' +
-          '</td>' +
-        '</tr>' +
-      '</table>' +
-    '</a>' +
-  '</td></tr>';
+// The app flattens its HTML body to text as "label (url)" (htmlToText in
+// lib/pipeline/campaign.ts). That shape is a leftover of the HTML era and reads
+// like machine output in a typed email, so it is reshaped into the way a person
+// actually pastes a link: the label, a colon, then the bare URL on its own line.
+// A body that already carries a bare URL is left exactly as it is.
+function reshapeCta(text) {
+  return text
+    .split(/\n{2,}/)
+    .map(function (p) {
+      const para = p.trim();
+      const cta = para.match(/^(.*?)\s*\((https?:\/\/[^\s)]+)\)\s*$/s);
+      if (!cta) return para;
+      const label = cta[1].replace(/[→–—\-\s]+$/, "").trim();
+      const url = cta[2];
+      return label ? label + ":\n" + url : url;
+    })
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function buildHtml(text, pdfHref, attName, unsubHref, hero, heroAlt) {
-  const linkStyle = 'color:' + BRAND.color + ';text-decoration:none;font-weight:600;';
-  const dot = '<span style="color:#d1d5db;">&nbsp;&middot;&nbsp;</span>';
-  const wordmark =
-    '<span style="color:#ffffff;font-size:19px;font-weight:700;letter-spacing:.5px;">APMG <span style="color:' + BRAND.color + ';">Services</span></span>' +
-    '<div style="color:#9ca3af;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;margin-top:3px;">Property Maintenance</div>';
-  const header = BRAND.logo
-    ? '<table role="presentation" cellpadding="0" cellspacing="0"><tr>' +
-        '<td style="vertical-align:middle;padding-right:14px;">' +
-          '<a href="' + esc(BRAND.website) + '" style="text-decoration:none;display:inline-block;">' +
-          '<img src="' + esc(BRAND.logo) + '" alt="APMG Services" width="68" height="52" ' +
-          'style="display:block;border:0;outline:none;width:68px;height:52px;"></a>' +
-        '</td>' +
-        '<td style="vertical-align:middle;">' + wordmark + '</td>' +
-      '</tr></table>'
-    : wordmark;
-  return '<!doctype html>\n<html lang="en">\n<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>\n<body style="margin:0;padding:0;background:#f4f4f5;">\n' +
-'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:24px 12px;">\n' +
-'  <tr><td align="center">\n' +
-'    <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">\n' +
-'      <tr><td style="background:#111111;padding:18px 28px;">' + header + '</td></tr>\n' +
-'      <tr><td style="height:3px;background:' + BRAND.color + ';font-size:0;line-height:0;">&nbsp;</td></tr>\n' +
-    (hero
-      ? '      <tr><td style="font-size:0;line-height:0;background:#e5e7eb;">' +
-          '<img src="' + esc(hero) + '" alt="' + esc(heroAlt || BRAND.heroAlt) + '" width="600" ' +
-          'style="display:block;border:0;outline:none;width:100%;max-width:600px;height:auto;"></td></tr>\n'
-      : '') +
-'      <tr><td style="padding:28px 28px 8px;">\n' +
-'        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + bodyBlocks(text) + '</table>\n' +
-'      </td></tr>\n' +
-'      ' + pdfCard(pdfHref, attName) + '\n' +
-'      <tr><td style="background:#fafafa;border-top:1px solid #ececec;padding:22px 28px;">\n' +
-'        <div style="font-size:13px;color:#374151;font-weight:700;margin-bottom:5px;">APMG Services</div>\n' +
-'        <div style="font-size:12px;color:#6b7280;line-height:1.6;">' + esc(BRAND.location) + '</div>\n' +
-'        <div style="margin-top:12px;font-size:13px;">\n' +
-'          <a href="' + esc(BRAND.website) + '" style="' + linkStyle + '">Website</a>' + dot + '\n' +
-'          <a href="' + esc(BRAND.facebook) + '" style="' + linkStyle + '">Facebook</a>' + dot + '\n' +
-'          <a href="' + esc(BRAND.instagram) + '" style="' + linkStyle + '">Instagram</a>\n' +
-'        </div>\n' +
-'      </td></tr>\n' +
-'    </table>\n' +
-'    <div style="max-width:600px;margin:14px auto 0;font-size:11px;color:#9ca3af;text-align:center;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">\n' +
-'      ' + esc(BRAND.sender) + '<br>You are receiving this because APMG Services provides property maintenance in your area.\n' +
-'    </div>\n' +
-    (unsubHref
-      ? '<div style="max-width:600px;margin:10px auto 0;text-align:center;">' +
-          '<a href="' + esc(unsubHref) + '" style="display:inline-block;border:1px solid #d1d5db;border-radius:6px;padding:7px 16px;font-size:11px;font-weight:600;color:#6b7280;text-decoration:none;background:#ffffff;">Unsubscribe</a>' +
-        '</div>\n'
-      : '') +
-'  </td></tr>\n' +
-'</table>\n</body></html>';
+// The body's own sign-off. The app's prompt and the 8 service templates both end
+// with "The APMG Services team", and this node then signs as George Collins —
+// two identities in one email. Drop the generic one so it signs once.
+function dropTeamSignoff(text) {
+  return text.replace(/\n+\s*(?:Kind regards,?\s*\n+)?The APMG Services team\.?\s*$/i, "").trimEnd();
+}
+
+function signature() {
+  return [SIG.name, SIG.title, SIG.phone, SIG.email, SIG.websiteLabel].join("\n");
+}
+
+// Sender identity + the functional opt-out. Spam Act 2003 — this is a legal
+// requirement, not styling, and it renders whenever we have any base and a
+// recipient address.
+function footer(unsubHref) {
+  const lines = [
+    "--",
+    BRAND.sender,
+    "You're receiving this because APMG Services provides property maintenance in your area.",
+  ];
+  if (unsubHref) lines.push("Unsubscribe: " + unsubHref);
+  return lines.join("\n");
 }
 
 const first = $input.first().json;
@@ -144,26 +129,37 @@ for (const m of messages) {
   if (!m || typeof m !== "object") continue;
   const to = (m.to || "").toString().trim();
   if (!to) continue;
-  const text = (m.text ?? m.html ?? "").toString();
+
+  // Normalise EVERY url in the body up front, before anything reads it. The
+  // tracked CTA, the scraped track host, the playbook link and the unsubscribe
+  // link all derive from this text, so one pass here fixes all four at once.
+  const rawText = (m.text ?? m.html ?? "").toString();
+  const text = rawText.replace(/https?:\/\/[^\s)\]<>"']+/g, function (u) { return canonicalUrl(u); });
+
   const leadId = (m.leadId || "").toString();
   const att = m.attachment && typeof m.attachment === "object" ? m.attachment : null;
   const attUrl = att && att.url ? att.url.toString() : "";
   const attName = att && att.filename ? att.filename.toString() : "";
-  // Per-message hero (service template photo) — falls back to the team photo.
-  const hero = (m.hero || BRAND.hero || "").toString();
-  const heroAlt = (m.hero_alt || BRAND.heroAlt || "").toString();
 
-  // Prefer the host scraped from the CTA link (correct across dev/preview/prod);
-  // fall back to the configured portal base so unsubscribe/PDF links still work
-  // even when the body doesn't carry a scrapable "(https://.../t/...)" CTA.
+  // Prefer the host scraped from the (already normalised) tracked link so dev and
+  // preview sends keep pointing at themselves; fall back to the canonical portal
+  // base so unsubscribe/playbook links still work whatever shape the body is in.
+  // Matches the link with OR without the legacy "(...)" wrapper, so this keeps
+  // working once the app stops emitting "label (url)".
   let trackBase = "";
-  const ctaLink = text.match(/\((https?:\/\/[^\s)]+\/t\/[^\s)]+)\)/);
-  if (ctaLink) { try { trackBase = new URL(ctaLink[1]).origin; } catch (e) {} }
-  const base = (trackBase || BRAND.portalBase || "").replace(/\/+$/, "");
+  const ctaLink = text.match(/https?:\/\/[^\s)\]<>"']+\/t\/[^\s)\]<>"']+/);
+  if (ctaLink) { try { trackBase = new URL(ctaLink[0]).origin; } catch (e) {} }
+  const base = (canonicalUrl(trackBase) || BRAND.portalBase || "").replace(/\/+$/, "");
 
+  // The sector playbook is LINKED, never attached — the download is routed
+  // through the /t/ hook so it is recorded like a CTA click.
   const pdfHref = attUrl && base && leadId
     ? base + "/t/" + encodeURIComponent(leadId) + "?c=" + encodeURIComponent(campaign) + "&to=" + encodeURIComponent(attUrl)
     : attUrl;
+  const pdfLabel = attName ? attName.replace(/\.pdf$/i, "").trim() : "";
+  const playbook = pdfHref
+    ? "\n\n" + (pdfLabel ? "Our " + pdfLabel + ":" : "Our playbook for your sector:") + "\n" + pdfHref
+    : "";
 
   // Unsubscribe ALWAYS renders when we have any base + a recipient address
   // (Spam Act 2003). leadId is optional context.
@@ -173,12 +169,18 @@ for (const m of messages) {
       "&c=" + encodeURIComponent(campaign)
     : "";
 
+  const plain = [
+    dropTeamSignoff(reshapeCta(text)) + playbook,
+    signature(),
+    footer(unsubHref),
+  ].join("\n\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+
   out.push({
     json: {
       campaign, to, leadId,
       subject: (m.subject || "").toString(),
-      html: buildHtml(text, pdfHref, attName, unsubHref, hero, heroAlt),
-      text, attachment_url: attUrl, attachment_name: attName,
+      text: plain,
+      attachment_url: attUrl, attachment_name: attName,
     },
   });
 }
