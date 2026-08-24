@@ -96,4 +96,16 @@ export const INTEGRATIONS: IntegrationMeta[] = [
     webhookPath: "/webhook/enquiry-notify",
     workflowFile: "APMG Enquiry Notification.json",
   },
+  {
+    id: "sales-handoff-notify",
+    settingKey: "n8n_sales_notify_webhook_url",
+    enabledKey: "n8n_sales_notify_webhook_enabled",
+    envVar: "N8N_SALES_NOTIFY_WEBHOOK_URL",
+    name: "Sales Hand-off Notification",
+    description:
+      "When an admin sends a lead from Hot Leads to the Sales dashboard, the desk is emailed the lead's contact details, its intent score, and the trail of what it actually did on the portal — so a rep can ring while the interest is still warm. Goes to the same notification addresses set above, one email per hand-off.",
+    trigger: "webhook",
+    webhookPath: "/webhook/sales-handoff-notify",
+    workflowFile: "APMG Sales Handoff Notification.json",
+  },
 ];

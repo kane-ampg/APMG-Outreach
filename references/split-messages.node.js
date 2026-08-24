@@ -1,23 +1,29 @@
-// One item per message → PLAIN-TEXT APMG email (no HTML, no images, no buttons).
+// One item per message → LIGHT-HTML APMG email that reads as a REAL typed email:
+// left-aligned text with no container box, native blue links, and a plain typed
+// signature. No images. The only styled elements are the red CTA button and the
+// subdued unsubscribe button.
 // Body in:  { campaign, messages: [{ to, leadId, subject, text, attachment?: { url, filename }, hero?, hero_alt? }] }
-// Body out: { campaign, to, leadId, subject, text, attachment_url, attachment_name }
+// Body out: { campaign, to, leadId, subject, text, html, attachment_url, attachment_name }
 //
-// The paired Gmail node MUST be set to emailType "text" with message
-// {{ $json.text }}. Leaving it on "html" renders this body as one unbroken wall
-// with no line breaks.
+// The paired Gmail node MUST be set to emailType "html" with message
+// {{ $json.html }}. $json.text still carries the plain-text rendering as a
+// fallback — flipping the Gmail node back to "text" + {{ $json.text }} reverts
+// the whole design without touching this code.
 //
-// WHY PLAIN TEXT: the sending domain has no warm-up history. An image-heavy
-// table-layout HTML email (hosted logo, 600px hero photo, red CTA button) is the
-// classic template-blast fingerprint, and plain text is normal practice for cold
-// outreach. `hero`/`hero_alt` are still accepted in the payload and deliberately
-// IGNORED — the app still sends them when a service template is picked, and this
-// node no longer renders an image.
+// FORMAT DECISION (2026-08-17, supersedes the plain-text-only spec of
+// 2026-08-16): the operator wants no visible raw URLs — the tracked CTA and the
+// unsubscribe link render as buttons — but the email must NOT look like a boxed
+// HTML template: no max-width container, no centering, text links keep the
+// client's native blue, and the signature is plain typed lines with a bold
+// name. No layout tables, NO IMAGES — a top photo was tried and removed the
+// same day (operator, 2026-08-17). `hero`/`hero_alt` are still accepted in the
+// payload and deliberately IGNORED.
 //
 // INTERIM NODE. Per docs/superpowers/specs/2026-08-16-plain-text-outreach-design.md
 // the app will eventually build the whole body itself (signature + sender identity
 // + unsubscribe) and this node will shrink to a URL normaliser. Until that ships,
-// this node owns the footer, exactly as the branded version did — so the
-// unsubscribe link (Spam Act 2003) can never go missing.
+// this node owns the footer — so the unsubscribe link (Spam Act 2003) can never
+// go missing.
 
 const BRAND = {
   website: "https://www.apmgservices.com.au/",
@@ -28,17 +34,19 @@ const BRAND = {
   // Used as the unsubscribe/PDF host fallback AND as the host every outgoing
   // link is normalised onto (see canonicalUrl below).
   portalBase: "https://customer.apmgservices.com.au",
+  // Accent used by the CTA button and links — same red as the old branded email.
+  color: "#c8102e",
 };
 
-// WHO signs the cold emails. In plain text this is a few lines, not a card.
-// The email address is the outreach mailbox these campaigns actually send
-// from, NOT farbod@ — replies must land in the mailbox the sender persona
-// answers. The 0450 mobile from the original signature is deliberately
-// omitted (it is not this persona's number); add a `mobile` field here and a
-// line in signature() if a dedicated number is ever provisioned.
+// WHO signs the cold emails. The email address is the outreach mailbox these
+// campaigns actually send from, NOT farbod@ — replies must land in the mailbox
+// the sender persona answers. The 0450 mobile from the original signature is
+// deliberately omitted (it is not this persona's number); add a `mobile` field
+// here and a line in the signature builders if a dedicated number is ever
+// provisioned.
 const SIG = {
   name: "George Collins",
-  title: "Managing Director, APMG Services",
+  title: "Sales Representative, APMG Services",
   phone: "1300 97 97 40",
   email: "outreach@apmgmaintenance.com.au",
   websiteLabel: "www.apmgservices.com.au",
@@ -75,11 +83,12 @@ function canonicalUrl(u) {
   }
 }
 
+// ── plain-text fallback helpers (unchanged behaviour) ────────────────────────
+
 // The app flattens its HTML body to text as "label (url)" (htmlToText in
-// lib/pipeline/campaign.ts). That shape is a leftover of the HTML era and reads
-// like machine output in a typed email, so it is reshaped into the way a person
-// actually pastes a link: the label, a colon, then the bare URL on its own line.
-// A body that already carries a bare URL is left exactly as it is.
+// lib/pipeline/campaign.ts). For the text fallback that shape is reshaped into
+// the way a person actually pastes a link: the label, a colon, then the bare
+// URL on its own line. A body that already carries a bare URL is left as-is.
 function reshapeCta(text) {
   return text
     .split(/\n{2,}/)
@@ -102,14 +111,14 @@ function dropTeamSignoff(text) {
   return text.replace(/\n+\s*(?:Kind regards,?\s*\n+)?The APMG Services team\.?\s*$/i, "").trimEnd();
 }
 
-function signature() {
+function signatureText() {
   return [SIG.name, SIG.title, SIG.phone, SIG.email, SIG.websiteLabel].join("\n");
 }
 
 // Sender identity + the functional opt-out. Spam Act 2003 — this is a legal
 // requirement, not styling, and it renders whenever we have any base and a
 // recipient address.
-function footer(unsubHref) {
+function footerText(unsubHref) {
   const lines = [
     "--",
     BRAND.sender,
@@ -117,6 +126,110 @@ function footer(unsubHref) {
   ];
   if (unsubHref) lines.push("Unsubscribe: " + unsubHref);
   return lines.join("\n");
+}
+
+// ── HTML rendering ────────────────────────────────────────────────────────────
+
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// Text links carry NO inline color — the client renders its own native blue,
+// which is what a link in a genuinely typed email looks like.
+
+// One escaped paragraph → HTML with every URL hidden behind a label.
+// "label (url)" becomes <a>label</a>; a bare URL (rare — the compose prompt
+// always emits the labelled shape) falls back to its hostname as the label.
+function paragraphHtml(escaped) {
+  let s = escaped.replace(/([^\s(]?[^()\n]*?)\s*\((https?:\/\/[^\s)]+)\)/g, function (_, label, url) {
+    const clean = label.replace(/[→–—\-\s]+$/, "").trim();
+    return clean ? '<a href="' + url + '">' + clean + "</a>" : bareLink(url);
+  });
+  s = s.replace(/(^|[\s>])(https?:\/\/[^\s<]+)/g, function (_, pre, url) {
+    return pre + bareLink(url);
+  });
+  return '<p style="margin:0 0 1em;">' + s.replace(/\n/g, "<br>") + "</p>";
+}
+
+function bareLink(url) {
+  let label = url;
+  try { label = new URL(url.replace(/&amp;/g, "&")).hostname; } catch (e) {}
+  return '<a href="' + url + '">' + label + "</a>";
+}
+
+function buttonHtml(href, label) {
+  return (
+    '<p style="margin:8px 0 20px;"><a href="' + href + '" ' +
+    'style="display:inline-block;background:' + BRAND.color + ";color:#ffffff;" +
+    'font-weight:600;font-size:15px;text-decoration:none;padding:12px 24px;border-radius:8px;">' +
+    escapeHtml(label) + "</a></p>"
+  );
+}
+
+// Plain typed signature — the way a Gmail signature actually renders: bold
+// name, then unstyled lines, native-blue links, no card, no border.
+function signatureHtml() {
+  return (
+    '<p style="margin:1.6em 0 0;">' +
+    "<b>" + escapeHtml(SIG.name) + "</b><br>" +
+    escapeHtml(SIG.title) + "<br>" +
+    escapeHtml(SIG.phone) + "<br>" +
+    '<a href="mailto:' + SIG.email + '">' + escapeHtml(SIG.email) + "</a><br>" +
+    '<a href="' + BRAND.website + '">' + escapeHtml(SIG.websiteLabel) + "</a>" +
+    "</p>"
+  );
+}
+
+// Spam Act 2003: sender identity + a functional opt-out, always rendered when
+// we have any base + a recipient address. The opt-out is a button per the
+// operator's 2026-08-17 direction — subdued, but plainly labelled and clickable.
+function footerHtml(unsubHref) {
+  let s =
+    '<div style="margin-top:24px;padding-top:14px;border-top:1px solid #e5e7eb;' +
+    'font-size:12px;color:#9ca3af;line-height:1.6;">' +
+    escapeHtml(BRAND.sender) + "<br>" +
+    "You're receiving this because APMG Services provides property maintenance in your area.";
+  if (unsubHref) {
+    s +=
+      '<br><a href="' + unsubHref + '" ' +
+      'style="display:inline-block;margin-top:10px;color:#6b7280;border:1px solid #d1d5db;' +
+      'text-decoration:none;padding:7px 16px;border-radius:6px;font-size:12px;">Unsubscribe</a>';
+  }
+  return s + "</div>";
+}
+
+// Full message HTML. The FIRST paragraph shaped "label (tracked /t/ url)" is
+// the app's CTA — it renders as the button, in place, labelled with its own
+// copy (e.g. "Aged care upkeep, sorted"). Everything else renders as typed
+// paragraphs with labelled links only.
+function renderHtml(cleanText, playbookHtml, unsubHref) {
+  const paras = cleanText.split(/\n{2,}/).map(function (p) { return p.trim(); }).filter(Boolean);
+  let usedButton = false;
+  const parts = paras.map(function (p) {
+    if (!usedButton) {
+      const cta = p.match(/^(.*?)\s*\((https?:\/\/[^\s)]+\/t\/[^\s)]+)\)\s*$/s);
+      if (cta) {
+        usedButton = true;
+        const label = cta[1].replace(/[→–—\-\s:]+$/, "").trim() || "See how we can help";
+        return buttonHtml(escapeHtml(cta[2]), label);
+      }
+    }
+    return paragraphHtml(escapeHtml(p));
+  });
+  // No max-width, no centering, no container box — a real email is just text
+  // starting at the left edge in the client's normal reading font.
+  return (
+    '<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:#222222;">' +
+    parts.join("") +
+    playbookHtml +
+    signatureHtml() +
+    footerHtml(unsubHref) +
+    "</div>"
+  );
 }
 
 const first = $input.first().json;
@@ -157,8 +270,12 @@ for (const m of messages) {
     ? base + "/t/" + encodeURIComponent(leadId) + "?c=" + encodeURIComponent(campaign) + "&to=" + encodeURIComponent(attUrl)
     : attUrl;
   const pdfLabel = attName ? attName.replace(/\.pdf$/i, "").trim() : "";
-  const playbook = pdfHref
+  const playbookText = pdfHref
     ? "\n\n" + (pdfLabel ? "Our " + pdfLabel + ":" : "Our playbook for your sector:") + "\n" + pdfHref
+    : "";
+  const playbookHtml = pdfHref
+    ? '<p style="margin:0 0 1em;"><a href="' + escapeHtml(pdfHref) + '">' +
+      escapeHtml(pdfLabel ? "Our " + pdfLabel + " (PDF)" : "Our playbook for your sector (PDF)") + "</a></p>"
     : "";
 
   // Unsubscribe ALWAYS renders when we have any base + a recipient address
@@ -169,17 +286,22 @@ for (const m of messages) {
       "&c=" + encodeURIComponent(campaign)
     : "";
 
+  const cleanText = dropTeamSignoff(text);
+
   const plain = [
-    dropTeamSignoff(reshapeCta(text)) + playbook,
-    signature(),
-    footer(unsubHref),
+    reshapeCta(cleanText) + playbookText,
+    signatureText(),
+    footerText(unsubHref),
   ].join("\n\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim() + "\n";
+
+  const html = renderHtml(cleanText, playbookHtml, escapeHtml(unsubHref));
 
   out.push({
     json: {
       campaign, to, leadId,
       subject: (m.subject || "").toString(),
       text: plain,
+      html: html,
       attachment_url: attUrl, attachment_name: attName,
     },
   });

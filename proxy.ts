@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { resolveSource, SOURCE_COOKIE, SOURCE_COOKIE_MAX_AGE } from "@/lib/portal/source";
 import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
+import { isCustomerHost } from "@/lib/hosts";
 
 /**
  * Host wall for the customer-facing deployment.
@@ -20,23 +21,6 @@ import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
  * fails OPEN to full-app only for hosts we don't recognise as customer hosts —
  * so set the env vars on the customer project.
  */
-
-// Exact customer hostnames (comma-separated env override wins). The Vercel
-// project URL plus the customer-facing custom domain are the defaults; a host
-// missing from this list is treated as an admin host, so the auth gate would
-// bounce a client to /login instead of the portal — add every hostname a
-// client is ever given, not just the one Vercel generated.
-const CUSTOMER_HOSTS = (process.env.CUSTOMER_PORTAL_HOSTS ||
-  "customers-apmg-services.vercel.app,customer.apmgservices.com.au")
-  .split(",")
-  .map((h) => h.trim().toLowerCase())
-  .filter(Boolean);
-
-// Optional suffix match so Vercel preview deploys of the customer project
-// (…-git-….vercel.app) are also locked down. Set to the project slug prefix.
-const CUSTOMER_HOST_SUFFIX = (process.env.CUSTOMER_PORTAL_HOST_SUFFIX || "")
-  .trim()
-  .toLowerCase();
 
 /** Path prefixes the customer portal legitimately needs. Anything not matching
  *  is treated as admin-only and blocked on a customer host. */
@@ -65,13 +49,6 @@ const PORTAL_ALLOW = [
  */
 const INTERNAL_COOKIE = "apmg_internal";
 const INTERNAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
-
-function isCustomerHost(host: string): boolean {
-  const h = host.toLowerCase().split(":")[0]; // strip any port
-  if (CUSTOMER_HOSTS.includes(h)) return true;
-  if (CUSTOMER_HOST_SUFFIX && h.endsWith(CUSTOMER_HOST_SUFFIX)) return true;
-  return false;
-}
 
 function isPortalPath(pathname: string): boolean {
   if (pathname === "/portal") return true;
@@ -169,7 +146,12 @@ export async function proxy(req: NextRequest) {
   if (!pathname.startsWith("/api/")) {
     const url = req.nextUrl.clone();
     url.pathname = "/portal";
-    return NextResponse.redirect(url);
+    // The bare domain is PERMANENTLY the portal, so say 308 and let Google
+    // fold the root's ranking signals into /portal (a 307 asks it to keep
+    // both, and to keep re-checking). Stray paths stay temporary on purpose:
+    // a 308 is cached hard by browsers, so adding a real route at that path
+    // later would be shadowed by the cached redirect.
+    return NextResponse.redirect(url, pathname === "/" ? 308 : 307);
   }
 
   // Any non-portal API on the customer host (e.g. /api/pipeline/leads,

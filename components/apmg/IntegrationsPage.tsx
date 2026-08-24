@@ -177,10 +177,12 @@ function useSavedFlash(): [boolean, () => void] {
    Save persists, or on which error the operator sees. */
 
 /**
- * Where portal enquiries are emailed to. One global setting (app_settings key
- * `enquiry_notify_email`) holding one address or a comma-separated list —
+ * Where internal notifications are emailed to. One global setting (app_settings
+ * key `enquiry_notify_email`) holding one address or a comma-separated list —
  * EVERY listed address is notified, via a single Gmail send addressed to all of
- * them. Consumed by the enquiry route + the Enquiry Notification n8n workflow.
+ * them. TWO surfaces consume it, because both are the same internal audience:
+ * the enquiry route (+ the Enquiry Notification n8n workflow) and the Sales
+ * hand-off notifier (+ the Sales Handoff Notification workflow).
  * Blank clears it (no notifications sent). Parsing lives in
  * lib/pipeline/notifyEmails.ts, shared with the API route so the validation
  * shown here is exactly the validation enforced on save.
@@ -796,7 +798,7 @@ function NotifyEmailRow({
           )}
         </TableCell>
         <TableCell>
-          <Dash title="Delivery is controlled by the Enquiry Notification automation below." />
+          <Dash title="Delivery is controlled by the notification automations below." />
         </TableCell>
         <TableCell className="pr-3 text-right">
           <div className="inline-flex items-center gap-2">
@@ -821,10 +823,10 @@ function NotifyEmailRow({
       {open && (
         <EditorRow id={editorId}>
           <p className="mb-3 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-            Every portal enquiry is emailed to all of these addresses (via the Enquiry Notification
-            automation below). Add up to {MAX_NOTIFY_EMAILS} — type one and press Enter, or paste a
-            list. They arrive as one email, so each recipient can see the others. Leave blank to send
-            no notifications.
+            Every portal enquiry — and every lead an admin sends to the Sales dashboard — is
+            emailed to all of these addresses (via the notification automations below). Add up to{" "}
+            {MAX_NOTIFY_EMAILS} — type one and press Enter, or paste a list. They arrive as one
+            email, so each recipient can see the others. Leave blank to send no notifications.
           </p>
           <NotifyEmailEditor notify={notify} canPersist={canPersist} />
         </EditorRow>
@@ -1169,10 +1171,10 @@ function NotifyEmailPanel({ notify, canPersist }: { notify: NotifyEmails; canPer
             Enquiry notification emails
           </h3>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-            Every portal enquiry is emailed to all of these addresses (via the Enquiry Notification
-            automation below). Add up to {MAX_NOTIFY_EMAILS} — type one and press Enter, or paste a
-            list. They arrive as one email, so each recipient can see the others. Leave blank to send
-            no notifications.
+            Every portal enquiry — and every lead an admin sends to the Sales dashboard — is
+            emailed to all of these addresses (via the notification automations below). Add up to{" "}
+            {MAX_NOTIFY_EMAILS} — type one and press Enter, or paste a list. They arrive as one
+            email, so each recipient can see the others. Leave blank to send no notifications.
           </p>
           <div className="mt-3">
             <NotifyEmailEditor notify={notify} canPersist={canPersist} />

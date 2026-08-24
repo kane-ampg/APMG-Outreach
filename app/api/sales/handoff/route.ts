@@ -14,6 +14,7 @@ import {
   type MarkerKind,
   type SalesHandoffResponse,
 } from "@/lib/sales/handoff";
+import { notifySalesHandoff } from "@/lib/sales/handoffNotify";
 
 // The operator-decision ledgers behind the Hot Leads tab — hand-off to Sales,
 // and archive-from-the-working-lists (see lib/sales/handoff.ts for what each
@@ -30,6 +31,11 @@ import {
 // DELETES its hand-off rows. That's deliberate — the Sales queue's only gate is
 // the hand-off, so clearing it is what actually removes the lead from the rep's
 // list, and it means "returned" needs no special case in the queue route.
+//
+// A "handoff" also EMAILS THE DESK (lib/sales/handoffNotify): the Sales queue is
+// a surface nobody watches, and these leads are warm for hours, not days. Only
+// the leads this request newly marked are notified, so the idempotency below is
+// also what stops a double-click emailing the desk twice.
 //
 // Marking is IDEMPOTENT: a lead already in a ledger is skipped, never appended
 // twice. That's what makes "send to Sales" un-repeatable — a second attempt
@@ -200,6 +206,21 @@ function gate(req: Request): { base: string; key: string } | Response {
   return { base: target.base, key: target.key };
 }
 
+/** The admin console's own origin, for the "open the Sales desk" link in the
+ *  hand-off email. Taken from the request the admin's browser made (already
+ *  proved same-origin above) rather than an env var, so it is right on every
+ *  deployment — production, preview and localhost — with nothing to configure.
+ *  Null when the header is absent (a non-browser caller). */
+function consoleOrigin(req: Request): string | null {
+  const origin = req.headers.get("origin");
+  if (!origin) return null;
+  try {
+    return new URL(origin).origin;
+  } catch {
+    return null;
+  }
+}
+
 export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
 
@@ -285,6 +306,25 @@ export async function POST(req: Request): Promise<Response> {
     }));
     if (!(await insertPortalEvents(target.base, target.key, rows))) {
       return json({ ok: false, error: "Couldn't record that." }, 502);
+    }
+
+    // Tell Sales. Only on a hand-off, and only about the leads this request
+    // actually marked — `fresh` excludes the already-handed-over, so a retry or
+    // a double-click can't re-notify. Never fails the hand-off: the notifier
+    // swallows and logs everything (the marks above are already durable).
+    if (kind === "handoff") {
+      await notifySalesHandoff({
+        base: target.base,
+        key: target.key,
+        leadIds: fresh,
+        // Attribution the audit trail already records this way: the acting
+        // admin, plus the role they were previewing when they pressed it.
+        actor: { email: guard.email, role: guard.role, actingAs: guard.actingAs },
+        // The console origin the admin is on — the email links back to it.
+        // Absent on a non-browser caller, and the email then omits the link
+        // rather than guessing a hostname.
+        consoleUrl: consoleOrigin(req),
+      });
     }
   }
 

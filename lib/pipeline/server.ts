@@ -91,6 +91,15 @@ export const SETTING_EMAIL_FINDER_ENABLED = "n8n_email_finder_webhook_enabled";
  *  SQL migration needed, since these are single config values. */
 export const SETTING_ENQUIRY_NOTIFY_WEBHOOK = "n8n_enquiry_notify_webhook_url";
 export const SETTING_ENQUIRY_NOTIFY_ENABLED = "n8n_enquiry_notify_webhook_enabled";
+/** Sales hand-off notification: the n8n webhook that emails the desk when an
+ *  admin passes a lead from Hot Leads to Sales, plus its on/off toggle. A
+ *  SEPARATE webhook from the enquiry notifier on purpose — the two carry
+ *  different payloads, and sharing one URL would mean a not-yet-re-imported
+ *  workflow answered hand-offs with the enquiry formatter (an email with every
+ *  field blank). They do share the recipient list
+ *  (SETTING_ENQUIRY_NOTIFY_EMAIL): both are the same internal audience. */
+export const SETTING_SALES_NOTIFY_WEBHOOK = "n8n_sales_notify_webhook_url";
+export const SETTING_SALES_NOTIFY_ENABLED = "n8n_sales_notify_webhook_enabled";
 /** app_settings key holding the address(es) enquiry notifications are emailed TO
  *  (set on the Integrations tab) — one address, or several as a comma-separated
  *  list, parsed by `lib/pipeline/notifyEmails.ts`. Still a scalar string, so it
@@ -130,6 +139,15 @@ export function campaignWebhook(): Promise<WebhookTarget> {
  *  sent). The enquiry route POSTs a landed enquiry here so the operator gets emailed. */
 export function enquiryNotifyWebhook(): Promise<WebhookTarget> {
   return resolveWebhook(SETTING_ENQUIRY_NOTIFY_WEBHOOK, SETTING_ENQUIRY_NOTIFY_ENABLED, "N8N_ENQUIRY_NOTIFY_WEBHOOK_URL");
+}
+
+/** Resolve the n8n sales hand-off notification webhook (references/APMG Sales
+ *  Handoff Notification.json). A URL saved from the Integrations tab wins;
+ *  otherwise the N8N_SALES_NOTIFY_WEBHOOK_URL env var; else unconfigured (no
+ *  notification is sent — the hand-off itself still lands). /api/sales/handoff
+ *  POSTs the handed-over leads plus their click trails here. */
+export function salesNotifyWebhook(): Promise<WebhookTarget> {
+  return resolveWebhook(SETTING_SALES_NOTIFY_WEBHOOK, SETTING_SALES_NOTIFY_ENABLED, "N8N_SALES_NOTIFY_WEBHOOK_URL");
 }
 
 /** Resolve the n8n email-finder webhook (references/APMG Email Finder.json).

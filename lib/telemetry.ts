@@ -6,11 +6,14 @@ import { useEffect, useSyncExternalStore } from "react";
  * Click telemetry for the APMG lead-gen dashboard.
  *
  * Design goals:
- *  - Zero-config in preview: with no endpoint set, every click is still
- *    captured to an in-memory ring buffer + localStorage, so the in-app
- *    inspector can show telemetry working without a backend.
- *  - Pluggable in production: set NEXT_PUBLIC_TELEMETRY_ENDPOINT and events
- *    are batched to it via navigator.sendBeacon (falls back to fetch keepalive).
+ *  - Zero-config: every click is captured to an in-memory ring buffer +
+ *    localStorage regardless of the sink, so the in-app inspector shows
+ *    telemetry working even when the backend is unreachable.
+ *  - On by default: batches go to /api/portal/events via navigator.sendBeacon
+ *    (falls back to fetch keepalive). NEXT_PUBLIC_TELEMETRY_ENDPOINT overrides
+ *    the target; it is no longer required to turn telemetry ON (see ENDPOINT).
+ *  - Fails loudly: a batch that reaches neither transport warns once, so a
+ *    broken sink can never look like "no traffic" again.
  *  - Declarative: any element with a `data-track` attribute is tracked by a
  *    single delegated listener — no per-element onClick wiring required.
  *    `data-track-*` attributes ride along as event properties.
@@ -28,7 +31,23 @@ export interface TelemetryEvent {
   target?: string;
 }
 
-const ENDPOINT = process.env.NEXT_PUBLIC_TELEMETRY_ENDPOINT;
+/**
+ * Where batches are shipped. DEFAULTS to the in-app sink rather than staying
+ * unset, because an unset value used to disable telemetry *silently*: with no
+ * endpoint, ensureFlushTimer() returned early and neither the interval nor the
+ * pagehide/visibilitychange listeners were ever registered, so every event died
+ * in the ring buffer with no error. That is invisible in the in-app inspector
+ * (which reads the ring buffer, not the sink) and it cost us real data — social
+ * visitors reach /portal directly, never touching the server-side /t/[id]
+ * writer, so a dead beacon means a Facebook/TikTok click leaves no trace at all
+ * while outreach clicks keep recording normally.
+ *
+ * `NEXT_PUBLIC_` vars are baked at BUILD time, so the old behaviour meant one
+ * unset var on a Vercel project silently zeroed client telemetry for that whole
+ * deployment. Defaulting removes the failure mode: the path is same-origin and
+ * relative, so it is correct on every host the app is served from.
+ */
+const ENDPOINT = process.env.NEXT_PUBLIC_TELEMETRY_ENDPOINT || "/api/portal/events";
 const STORAGE_KEY = "apmg-telemetry-log";
 const MAX_EVENTS = 100; // ring buffer cap for the local log
 /** Server-side cap per POST (MAX_EVENTS_PER_POST in /api/portal/events).
@@ -162,7 +181,31 @@ function requeue(batch: TelemetryEvent[]) {
   if (queue.length > MAX_EVENTS) queue = queue.slice(-MAX_EVENTS);
 }
 
-/** Ship queued events to the configured endpoint (no-op without one).
+let warnedSinkUnreachable = false;
+
+/**
+ * Warn ONCE per page that events are not reaching the sink. This exists because
+ * the old silent-failure mode was expensive to diagnose: the funnel simply read
+ * as "no visitors" and there was nothing anywhere to contradict it.
+ *
+ * LIMIT, deliberately stated: this catches TRANSPORT failures only (both
+ * sendBeacon and the fetch fallback refusing the batch). sendBeacon returns
+ * true once the batch is merely queued by the browser and cannot read the
+ * response, so a sink answering 404/500 still looks like success here. Confirm
+ * delivery in DevTools → Network, or against portal_events.
+ */
+function warnSinkUnreachable(endpoint: string) {
+  if (warnedSinkUnreachable) return;
+  warnedSinkUnreachable = true;
+  // eslint-disable-next-line no-console
+  console.warn(
+    `[telemetry] events are not reaching ${endpoint} — nothing is being recorded. ` +
+      "Check the route is deployed and reachable from this host.",
+  );
+}
+
+/** Ship queued events to ENDPOINT (always set — see its declaration; the
+ *  falsy guard below is defensive only).
  *  Sends at most MAX_BATCH events per call — the sink truncates anything
  *  beyond its per-POST cap without telling us (sendBeacon can't read
  *  responses), so oversized queues drain across successive flush ticks
@@ -189,10 +232,12 @@ export function flush() {
       }).catch(() => {
         /* requeue on failure so we retry on the next flush */
         requeue(batch);
+        warnSinkUnreachable(ENDPOINT);
       });
     }
   } catch {
     requeue(batch);
+    warnSinkUnreachable(ENDPOINT);
   }
 }
 

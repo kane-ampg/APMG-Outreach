@@ -1,0 +1,132 @@
+{
+  "name": "APMG Sales Handoff Notification",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## APMG Sales Handoff Notification\n\nPOST /webhook/sales-handoff-notify\n\nFires when an admin presses **Send to Sales** on Hot Leads\n(app/api/sales/handoff/route.ts -> lib/sales/handoffNotify.ts).\n\nBody: { type: \"sales_handoff\", version, notifyTo, handedOverAt,\nhandedOverBy: { email, role, actingAs }, consoleUrl, totalLeads,\nleads: [ { leadId, business, contactName, email, phone, website,\nsector, campaign, score, band, summary, talkingPoints[],\nactivity{...}|null, timeline[{ ts, label }] } ] }\n\nONE email per hand-off, not one per lead: `notifyTo` may be a\ncomma-separated list and the Gmail node puts every recipient on a\nsingle To: header, so a list costs one Gmail send. The recipient list\nis the SAME setting the enquiry notifier uses - Integrations tab ->\nEnquiry Notification Emails (app_settings.enquiry_notify_email).\n\nOnly NEWLY handed-over leads are sent, so a double-click can't email\nthe desk twice. Up to 20 leads are briefed in full; the rest are\ncounted in a \"+N more\" line.\n\nSETUP\n1. Import this workflow, open the Gmail node, confirm the credential.\n2. Copy the production webhook URL from the Webhook node.\n3. Paste it into the console: Integrations -> Sales Hand-off\n   Notification -> Add webhook. (Or set the env var\n   N8N_SALES_NOTIFY_WEBHOOK_URL.)\n4. Make sure at least one address is set under Enquiry Notification\n   Emails - with none set, the app skips the send.\n5. Activate the workflow.\n\nAUTH: the app sends the `x-apmg-secret` header when N8N_WEBHOOK_SECRET\nis set in its environment. Add a matching Header Auth credential on\nthe Webhook node to close this endpoint to anonymous callers - it is\nopen until you do. The Format node also refuses any payload whose\n`type` is not \"sales_handoff\".",
+        "height": 760,
+        "width": 480
+      },
+      "id": "sticky-sales-handoff",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2680,
+        4180
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sales-handoff-notify",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7d4f1a02-9c61-4c8e-b1d3-5a0e2f7b9c41",
+      "name": "Lead Sent To Sales",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        3232,
+        4592
+      ],
+      "webhookId": "c7e1b93a-64d5-4f10-9a72-8b3d5e6f1a20"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format one \"admin sent leads to the Sales dashboard\" hand-off into the\n// internal notification email the desk reads before ringing.\n//\n// Body in:  { type: \"sales_handoff\", version, notifyTo, handedOverAt,\n//             handedOverBy: { email, role, actingAs }, consoleUrl,\n//             totalLeads, leads: [{ leadId, business, contactName, email, phone,\n//               website, sector, campaign, score, band, summary,\n//               talkingPoints: [], activity: {…} | null,\n//               timeline: [{ ts, label }] }] }\n// Body out: { to, subject, html }\n//\n// The app builds every fact in `leads` server-side out of Supabase\n// (lib/sales/handoffNotify.ts) — the same reads and the same reducer the\n// console's own lead brief uses. This node does NO reasoning: it renders what\n// it is given. If a number here disagrees with the console, the bug is in the\n// app, not in this node.\n//\n// `to` is passed through verbatim — the Gmail node splits it on commas and puts\n// every recipient on ONE To: header, so a list of recipients costs one Gmail\n// send, not one per address. No re-paste needed when the operator adds an\n// address on the Integrations tab.\n//\n// The paired Gmail node MUST be set to emailType \"html\" with message\n// {{ $json.html }}.\n\nconst BRAND = {\n  color: \"#c8102e\",\n  // Times are rendered in the operator's own timezone — the desk is in VIC and\n  // \"clicked at 3am\" vs \"clicked at 1pm\" changes when a rep should ring.\n  timeZone: \"Australia/Melbourne\",\n};\n\n/** Most leads rendered in full. A hand-off of more than this is summarised as a\n *  count — the app already caps how many it briefs, this is belt and braces so\n *  a big payload can never produce an unreadable email. */\nconst MAX_CARDS = 20;\n\nconst esc = (s) =>\n  (s == null ? \"\" : s.toString())\n    .replace(/&/g, \"&amp;\")\n    .replace(/</g, \"&lt;\")\n    .replace(/>/g, \"&gt;\")\n    .replace(/\"/g, \"&quot;\");\n\n/** \"23 Aug, 4:05 pm\" in the desk's timezone. Falls back to the raw stamp rather\n *  than throwing if the runtime has no ICU data for the zone. */\nfunction when(iso) {\n  if (!iso) return \"\";\n  try {\n    return new Date(iso).toLocaleString(\"en-AU\", {\n      day: \"numeric\",\n      month: \"short\",\n      hour: \"numeric\",\n      minute: \"2-digit\",\n      timeZone: BRAND.timeZone,\n    });\n  } catch (e) {\n    return iso.toString().slice(0, 16).replace(\"T\", \" \");\n  }\n}\n\n/** A tel: href — strip everything a dialler doesn't want. */\nfunction telHref(phone) {\n  return \"tel:\" + phone.toString().replace(/[^\\d+]/g, \"\");\n}\n\nconst first = $input.first().json;\nconst body = first.body ?? first;\n\n// Refuse anything that isn't a hand-off. This workflow shares a Gmail\n// credential and a recipient list with the enquiry notifier, and the two\n// payloads are NOT interchangeable — rendering the wrong one would email the\n// desk a card with every field blank.\nif (!body || body.type !== \"sales_handoff\") {\n  return [];\n}\n\nconst to = (body.notifyTo || \"\").toString().trim();\n// No destination address configured (Integrations tab) → nothing to send. The\n// hand-off itself has already been recorded by the app.\nif (!to) return [];\n\nconst leads = Array.isArray(body.leads) ? body.leads.slice(0, MAX_CARDS) : [];\nif (leads.length === 0) return [];\n\nconst total = Number.isFinite(body.totalLeads) ? Number(body.totalLeads) : leads.length;\nconst overflow = Math.max(0, total - leads.length);\n\nconst by = body.handedOverBy && typeof body.handedOverBy === \"object\" ? body.handedOverBy : {};\nconst actor = esc(by.email || \"An admin\");\n// An admin acting while previewing another role is named as such — the same\n// attribution the console's audit trail records.\nconst actorRole = by.actingAs ? esc(by.role) + \" as \" + esc(by.actingAs) : esc(by.role || \"\");\nconst consoleUrl =\n  typeof body.consoleUrl === \"string\" && /^https?:\\/\\//i.test(body.consoleUrl)\n    ? body.consoleUrl\n    : \"\";\n\nconst subject =\n  total === 1\n    ? \"New lead for Sales: \" + ((leads[0] && leads[0].business) || \"unnamed lead\")\n    : total + \" new leads for Sales\";\n\n/* ─────────────────────────────  pieces  ───────────────────────────── */\n\nfunction detailRow(label, valueHtml) {\n  return (\n    \"<tr>\" +\n    '<td style=\"padding:5px 12px 5px 0;font-size:12px;color:#6b7280;white-space:nowrap;vertical-align:top;\">' +\n    label +\n    \"</td>\" +\n    '<td style=\"padding:5px 0;font-size:13px;color:#111111;\">' +\n    valueHtml +\n    \"</td>\" +\n    \"</tr>\"\n  );\n}\n\n/** The score chip — the number that put this lead on Hot Leads in the first\n *  place, which IS the answer to \"why was this sent to me\". */\nfunction scoreChip(lead) {\n  if (lead.score == null) return \"\";\n  const hot = Number(lead.score) >= 60;\n  const bg = hot ? BRAND.color : \"#f3f4f6\";\n  const fg = hot ? \"#ffffff\" : \"#374151\";\n  return (\n    '<span style=\"display:inline-block;background:' +\n    bg +\n    \";color:\" +\n    fg +\n    ';border-radius:999px;font-size:11px;font-weight:700;padding:3px 10px;white-space:nowrap;\">' +\n    esc(lead.band || \"Score\") +\n    \" · \" +\n    esc(lead.score) +\n    \"</span>\"\n  );\n}\n\n/** The counted funnel — the evidence line under the prose. */\nfunction activityLine(a) {\n  if (!a) return \"\";\n  const bits = [];\n  if (a.emailClicks > 0) bits.push(a.emailClicks + \"× email link\");\n  if (a.packDownloads > 0) bits.push(a.packDownloads + \"× info pack\");\n  if (a.portalViews > 0) bits.push(a.portalViews + \"× portal visit\");\n  if (a.serviceOpens > 0) bits.push(a.serviceOpens + \"× service card\");\n  if (a.chatPrompts > 0) bits.push(a.chatPrompts + \"× chat question\");\n  if (a.enquiries > 0) bits.push(a.enquiries + \"× enquiry\");\n  if (bits.length === 0) return \"\";\n  const span =\n    a.daysActive > 1\n      ? \" over \" + a.daysActive + \" days, last seen \" + when(a.lastSeen)\n      : \", last seen \" + when(a.lastSeen);\n  return (\n    '<div style=\"margin-top:10px;font-size:12px;color:#6b7280;\">' +\n    esc(bits.join(\" · \")) +\n    esc(span) +\n    \"</div>\"\n  );\n}\n\nfunction pointsList(points) {\n  const items = (Array.isArray(points) ? points : []).slice(0, 6);\n  if (items.length === 0) return \"\";\n  return (\n    '<div style=\"margin-top:14px;\">' +\n    '<div style=\"font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;\">Talking points</div>' +\n    '<ul style=\"margin:0;padding-left:18px;font-size:13px;color:#111;line-height:1.65;\">' +\n    items.map((p) => \"<li>\" + esc(p) + \"</li>\").join(\"\") +\n    \"</ul>\" +\n    \"</div>\"\n  );\n}\n\nfunction timelineList(steps) {\n  const items = Array.isArray(steps) ? steps : [];\n  if (items.length === 0) return \"\";\n  return (\n    '<div style=\"margin-top:14px;padding-top:12px;border-top:1px solid #ececec;\">' +\n    '<div style=\"font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;\">What they did</div>' +\n    '<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\">' +\n    items\n      .map(\n        (s) =>\n          \"<tr>\" +\n          '<td style=\"padding:3px 10px 3px 0;font-size:12px;color:#9ca3af;white-space:nowrap;vertical-align:top;\">' +\n          esc(when(s.ts)) +\n          \"</td>\" +\n          '<td style=\"padding:3px 0;font-size:13px;color:#111;\">' +\n          esc(s.label) +\n          \"</td>\" +\n          \"</tr>\",\n      )\n      .join(\"\") +\n    \"</table>\" +\n    \"</div>\"\n  );\n}\n\n/** Call and email buttons — the whole point of the notification is the call. */\nfunction actions(lead) {\n  const btns = [];\n  if (lead.phone) {\n    btns.push(\n      '<a href=\"' +\n        esc(telHref(lead.phone)) +\n        '\" style=\"display:inline-block;background:' +\n        BRAND.color +\n        ';color:#fff;text-decoration:none;font-weight:600;font-size:13px;padding:9px 18px;border-radius:8px;margin:0 8px 8px 0;\">Call ' +\n        esc(lead.phone) +\n        \"</a>\",\n    );\n  }\n  if (lead.email) {\n    btns.push(\n      '<a href=\"mailto:' +\n        esc(lead.email) +\n        '\" style=\"display:inline-block;border:1px solid #d1d5db;color:#111;text-decoration:none;font-weight:600;font-size:13px;padding:8px 17px;border-radius:8px;margin:0 8px 8px 0;\">Email them</a>',\n    );\n  }\n  if (btns.length === 0) {\n    return '<div style=\"margin-top:14px;font-size:12px;color:#9ca3af;\">No phone or email on file — open the lead in the console to check the website.</div>';\n  }\n  return '<div style=\"margin-top:16px;\">' + btns.join(\"\") + \"</div>\";\n}\n\nfunction leadCard(lead) {\n  const name = esc(lead.business || lead.contactName || \"Unnamed lead\");\n  const details =\n    detailRow(\"Contact\", lead.contactName ? esc(lead.contactName) : '<span style=\"color:#9ca3af;\">not on file</span>') +\n    detailRow(\n      \"Phone\",\n      lead.phone\n        ? '<a href=\"' + esc(telHref(lead.phone)) + '\" style=\"color:' + BRAND.color + ';\">' + esc(lead.phone) + \"</a>\"\n        : '<span style=\"color:#9ca3af;\">not on file</span>',\n    ) +\n    detailRow(\n      \"Email\",\n      lead.email\n        ? '<a href=\"mailto:' + esc(lead.email) + '\" style=\"color:' + BRAND.color + ';\">' + esc(lead.email) + \"</a>\"\n        : '<span style=\"color:#9ca3af;\">not on file</span>',\n    ) +\n    (lead.website\n      ? detailRow(\n          \"Website\",\n          '<a href=\"https://' + esc(lead.website) + '\" style=\"color:' + BRAND.color + ';\">' + esc(lead.website) + \"</a>\",\n        )\n      : \"\") +\n    (lead.sector ? detailRow(\"Sector\", esc(lead.sector)) : \"\") +\n    (lead.campaign ? detailRow(\"Campaign\", esc(lead.campaign)) : \"\");\n\n  return (\n    '<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"border:1px solid #ececec;border-radius:10px;margin-bottom:16px;\">' +\n    '<tr><td style=\"padding:16px 18px;\">' +\n    // name + score\n    '<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr>' +\n    '<td style=\"font-size:16px;font-weight:700;color:#111;padding-right:10px;\">' +\n    name +\n    \"</td>\" +\n    '<td align=\"right\" style=\"white-space:nowrap;\">' +\n    scoreChip(lead) +\n    \"</td>\" +\n    \"</tr></table>\" +\n    // the brief\n    '<div style=\"margin-top:12px;font-size:13px;color:#111;line-height:1.65;\">' +\n    esc(lead.summary || \"No recorded activity for this lead.\") +\n    \"</div>\" +\n    activityLine(lead.activity) +\n    pointsList(lead.talkingPoints) +\n    // contact details\n    '<div style=\"margin-top:14px;padding-top:12px;border-top:1px solid #ececec;\">' +\n    '<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\">' +\n    details +\n    \"</table></div>\" +\n    timelineList(lead.timeline) +\n    actions(lead) +\n    \"</td></tr></table>\"\n  );\n}\n\n/* ─────────────────────────────  the email  ───────────────────────────── */\n\nconst intro =\n  \"Hey mate — \" +\n  actor +\n  (actorRole ? \" (\" + actorRole + \")\" : \"\") +\n  \" just sent \" +\n  (total === 1 ? \"a lead\" : total + \" leads\") +\n  \" through to the Sales dashboard\" +\n  (body.handedOverAt ? \" at \" + esc(when(body.handedOverAt)) : \"\") +\n  \". Here's what they did and why \" +\n  (total === 1 ? \"it's\" : \"they're\") +\n  \" worth a call.\";\n\nconst html =\n  '<!doctype html><html><head><meta charset=\"utf-8\"></head>' +\n  '<body style=\"margin:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,\\'Segoe UI\\',Roboto,Helvetica,Arial,sans-serif;\">' +\n  '<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"padding:24px 12px;\"><tr><td align=\"center\">' +\n  '<table role=\"presentation\" width=\"620\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:620px;width:100%;background:#fff;border-radius:12px;overflow:hidden;\">' +\n  '<tr><td style=\"background:#111;padding:16px 24px;color:#fff;font-size:16px;font-weight:700;\">' +\n  (total === 1 ? \"New lead on the Sales desk\" : total + \" new leads on the Sales desk\") +\n  \"</td></tr>\" +\n  '<tr><td style=\"height:3px;background:' +\n  BRAND.color +\n  ';font-size:0;line-height:0;\">&nbsp;</td></tr>' +\n  '<tr><td style=\"padding:20px 24px;\">' +\n  '<div style=\"font-size:14px;color:#111;line-height:1.65;margin-bottom:18px;\">' +\n  intro +\n  \"</div>\" +\n  leads.map(leadCard).join(\"\") +\n  (overflow > 0\n    ? '<div style=\"font-size:13px;color:#6b7280;margin-bottom:16px;\">+ ' +\n      overflow +\n      (overflow === 1\n        ? \" more lead was handed over in the same batch\"\n        : \" more leads were handed over in the same batch\") +\n      \" — they're all waiting on the Sales tab.</div>\"\n    : \"\") +\n  (consoleUrl\n    ? '<div style=\"margin-top:4px;\">' +\n      '<a href=\"' +\n      esc(consoleUrl) +\n      '\" style=\"display:inline-block;background:#111;color:#fff;text-decoration:none;font-weight:600;font-size:13px;padding:10px 20px;border-radius:8px;\">Open the Sales desk</a>' +\n      '<div style=\"margin-top:8px;font-size:11px;color:#9ca3af;\">Sign in, then choose Sales in the sidebar.</div>' +\n      \"</div>\"\n    : \"\") +\n  \"</td></tr>\" +\n  '<tr><td style=\"background:#fafafa;border-top:1px solid #ececec;padding:14px 24px;font-size:11px;color:#9ca3af;\">' +\n  \"APMG Services — automated Sales hand-off notification. Every figure above is counted off the lead's own tracked activity. \" +\n  \"Sent to everyone on the notification list (Integrations tab).\" +\n  \"</td></tr>\" +\n  \"</table></td></tr></table></body></html>\";\n\nreturn [{ json: { to, subject, html } }];\n"
+      },
+      "id": "1f6c8b74-3d29-4a15-8e07-92c4b5d6e3f8",
+      "name": "Format Handoff",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3536,
+        4592
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "5b90a2e6-7c48-4d31-a6f9-1e2b8c4d7059",
+      "name": "Send To Sales Desk",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        3776,
+        4592
+      ],
+      "webhookId": "9d2f4a71-5e83-4c26-b0a7-3f8e1c5b6d",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "kskI74Hc193Yl8SU",
+          "name": "APMG - Official Lead Gen Mail"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true } }}",
+        "options": {}
+      },
+      "id": "8c3e5d19-2b47-40fa-95d6-7a1b9e4c2f63",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        4048,
+        4592
+      ]
+    }
+  ],
+  "connections": {
+    "Lead Sent To Sales": {
+      "main": [
+        [
+          {
+            "node": "Format Handoff",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Handoff": {
+      "main": [
+        [
+          {
+            "node": "Send To Sales Desk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send To Sales Desk": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "6b20b77d7a3fd2e31fd7b0cb44dc61b514009ab3b55c1ea8d1896a9a48a5c090"
+  }
+}
