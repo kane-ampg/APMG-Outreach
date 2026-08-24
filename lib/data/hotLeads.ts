@@ -371,29 +371,42 @@ async function mark(kind: MarkerKind, leadIds: string[]): Promise<string | null>
   }
 }
 
-/** DELETE one marker kind for one lead. */
-async function unmark(kind: MarkerKind, leadId: string): Promise<string | null> {
-  if (!leadId) return null;
+/** Most leads one DELETE may carry — matches the server's own cap, so a bigger
+ *  selection is split into batches here rather than refused there. */
+const UNMARK_BATCH = 200;
+
+/** DELETE one marker kind for one lead, or for a whole selection. */
+async function unmark(kind: MarkerKind, leadIds: string | string[]): Promise<string | null> {
+  const ids = [...new Set((typeof leadIds === "string" ? [leadIds] : leadIds).filter(Boolean))];
+  if (ids.length === 0) return null;
 
   if (snapshot.mode === "demo") {
-    if (kind === "returned") demoReturned.delete(leadId);
-    else (kind === "handoff" ? demoHandoffs : demoArchived).delete(leadId);
+    for (const id of ids) {
+      if (kind === "returned") demoReturned.delete(id);
+      else (kind === "handoff" ? demoHandoffs : demoArchived).delete(id);
+    }
     applyMarks(new Map(demoHandoffs), new Map(demoArchived), new Map(demoReturned));
     return null;
   }
 
-  try {
-    const res = await fetch(
-      `/api/sales/handoff?kind=${kind}&leadId=${encodeURIComponent(leadId)}`,
-      { method: "DELETE", headers: adminHeaders() },
-    );
-    const data = (await res.json().catch(() => null)) as SalesHandoffResponse | null;
-    if (!res.ok || !data?.ok) return data?.error ?? `That didn't save (${res.status}).`;
-    applyMarks(toMarkerMap(data.handoffs), toMarkerMap(data.archived), toReturnMap(data.returned));
-    return null;
-  } catch {
-    return "Network error — nothing was saved.";
+  // Sequential batches: each response carries the authoritative ledgers, so the
+  // last one applied is the true state. A failed batch stops the rest — the
+  // ones already erased stay erased, and the error names what's left.
+  for (let i = 0; i < ids.length; i += UNMARK_BATCH) {
+    const batch = ids.slice(i, i + UNMARK_BATCH);
+    try {
+      const res = await fetch(
+        `/api/sales/handoff?kind=${kind}&leadIds=${encodeURIComponent(batch.join(","))}`,
+        { method: "DELETE", headers: adminHeaders() },
+      );
+      const data = (await res.json().catch(() => null)) as SalesHandoffResponse | null;
+      if (!res.ok || !data?.ok) return data?.error ?? `That didn't save (${res.status}).`;
+      applyMarks(toMarkerMap(data.handoffs), toMarkerMap(data.archived), toReturnMap(data.returned));
+    } catch {
+      return "Network error — nothing was saved.";
+    }
   }
+  return null;
 }
 
 /**
@@ -424,9 +437,15 @@ export async function handOffToSales(leadIds: string[]): Promise<string | null> 
 /** Undo a hand-off — the lead returns to the Hot Leads review list AND leaves
  *  the rep's queue. Only the marker is erased; the lead and its trail stay. */
 export function pullBackFromSales(leadId: string): Promise<string | null> {
+  return pullBackManyFromSales([leadId]);
+}
+
+/** Undo a whole selection of hand-offs in one go — the bulk twin of
+ *  pullBackFromSales, for "select all" on the In Sales lane. */
+export function pullBackManyFromSales(leadIds: string[]): Promise<string | null> {
   // Pulled back, so a later re-hand is a genuine new arrival again.
-  forgetSelfHandoff(leadId);
-  return unmark("handoff", leadId);
+  for (const id of leadIds) forgetSelfHandoff(id);
+  return unmark("handoff", leadIds);
 }
 
 /**

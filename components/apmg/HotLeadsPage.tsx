@@ -35,6 +35,7 @@ import {
   clearReturn,
   handOffToSales,
   pullBackFromSales,
+  pullBackManyFromSales,
   refreshHotLeads,
   unarchiveLead,
   useHotLeads,
@@ -595,6 +596,13 @@ export function HotLeadsPage() {
     [run, state.handedOff],
   );
   const archive = useCallback((ids: string[]) => run(ids, archiveLeads), [run]);
+  // The bulk twin of a row's Undo. Leads that already left Sales under the
+  // operator (a return, a pull-back in another tab) are dropped first, so the
+  // request only ever carries hand-offs that are actually still standing.
+  const pullBack = useCallback(
+    (ids: string[]) => run(ids.filter((id) => state.handedOff.has(id)), pullBackManyFromSales),
+    [run, state.handedOff],
+  );
 
   const single = useCallback(
     async (leadId: string, op: (id: string) => Promise<string | null>) => {
@@ -836,6 +844,23 @@ export function HotLeadsPage() {
                     >
                       <ArrowRight className="h-3.5 w-3.5" aria-hidden />
                       Send {selected.size > 0 ? formatInt(selected.size) : ""} to Sales
+                    </Button>
+                  )}
+                  {/* ...and only the In Sales lane can undo one, mirroring the
+                      per-row Undo so a whole hand-off batch can be taken back
+                      in one press rather than a row at a time. */}
+                  {lane === "sent" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={selected.size === 0 || busyIds.size > 0}
+                      onClick={() => void pullBack([...selected])}
+                      title="Pull the selected leads back out of Sales"
+                      data-track="hot_leads_pull_back_selected"
+                      className="gap-1.5"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" aria-hidden />
+                      Undo {selected.size > 0 ? formatInt(selected.size) : ""}
                     </Button>
                   )}
                   <Button

@@ -22,7 +22,7 @@ import { notifySalesHandoff } from "@/lib/sales/handoffNotify";
 //
 //   GET                                → all three ledgers
 //   POST   { leadIds, kind?, note? }   → mark leads ("handoff" by default)
-//   DELETE ?leadId=&kind=              → unmark one
+//   DELETE ?leadId=|?leadIds=&kind=    → unmark one, or a comma-separated batch
 //
 // Every response carries ALL THREE ledgers, so a client learns the full state
 // of the flow in a single round trip.
@@ -52,7 +52,8 @@ export const runtime = "nodejs";
 
 /** Ledger scan bound — one row per marked lead, so this is generous. */
 const LEDGER_LIMIT = 5000;
-/** Most leads one POST may mark (the tab's page size is far below this). */
+/** Most leads one POST may mark, or one DELETE may unmark (the tab's page size
+ *  is far below this). */
 const MAX_PER_POST = 200;
 
 const UNAUTHORIZED = {
@@ -163,16 +164,21 @@ function ledgersJson(l: Ledgers): Response {
   });
 }
 
-/** Erase one lead's rows from one ledger. False on any failure (logged). */
-async function deleteMarker(
+/** Erase these leads' rows from one ledger, in a single statement. False on
+ *  any failure (logged). Ids are uuids (checked by the caller), so they need
+ *  no quoting inside the in.() list. */
+async function deleteMarkers(
   base: string,
   key: string,
   kind: MarkerKind,
-  leadId: string,
+  leadIds: string[],
 ): Promise<boolean> {
+  if (leadIds.length === 0) return true;
+  const filter =
+    leadIds.length === 1 ? `lead_id=eq.${leadIds[0]}` : `lead_id=in.(${leadIds.join(",")})`;
   try {
     const res = await fetch(
-      `${base}/rest/v1/portal_events?event=eq.${MARKER_EVENT[kind]}&lead_id=eq.${leadId}`,
+      `${base}/rest/v1/portal_events?event=eq.${MARKER_EVENT[kind]}&${filter}`,
       { method: "DELETE", headers: restHeaders(key, { Prefer: "return=minimal" }) },
     );
     if (res.ok) return true;
@@ -333,13 +339,12 @@ export async function POST(req: Request): Promise<Response> {
   // back to admin on Hot Leads with the note attached. Done AFTER the return
   // row lands, so a failure here can never lose the rep's reason.
   if (kind === "returned") {
-    for (const id of wanted.filter((x) => all.ledgers.handoff.has(x))) {
-      if (!(await deleteMarker(target.base, target.key, "handoff", id))) {
-        return json(
-          { ok: false, error: "Recorded the return, but couldn't clear the hand-off." },
-          502,
-        );
-      }
+    const handed = wanted.filter((x) => all.ledgers.handoff.has(x));
+    if (!(await deleteMarkers(target.base, target.key, "handoff", handed))) {
+      return json(
+        { ok: false, error: "Recorded the return, but couldn't clear the hand-off." },
+        502,
+      );
     }
   }
 
@@ -363,7 +368,6 @@ export async function DELETE(req: Request): Promise<Response> {
   // admin-only handoff/archive ledgers. Query-string parsing has no side
   // effect, so this still runs before `gate()` and before any database call.
   const params = new URL(req.url).searchParams;
-  const leadId = params.get("leadId");
   const kindParam = params.get("kind");
   const kind: MarkerKind = isMarkerKind(kindParam) ? kindParam : "handoff";
   const guard = await requirePermission(req, kind === "returned" ? "leads.contact" : "hotleads.handoff");
@@ -372,10 +376,24 @@ export async function DELETE(req: Request): Promise<Response> {
   const target = gate(req);
   if (target instanceof Response) return target;
 
-  // isUuid also makes the eq. interpolation safe (uuids never need quoting).
-  if (!isUuid(leadId)) return json({ ok: false, error: "A valid lead id is required." }, 400);
+  // One lead (?leadId=) or a batch (?leadIds=a,b,c) — the Hot Leads tab undoes
+  // a whole selection in one request rather than a round trip per row. isUuid
+  // also makes the filter interpolation safe (uuids never need quoting).
+  const wanted = [
+    ...new Set(
+      [params.get("leadId") ?? "", ...(params.get("leadIds") ?? "").split(",")]
+        .map((id) => id.trim())
+        .filter(isUuid),
+    ),
+  ];
+  if (wanted.length === 0) return json({ ok: false, error: "A valid lead id is required." }, 400);
+  if (wanted.length > MAX_PER_POST) {
+    // Refused rather than truncated: a silent partial undo would leave leads in
+    // the rep queue that the operator watched disappear from their selection.
+    return json({ ok: false, error: `Too many leads at once (max ${MAX_PER_POST}).` }, 400);
+  }
 
-  if (!(await deleteMarker(target.base, target.key, kind, leadId))) {
+  if (!(await deleteMarkers(target.base, target.key, kind, wanted))) {
     return json({ ok: false, error: "The database rejected that." }, 502);
   }
 
