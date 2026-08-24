@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, Plus_Jakarta_Sans } from "next/font/google";
+import { Fraunces, Inter, Plus_Jakarta_Sans } from "next/font/google";
 import { cookies } from "next/headers";
 import { themeBootstrap } from "@/lib/themeBootstrap";
 import { THEME_SEED_COOKIE } from "@/lib/auth/session";
@@ -17,6 +17,17 @@ const sans = Inter({
 const heading = Plus_Jakarta_Sans({
   subsets: ["latin"],
   variable: "--font-heading",
+  display: "swap",
+});
+
+// Customer-portal display face. Only /portal uses it (`font-display`), so it is
+// subset to the two weights that surface actually sets — 600 for headings, 700
+// for the few that opt into bold. Self-hosted and subset by next/font at build
+// time: no runtime request to a font CDN and no layout shift from a late swap.
+const display = Fraunces({
+  subsets: ["latin"],
+  weight: ["600", "700"],
+  variable: "--font-display",
   display: "swap",
 });
 
@@ -38,7 +49,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`${sans.variable} ${heading.variable} ${seed === "dark" ? "dark" : ""}`}
+      className={`${sans.variable} ${heading.variable} ${display.variable} ${seed === "dark" ? "dark" : ""}`}
       suppressHydrationWarning
     >
       <head>

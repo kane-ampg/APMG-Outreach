@@ -29,6 +29,11 @@ export const PERMISSIONS = {
   "hotleads.view": "View hot leads awaiting hand-off to Sales",
   "hotleads.handoff": "Hand a hot lead over to the Sales queue",
   "leads.export": "Export leads",
+  // The existing-customer list (Master Client List). Read-only by nature — it
+  // is a periodic export from the job-management system, not console state —
+  // so there is no `clients.manage` to grant.
+  "clients.view": "View the master client list of existing customers",
+  "clients.export": "Export the master client list",
   "leads.contact": "Contact a lead (call / email / mark contacted)",
   "leads.close": "Close a lead (won / lost)",
   "sales.view": "View the sales queue of qualified, emailed leads",

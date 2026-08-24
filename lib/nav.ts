@@ -10,6 +10,7 @@ import {
   PhoneCall,
   ScrollText,
   Settings,
+  ShieldCheck,
   Sparkles,
   Users,
   Workflow,
@@ -23,6 +24,7 @@ export type TabId =
   | "overview"
   | "pipeline"
   | "leads"
+  | "clients"
   | "hot"
   | "enquiries"
   | "sales"
@@ -61,6 +63,10 @@ export const NAV: NavSection[] = [
       { id: "overview", label: "Overview", icon: LayoutDashboard, perm: "overview.view" },
       { id: "pipeline", label: "Pipeline", icon: Filter, perm: "pipeline.view" },
       { id: "leads", label: "Leads", icon: Users, perm: "leads.view" },
+      // Directly under Leads, and deliberately: it is the other half of the
+      // same question. Leads is who APMG may approach; this is who it must not,
+      // because they are already customers.
+      { id: "clients", label: "Master Client List", icon: ShieldCheck, perm: "clients.view" },
       // Sits directly under Leads: same lead database, filtered to the ones
       // whose behaviour earned an intent score above the hot cut-off. The
       // badge (live, injected by the Sidebar) counts those still awaiting
@@ -140,6 +146,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   overview: "Overview",
   pipeline: "Pipeline",
   leads: "Leads",
+  clients: "Master Client List",
   hot: "Hot Leads",
   enquiries: "Enquiries",
   sales: "Sales",

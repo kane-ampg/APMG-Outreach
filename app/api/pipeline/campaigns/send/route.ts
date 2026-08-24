@@ -1,3 +1,5 @@
+import { matchReason, partitionByClientGuard } from "@/lib/clients/guard";
+import { clientGuardData } from "@/lib/clients/server";
 import {
   bestEmail,
   ensureLinkToken,
@@ -59,6 +61,10 @@ const SENT_EVENT = "email_sent";
 
 const MAX_SUBJECT = 300;
 const MAX_HTML = 20_000;
+/** How many client matches to name in the response. Enough for the send flow to
+ *  show who was dropped and why; not so many that a 500-recipient batch of
+ *  clients returns a 500-row payload. */
+const MAX_REPORTED_CLIENTS = 25;
 
 type SendMode = "live" | "unconfigured" | "paused" | "noop";
 
@@ -70,12 +76,20 @@ interface SendResult {
   error?: string;
   /** how many recipients were dropped because they had unsubscribed */
   suppressed?: number;
+  /** how many recipients were dropped for already being APMG clients */
+  clients?: number;
+  /** who they were, so the operator is told rather than left to notice the
+   *  count not adding up (capped — the message is a report, not a dump) */
+  clientMatches?: Array<{ business: string; email: string; client: string; reason: string }>;
 }
 
 interface CleanRecipient {
   id: string;
   email: string;
   business?: string;
+  /** the lead's website, used only by the client guard — a prospect whose site
+   *  is a client's own domain is that client under another trading name */
+  website?: string;
   /** per-lead AI draft overrides (Compose email) — fall back to the shared template */
   subject?: string;
   html?: string;
@@ -103,6 +117,7 @@ function sanitizeRecipient(input: unknown): CleanRecipient | null {
   if (!isEmail(email)) return null;
 
   const business = typeof o.business === "string" && o.business.trim() ? o.business.trim() : undefined;
+  const website = typeof o.website === "string" && o.website.trim() ? o.website.trim().slice(0, 300) : undefined;
 
   const subjectRaw = typeof o.subject === "string" ? o.subject.trim() : "";
   const subject = subjectRaw ? subjectRaw.slice(0, MAX_SUBJECT) : undefined;
@@ -111,7 +126,7 @@ function sanitizeRecipient(input: unknown): CleanRecipient | null {
 
   const category = typeof o.category === "string" && o.category.trim() ? o.category.trim().slice(0, 120) : null;
 
-  return { id, email, business, subject, html, category };
+  return { id, email, business, website, subject, html, category };
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -175,6 +190,55 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, sent: 0, mode: "noop", error: "No recipients with a valid email address." }, 400);
   }
 
+  // NEVER EMAIL AN EXISTING CUSTOMER. The client rule from the 2026-07-29 call
+  // is absolute, so it is enforced here rather than only warned about in the
+  // send flow's UI: the browser's copy of the guard index could be stale, and a
+  // hand-rolled POST wouldn't consult it at all. Runs before the suppression
+  // lookup because it needs no network — the folded client list is a bundled
+  // export (lib/clients/server.ts), memoised per instance.
+  //
+  // Only `blocked` matches are dropped: an exact address, a client's mail
+  // domain, a client's own website, or the same business name. Resemblance
+  // matches ("reads like Hive Strata") are a judgement call and stay in the
+  // send — the flow surfaces those for a human before this point.
+  const clientCheck = partitionByClientGuard(recipients, clientGuardData());
+  const clientMatches = clientCheck.blocked.map(({ prospect, match }) => ({
+    business: prospect.business ?? prospect.email,
+    email: prospect.email,
+    client: match.clientName,
+    reason: matchReason(match),
+  }));
+  if (clientMatches.length > 0) {
+    console.warn(
+      `[pipeline/campaigns] dropped ${clientMatches.length} recipient(s) already on the client list:`,
+      clientMatches.map((m) => `${m.email} (${m.reason})`).join("; ").slice(0, 1000),
+    );
+  }
+  // Remove them in place, the same way the suppression pass below does, so the
+  // send order the operator reviewed is otherwise preserved.
+  if (clientCheck.blocked.length > 0) {
+    const drop = new Set(clientCheck.blocked.map(({ prospect }) => prospect));
+    for (let i = recipients.length - 1; i >= 0; i--) {
+      if (drop.has(recipients[i])) recipients.splice(i, 1);
+    }
+  }
+  if (recipients.length === 0) {
+    return json(
+      {
+        ok: false,
+        sent: 0,
+        mode: "noop",
+        clients: clientMatches.length,
+        clientMatches: clientMatches.slice(0, MAX_REPORTED_CLIENTS),
+        error:
+          clientMatches.length === 1
+            ? "The only recipient is already an APMG client, so nothing was sent."
+            : "Every recipient is already an APMG client, so nothing was sent.",
+      },
+      400,
+    );
+  }
+
   // Honour unsubscribes (Spam Act 2003): drop any recipient whose address is on
   // the suppression list before we build/send anything. fetchSuppressedEmails
   // fails OPEN (empty set) if the table is missing or the lookup errors, so a
@@ -199,7 +263,15 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (recipients.length === 0) {
     return json(
-      { ok: false, sent: 0, mode: "noop", suppressed: suppressedCount, error: "Every recipient has unsubscribed." },
+      {
+        ok: false,
+        sent: 0,
+        mode: "noop",
+        suppressed: suppressedCount,
+        clients: clientMatches.length || undefined,
+        clientMatches: clientMatches.length ? clientMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
+        error: "Every recipient has unsubscribed.",
+      },
       400,
     );
   }
@@ -301,7 +373,18 @@ export async function POST(req: Request): Promise<Response> {
     );
   }
 
-  return json({ ok: true, sent: messages.length, mode: "live", campaign, suppressed: suppressedCount });
+  // The client drops are reported on a SUCCESSFUL send too. A campaign that
+  // quietly went to 48 of the 50 leads the operator picked would look like a
+  // clean run; the count and the reasons are what make the difference visible.
+  return json({
+    ok: true,
+    sent: messages.length,
+    mode: "live",
+    campaign,
+    suppressed: suppressedCount,
+    clients: clientMatches.length || undefined,
+    clientMatches: clientMatches.length ? clientMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
+  });
 }
 
 function json(result: SendResult, status = 200): Response {

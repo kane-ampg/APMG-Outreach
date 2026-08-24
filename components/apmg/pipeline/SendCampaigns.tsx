@@ -24,6 +24,8 @@ import {
   RotateCcw,
   Search,
   Send,
+  ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Target,
   Upload,
@@ -51,6 +53,8 @@ import {
   type ComposeDraft,
 } from "@/lib/pipeline/campaign";
 import { SERVICE_TEMPLATES, serviceBySlug } from "@/lib/pipeline/services";
+import { matchReason } from "@/lib/clients/guard";
+import { useClientGuard, type ClientMatch } from "@/lib/data/clients";
 import { Button } from "@/components/ui/button";
 import { Can } from "@/components/rbac/Can";
 import { Footer } from "../Footer";
@@ -84,6 +88,9 @@ type Recipient = {
   subject?: string;
   html?: string;
   category?: string | null;
+  /** the lead's website. Only the client guard reads it — a prospect whose site
+   *  is a client's own domain is that client under another trading name. */
+  website?: string;
   /** a top-up recipient: the lead's 2nd/3rd stored address, added because the
    *  send resolved fewer than MIN_SEND_EMAILS addresses (same email content) */
   alt?: boolean;
@@ -203,7 +210,15 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // client count, then snaps to the server's actual sent count (which may be
   // lower — it de-dupes by address) so the bar can reach 100%.
   const [sendTotal, setSendTotal] = useState(0);
-  const [result, setResult] = useState<{ sent: number; mode: SendMode; campaign: string } | null>(null);
+  const [result, setResult] = useState<{
+    sent: number;
+    mode: SendMode;
+    campaign: string;
+    /** recipients the SENDER dropped for already being clients. Normally zero —
+     *  this screen removes them first — but a stale guard index or a lead the
+     *  browser couldn't match makes this the authoritative count. */
+    clients: number;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // unmount / re-run guards (the sub-tab unmounts on switch, like the importer)
@@ -464,6 +479,94 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     setFindError(null);
   }, []);
 
+  // Everything that could be mailed, before the client guard and the top-up:
+  // one best address per lead, paired with the lead's FULL stored list so the
+  // top-up can draw its alternates.
+  const sendBase = useMemo<Array<{ recipient: Recipient; emails: readonly string[] }>>(() => {
+    if (draftMode === "ai") {
+      if (composePhase !== "ready") return [];
+      return drafts
+        .filter((d) => approved.has(d.id) && picked.has(d.id) && draftSendable(d))
+        .map((d) => ({
+          recipient: {
+            id: d.id,
+            email: d.best_email!,
+            business: d.business,
+            subject: d.subject,
+            html: d.html,
+            category: d.category,
+            website: d.url ?? undefined,
+          },
+          emails: d.emails,
+        }));
+    }
+    return pickedTargets
+      .map((r) => ({
+        recipient: {
+          id: r.id!,
+          email: bestEmail(r.emails) ?? "",
+          business: r.name,
+          category: r.category ?? null,
+          website: r.website ?? undefined,
+        },
+        emails: r.emails ?? [],
+      }))
+      .filter((b) => !!b.recipient.email);
+  }, [draftMode, composePhase, drafts, approved, picked, pickedTargets]);
+
+  // ── the client guard ──────────────────────────────────────────────────────
+  // APMG must never cold-email an existing customer (the client rule from the
+  // 2026-07-29 call). Every candidate is checked against the Master Client List
+  // — addresses, mail domains, websites and business names — before it can
+  // reach the review step.
+  //
+  // Two outcomes, and the difference matters: a CERTAIN match is taken out of
+  // the send here so the counts an operator reads are the counts that go out,
+  // while a RESEMBLANCE is left in and flagged, because a rule loose enough to
+  // catch every relative would also bin real prospects.
+  //
+  // Advisory only. /api/pipeline/campaigns/send runs the same check server-side
+  // and drops the certain matches regardless, so a guard that failed to load
+  // cannot get a customer emailed — it can only stop this screen from
+  // explaining why.
+  const { ready: guardReady, error: guardError, match: matchAgainstClients } = useClientGuard();
+
+  const clientHits = useMemo(() => {
+    if (!guardReady) return [] as Array<{ recipient: Recipient; match: ClientMatch }>;
+    const hits: Array<{ recipient: Recipient; match: ClientMatch }> = [];
+    for (const { recipient } of sendBase) {
+      const match = matchAgainstClients({
+        name: recipient.business,
+        website: recipient.website,
+        email: recipient.email,
+      });
+      if (match) hits.push({ recipient, match });
+    }
+    return hits;
+  }, [sendBase, guardReady, matchAgainstClients]);
+
+  const clientBlocked = useMemo(() => clientHits.filter((h) => h.match.blocked), [clientHits]);
+  const clientWarned = useMemo(() => clientHits.filter((h) => !h.match.blocked), [clientHits]);
+
+  // The audience step needs its own count. `sendBase` is empty in AI mode until
+  // the drafts come back, and the whole point of warning at step 0 is to warn
+  // BEFORE Claude is paid to write emails to a customer — so this reads the
+  // selection directly. Leads with no stored address are included: the Email
+  // Finder may well find one, and a client found later is still a client.
+  const audienceClientLeads = useMemo(() => {
+    if (!guardReady) return 0;
+    let n = 0;
+    for (const lead of pickedTargets) {
+      const match = matchAgainstClients({
+        name: lead.name,
+        website: lead.website,
+        emails: lead.emails ?? undefined,
+      });
+      if (match?.blocked) n++;
+    }
+    return n;
+  }, [pickedTargets, guardReady, matchAgainstClients]);
+
   // the actual send list. AI mode: approved, still-selected, sendable drafts,
   // each carrying its own subject/body; template mode: selected leads with a
   // stored best address. Intersecting with `picked` means a lead deselected
@@ -474,34 +577,12 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // alternate stored addresses of leads that have more than one email (same
   // per-lead content, flagged `alt`), until the target or the alternates run
   // out. Deduped case-insensitively across the whole send; the send route
-  // de-dupes by address too, so the counts agree.
+  // de-dupes by address too, so the counts agree. Existing clients are removed
+  // BEFORE the top-up, so a padded send never reaches for a customer's second
+  // address to make up the numbers.
   const recipients = useMemo<Recipient[]>(() => {
-    // one best address per lead, paired with the lead's FULL stored list so
-    // the top-up below can draw its alternates
-    let base: Array<{ recipient: Recipient; emails: readonly string[] }>;
-    if (draftMode === "ai") {
-      if (composePhase !== "ready") return [];
-      base = drafts
-        .filter((d) => approved.has(d.id) && picked.has(d.id) && draftSendable(d))
-        .map((d) => ({
-          recipient: {
-            id: d.id,
-            email: d.best_email!,
-            business: d.business,
-            subject: d.subject,
-            html: d.html,
-            category: d.category,
-          },
-          emails: d.emails,
-        }));
-    } else {
-      base = pickedTargets
-        .map((r) => ({
-          recipient: { id: r.id!, email: bestEmail(r.emails) ?? "", business: r.name, category: r.category ?? null },
-          emails: r.emails ?? [],
-        }))
-        .filter((b) => !!b.recipient.email);
-    }
+    const excluded = new Set(clientBlocked.map((h) => h.recipient));
+    const base = excluded.size > 0 ? sendBase.filter((b) => !excluded.has(b.recipient)) : sendBase;
 
     const out = base.map((b) => b.recipient);
     if (out.length === 0 || out.length >= MIN_SEND_EMAILS) return out;
@@ -516,7 +597,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       }
     }
     return out;
-  }, [draftMode, composePhase, drafts, approved, picked, pickedTargets]);
+  }, [sendBase, clientBlocked]);
   const recipientCount = recipients.length;
   // distinct LEADS being mailed — with the top-up, one lead can hold several
   // recipient rows, so lead-facing copy must not count rows
@@ -524,11 +605,18 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     () => new Set(recipients.map((r) => r.id)).size,
     [recipients],
   );
+  // leads the client guard took out of the send, counted as LEADS — the number
+  // the warning quotes, and the number the "no stored email" line below has to
+  // discount so a dropped customer isn't reported as a missing address
+  const clientBlockedLeadCount = useMemo(
+    () => new Set(clientBlocked.map((h) => h.recipient.id)).size,
+    [clientBlocked],
+  );
   // template-mode leads dropped for want of a stored email (website-only leads
   // above the AI cap, or when the shared template is used deliberately)
   const templateDropped =
     !(draftMode === "ai" && composePhase === "ready")
-      ? pickedTargets.length - recipientLeadCount
+      ? Math.max(0, pickedTargets.length - recipientLeadCount - clientBlockedLeadCount)
       : 0;
 
   // Invalidate stale drafts when the composed audience changes — a re-compose
@@ -874,7 +962,14 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       return;
     }
     const data = (await res.json().catch(() => null)) as
-      | { ok?: boolean; sent?: number; mode?: SendMode; campaign?: string; error?: string }
+      | {
+          ok?: boolean;
+          sent?: number;
+          mode?: SendMode;
+          campaign?: string;
+          error?: string;
+          clients?: number;
+        }
       | null;
     if (!live()) return;
     if (!res.ok || !data?.ok) {
@@ -890,7 +985,12 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     if (!live()) return;
     if (!reduce) await sleep(450);
     if (!live()) return;
-    setResult({ sent, mode: data.mode ?? "unconfigured", campaign: data.campaign ?? tag });
+    setResult({
+      sent,
+      mode: data.mode ?? "unconfigured",
+      campaign: data.campaign ?? tag,
+      clients: typeof data.clients === "number" ? data.clients : 0,
+    });
     setSendPhase("done");
   }, [recipients, campaign, subject, body, service, reduce]);
 
@@ -1025,6 +1125,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           onRefresh={fetchLeads}
           onContinue={startCompose}
           onSwitchToLeads={onSwitchToLeads}
+          clientBlockedCount={audienceClientLeads}
         />
       );
     }
@@ -1135,6 +1236,10 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         templateReady={aiSend || (subject.trim().length > 0 && body.trim().length > 0)}
         droppedCount={templateDropped}
         batchLabel={batchLabel}
+        clientBlocked={clientBlocked}
+        clientWarned={clientWarned}
+        guardReady={guardReady}
+        guardError={guardError}
         onBack={() => setSelected(1)}
         onSend={send}
         sending={sending}
@@ -1280,6 +1385,7 @@ function AudiencePanel({
   visible,
   picked,
   selectedCount,
+  clientBlockedCount,
   scrapeCount,
   findableCount,
   findPhase,
@@ -1308,6 +1414,8 @@ function AudiencePanel({
   visible: LeadView[];
   picked: Set<string>;
   selectedCount: number;
+  /** selected leads the client guard removed from the send (leads, not rows) */
+  clientBlockedCount: number;
   scrapeCount: number;
   findableCount: number;
   findPhase: FindPhase;
@@ -1519,6 +1627,21 @@ function AudiencePanel({
           {findNote && (
             <p role="status" className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
               {findNote}
+            </p>
+          )}
+
+          {/* Said here as well as in Review because Compose runs in between:
+              drafting fifty emails Claude will never send is a waste of a paid
+              call, and of the operator's time reviewing them. */}
+          {clientBlockedCount > 0 && (
+            <p role="alert" className="flex items-start gap-1.5 font-mono text-[10.5px] leading-relaxed text-destructive">
+              <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+              <span>
+                {clientBlockedCount.toLocaleString("en-US")} selected lead
+                {clientBlockedCount === 1 ? " is" : "s are"} already an APMG client and{" "}
+                {clientBlockedCount === 1 ? "is" : "are"} excluded from this send — those are taken.
+                See the Master Client List tab.
+              </span>
             </p>
           )}
 
@@ -2322,6 +2445,10 @@ function ReviewPanel({
   templateReady,
   droppedCount,
   batchLabel,
+  clientBlocked,
+  clientWarned,
+  guardReady,
+  guardError,
   onBack,
   onSend,
   sending,
@@ -2335,6 +2462,12 @@ function ReviewPanel({
   templateReady: boolean;
   droppedCount: number;
   batchLabel: string | null;
+  /** recipients already on the Master Client List — taken out of the send */
+  clientBlocked: Array<{ recipient: Recipient; match: ClientMatch }>;
+  /** recipients that merely resemble a client — still in the send, flagged */
+  clientWarned: Array<{ recipient: Recipient; match: ClientMatch }>;
+  guardReady: boolean;
+  guardError: string | null;
   onBack: () => void;
   onSend: () => void;
   sending: boolean;
@@ -2360,6 +2493,13 @@ function ReviewPanel({
         <Stat label="Campaign tag" value={campaign} mono />
         <Stat label="Message" value={ai ? "AI · per lead" : "Shared template"} />
       </dl>
+
+      <ClientGuardNotice
+        blocked={clientBlocked}
+        warned={clientWarned}
+        ready={guardReady}
+        error={guardError}
+      />
 
       {serviceName && (
         <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
@@ -2462,6 +2602,121 @@ function ReviewPanel({
           </Button>
         </Can>
       </div>
+    </div>
+  );
+}
+
+/**
+ * "These are already clients" — the warning that keeps the Master Client List
+ * and the outreach list from colliding.
+ *
+ * Three states, and each says something different:
+ *  · BLOCKED — certain matches, already removed from the send. Loud, because
+ *    the operator picked those leads and the count they see is now smaller than
+ *    the count they chose; they are owed the reason.
+ *  · FLAGGED — resemblance only. Still in the send. Quiet, and phrased as a
+ *    question rather than a verdict, because it might well be a real prospect.
+ *  · UNCHECKED — the guard didn't load. Said out loud rather than swallowed: a
+ *    silent absence of warnings reads exactly like a clean audience. The send
+ *    route still enforces the rule, so this is a gap in the explanation, not in
+ *    the protection.
+ */
+function ClientGuardNotice({
+  blocked,
+  warned,
+  ready,
+  error,
+}: {
+  blocked: Array<{ recipient: Recipient; match: ClientMatch }>;
+  warned: Array<{ recipient: Recipient; match: ClientMatch }>;
+  ready: boolean;
+  error: string | null;
+}) {
+  if (!ready) {
+    return (
+      <div className="flex items-start gap-2.5 rounded-lg border border-border bg-background/40 px-3 py-2.5">
+        <ShieldAlert className="mt-px h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+        <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+          {error
+            ? `Existing customers couldn't be checked here — ${error} The send itself still refuses to mail a client, so nothing can slip through; you just won't see who was skipped until it reports back.`
+            : "Checking this audience against the Master Client List…"}
+        </p>
+      </div>
+    );
+  }
+
+  if (blocked.length === 0 && warned.length === 0) {
+    return (
+      <p className="flex items-center gap-1.5 font-mono text-[10.5px] text-muted-foreground">
+        <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+        Checked against the Master Client List — no existing customers in this audience.
+      </p>
+    );
+  }
+
+  const blockedLeads = new Set(blocked.map((h) => h.recipient.id)).size;
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      {blocked.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-lg border border-destructive/40 bg-destructive/[0.06] px-3 py-2.5"
+        >
+          <div className="flex items-start gap-2.5">
+            <span className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+              <ShieldAlert className="h-4 w-4" aria-hidden />
+            </span>
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold text-foreground">
+                {blockedLeads.toLocaleString("en-US")} lead{blockedLeads === 1 ? " is" : "s are"} already
+                an APMG client — {blockedLeads === 1 ? "it has" : "they have"} been taken out of this send
+              </div>
+              <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+                These are taken. Existing customers must never receive cold outreach, so they are
+                excluded here and again by the sender. Fix the match on the Master Client List tab if
+                one of these is wrong.
+              </p>
+            </div>
+          </div>
+          <ul className="mt-2 flex max-h-40 flex-col gap-1 overflow-y-auto">
+            {blocked.map(({ recipient, match }) => (
+              <li
+                key={`${recipient.id}:${recipient.email.toLowerCase()}`}
+                className="flex flex-wrap items-baseline gap-x-2 font-mono text-[10.5px]"
+              >
+                <span className="font-semibold text-foreground/90">{recipient.business}</span>
+                <span className="text-muted-foreground">{recipient.email}</span>
+                <span className="text-destructive">{matchReason(match)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {warned.length > 0 && (
+        <div className="rounded-lg border border-border bg-background/40 px-3 py-2.5">
+          <div className="text-[12px] font-medium text-foreground">
+            {warned.length.toLocaleString("en-US")} recipient{warned.length === 1 ? "" : "s"} read
+            {warned.length === 1 ? "s" : ""} like an existing client — still in the send
+          </div>
+          <p className="mt-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+            The name is close but nothing else matched, so this is a judgement call rather than a
+            certainty. Go back to Audience and deselect any that are the same business.
+          </p>
+          <ul className="mt-2 flex max-h-32 flex-col gap-1 overflow-y-auto">
+            {warned.map(({ recipient, match }) => (
+              <li
+                key={`${recipient.id}:${recipient.email.toLowerCase()}`}
+                className="flex flex-wrap items-baseline gap-x-2 font-mono text-[10.5px]"
+              >
+                <span className="font-semibold text-foreground/90">{recipient.business}</span>
+                <span className="text-muted-foreground">{matchReason(match)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -2577,7 +2832,7 @@ function SuccessBanner({
   onNextBatch,
   onReset,
 }: {
-  result: { sent: number; mode: SendMode; campaign: string };
+  result: { sent: number; mode: SendMode; campaign: string; clients: number };
   /** batching progress — set when this send was one batch of a larger selection */
   batch: { no: number; total: number; nextCount: number; queuedLeads: number } | null;
   onNextBatch: () => void;
@@ -2648,6 +2903,18 @@ function SuccessBanner({
             Compose batch {(batch.no + 1).toLocaleString("en-US")} ({batch.nextCount.toLocaleString("en-US")})
           </Button>
         </div>
+      )}
+
+      {result.clients > 0 && (
+        <p className="flex items-start gap-1.5 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+          <ShieldAlert className="mt-px h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+          <span>
+            The sender also dropped {result.clients.toLocaleString("en-US")} recipient
+            {result.clients === 1 ? "" : "s"} for already being an APMG client, so{" "}
+            {result.clients === 1 ? "it was" : "they were"} not emailed. They are on the Master Client
+            List tab.
+          </span>
+        </p>
       )}
 
       <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">

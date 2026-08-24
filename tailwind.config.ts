@@ -21,6 +21,10 @@ const config: Config = {
           "system-ui",
           "sans-serif",
         ],
+        // Customer-portal display face (Fraunces). The internal console keeps
+        // `heading` (Plus Jakarta Sans) — this serif is scoped to /portal, where
+        // the surface is marketing rather than telemetry.
+        display: ["var(--font-display)", "Georgia", "Times New Roman", "serif"],
       },
       // A little bigger than Tailwind's defaults (~1 step up): body 14→15,
       // base 16→17, etc. Keeps the layout tight while improving readability.
@@ -94,6 +98,59 @@ const config: Config = {
           700: "#161618",
           600: "#1c1c1f",
         },
+
+        /* ── Customer-portal palette ───────────────────────────────────────
+         * Ported from the APMG Painting site so the two customer-facing
+         * surfaces read as one business. Scoped by USE, not by CSS: only
+         * /portal composes these, and they are literal hex rather than theme
+         * vars ON PURPOSE — the portal is pinned light (app/portal/layout.tsx)
+         * and a marketing page must not flip with an operator's console theme.
+         *
+         * `signal` is NOT ported: this project already owns that key as its red
+         * data scale. Nothing here needs the painting site's amber.
+         */
+
+        // APMG black — the dominant dark surface AND the body text colour, so
+        // it stays a true neutral with no cast to fight the red.
+        ink: {
+          DEFAULT: "#0F1113",
+          raised: "#1B1E21",
+          soft: "#3A3E42",
+          muted: "#6B7075",
+        },
+        paper: {
+          DEFAULT: "#FFFFFF",
+          sunken: "#F5F5F5",
+          edge: "#E3E3E4",
+        },
+        // APMG red, the portal's only accent. 600 is the lightest step that
+        // still clears 4.5:1 on white, so it is the floor for red text.
+        brand: {
+          50: "#FDF2F3",
+          100: "#FADDE1",
+          400: "#E24356",
+          500: "#D8172F",
+          600: "#C8102E",
+          700: "#A50C25",
+          900: "#6B0718",
+        },
+      },
+      letterSpacing: {
+        // The portal's one uppercase micro-label tracking. Everything that sets
+        // small caps composes this; nothing hand-rolls a second value.
+        label: "0.14em",
+      },
+      maxWidth: {
+        prose: "68ch",
+      },
+      screens: {
+        // Height-keyed, not width-keyed: the portal fold has to hold its whole
+        // offer in one viewport, and a 1366x768 laptop gives it less room than
+        // a phone. `short:` is where the fold tightens instead of overflowing.
+        short: { raw: "(max-height: 760px)" },
+        // Short AND narrow — a small phone. Declared after `short` so it wins
+        // where both match.
+        tight: { raw: "(max-height: 760px) and (max-width: 639px)" },
       },
       borderRadius: {
         "4xl": "1.75rem",

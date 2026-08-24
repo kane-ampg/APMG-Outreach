@@ -50,6 +50,8 @@ export const PERMISSION_SECTIONS = [
       { perm: "sources.view", short: "Lead sources" },
       { perm: "leads.view", short: "Leads" },
       { perm: "leads.export", short: "Export leads" },
+      { perm: "clients.view", short: "Master Client List" },
+      { perm: "clients.export", short: "Export client list" },
       { perm: "hotleads.view", short: "Hot Leads" },
       { perm: "hotleads.handoff", short: "Hand off to Sales" },
       { perm: "enquiries.view", short: "Enquiries" },

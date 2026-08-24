@@ -20,6 +20,7 @@ import { MobileHeader } from "./MobileHeader";
 import { OverviewPage } from "./OverviewPage";
 import { HotLeadsPage } from "./HotLeadsPage";
 import { LeadsPage } from "./LeadsPage";
+import { MasterClientListPage } from "./MasterClientListPage";
 import { PipelinePage } from "./PipelinePage";
 import { SalesArrivalsModal } from "./SalesArrivalsModal";
 import { SalesPage } from "./SalesPage";
@@ -142,6 +143,8 @@ export function DashboardShell({ user }: { user?: SessionUser }) {
                     <PipelinePage />
                   ) : activeTab === "leads" ? (
                     <LeadsPage />
+                  ) : activeTab === "clients" ? (
+                    <MasterClientListPage />
                   ) : activeTab === "hot" ? (
                     <HotLeadsPage />
                   ) : activeTab === "enquiries" ? (

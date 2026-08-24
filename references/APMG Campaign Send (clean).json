@@ -3,8 +3,8 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## APMG Campaign Send\n\nPOST /webhook/campaign-send (Header Auth: x-apmg-secret)\n\nBody: { campaign, messages: [{ to, leadId, subject, text, attachment?, hero?, hero_alt? }] }\n\n**LIGHT HTML, real-email look** (2026-08-17): left-aligned, no container box,\nnative blue text links, plain typed signature (George Collins, Sales\nRepresentative). Only the tracked CTA and Unsubscribe are buttons; no raw URL\nis ever visible. The Gmail node MUST be emailType `html` with message\n`{{ $json.html }}`. `$json.text` still carries a plain-text rendering —\nflip the Gmail node back to `text` + `{{ $json.text }}` to revert without code\nchanges.\n\nNO IMAGES — a top photo was tried and removed the same day (2026-08-17).\n`hero`/`hero_alt` are still sent by the app and deliberately IGNORED.\n\n**Sector playbook** is LINKED through the /t/ hook, never attached.\n\n**Portal host**: every URL in the message body is normalised onto\n`https://customer.apmgservices.com.au` by `canonicalUrl()` in Split Messages\nbefore send. The app bakes NEXT_PUBLIC_TRACK_BASE in at BUILD time, so a stale\nhost can survive an env var change until a redeploy. Add any retired host to\nLEGACY_PORTAL_HOSTS.\n\n**Unsubscribe** (Spam Act 2003) always renders when there is a base + a\nrecipient address.",
-        "height": 470,
+        "content": "## APMG Campaign Send\n\nPOST /webhook/campaign-send (Header Auth: x-apmg-secret)\n\nBody: { campaign, messages: [{ to, leadId, subject, text, attachment?, hero?, hero_alt? }] }\n\n**LIGHT HTML, real-email look** (2026-08-17): left-aligned, no container box,\nnative blue text links, plain typed signature (George Collins, Sales\nRepresentative). Only the tracked CTA and Unsubscribe are buttons; no raw URL\nis ever visible. The Gmail node MUST be emailType `html` with message\n`{{ $json.html }}`. `$json.text` still carries a plain-text rendering —\nflip the Gmail node back to `text` + `{{ $json.text }}` to revert without code\nchanges.\n\nNO IMAGES — a top photo was tried and removed the same day (2026-08-17).\n`hero`/`hero_alt` are still sent by the app and deliberately IGNORED.\n\n**PACED SEND** (2026-08-24): Pace Loop (batch size 1) → Send Email → Wait 30s\n→ back to Pace Loop. One email every 30s, so 25 leave over ~12 minutes\ninstead of all at once — a new sending domain must not burst. Change the spacing\nin the Wait node only.\n\n**Respond OK fires BEFORE the loop**, off the webhook directly. The app aborts\nthe call at 120s, so a synchronous paced send would always read as a failure.\nIt answers { ok: true, accepted: N }. CONSEQUENCE: the app's email_sent ledger\nrecords what was HANDED OVER, not what Gmail confirmed — if the loop dies at\nemail 7, the ledger still shows all 25. Check the n8n execution log after a\nsend until this is reconciled.\n\nSend Email has onError: continueRegularOutput, so one rejected address does not\nstop the batch.\n\n**Sector playbook** is LINKED through the /t/ hook, never attached.\n\n**Portal host**: every URL in the message body is normalised onto\n`https://customer.apmgservices.com.au` by `canonicalUrl()` in Split Messages\nbefore send. The app bakes NEXT_PUBLIC_TRACK_BASE in at BUILD time, so a stale\nhost can survive an env var change until a redeploy. Add any retired host to\nLEGACY_PORTAL_HOSTS.\n\n**Unsubscribe** (Spam Act 2003) always renders when there is a base + a\nrecipient address.",
+        "height": 700,
         "width": 470
       },
       "id": "sticky-67592739",
@@ -49,9 +49,38 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3504,
+        3664,
         4384
       ]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "a1f4c7e2-5b93-4d18-9c26-7e0f83b1d5a4",
+      "name": "Pace Loop",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        3888,
+        4384
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "c5b2d9a7-6e14-4f83-b0d5-2a9c7e46f1b8",
+      "name": "Wait 30s",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        4352,
+        4512
+      ],
+      "webhookId": "f2a91c4d-8b57-4e60-a3d9-15c8b0e7f236"
     },
     {
       "parameters": {
@@ -68,8 +97,8 @@
       "type": "n8n-nodes-base.gmail",
       "typeVersion": 2.2,
       "position": [
-        3760,
-        4384
+        4128,
+        4512
       ],
       "webhookId": "02e7cd92-530f-4d06-b263-77622323f923",
       "credentials": {
@@ -91,14 +120,14 @@
       "type": "n8n-nodes-base.aggregate",
       "typeVersion": 1,
       "position": [
-        4016,
-        4384
+        4128,
+        4256
       ]
     },
     {
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ { ok: true, sent: ($json.sent || []).length } }}",
+        "responseBody": "={{ { ok: true, accepted: ($json.body.messages || []).length } }}",
         "options": {}
       },
       "id": "1ab87d4d-7f88-496a-a1e5-836302a9de56",
@@ -106,13 +135,24 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        4272,
+        3440,
         4384
       ]
     }
   ],
   "connections": {
     "Send Webhook": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Respond OK": {
       "main": [
         [
           {
@@ -127,6 +167,24 @@
       "main": [
         [
           {
+            "node": "Pace Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pace Loop": {
+      "main": [
+        [
+          {
+            "node": "Collect Sent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
             "node": "Send Email",
             "type": "main",
             "index": 0
@@ -138,18 +196,18 @@
       "main": [
         [
           {
-            "node": "Collect Sent",
+            "node": "Wait 30s",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Collect Sent": {
+    "Wait 30s": {
       "main": [
         [
           {
-            "node": "Respond OK",
+            "node": "Pace Loop",
             "type": "main",
             "index": 0
           }
