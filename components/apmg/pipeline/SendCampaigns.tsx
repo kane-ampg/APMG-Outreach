@@ -580,15 +580,36 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // de-dupes by address too, so the counts agree. Existing clients are removed
   // BEFORE the top-up, so a padded send never reaches for a customer's second
   // address to make up the numbers.
-  const recipients = useMemo<Recipient[]>(() => {
-    const excluded = new Set(clientBlocked.map((h) => h.recipient));
-    const base = excluded.size > 0 ? sendBase.filter((b) => !excluded.has(b.recipient)) : sendBase;
+  /**
+   * THE TOP-UP IS OPT-IN, AND OFF BY DEFAULT (2026-08-26).
+   *
+   * It used to run automatically whenever a send resolved to fewer than
+   * MIN_SEND_EMAILS addresses, and on 2026-08-25 that turned a deliberately
+   * small warm-up batch into 49 emails — 24 of them second and third addresses
+   * at organisations the same batch had already mailed, with four leads
+   * receiving two copies. The mailbox was six days into a reputation warm-up
+   * with a published ceiling of 25/day at the time.
+   *
+   * A send that is smaller than a floor is a number an operator can look at and
+   * accept. A send that silently doubles is not. So the floor is now something
+   * you turn on, the count on the button is always the count that leaves, and
+   * `padAvailable` below tells you exactly what turning it on would add.
+   */
+  const [padToMinimum, setPadToMinimum] = useState(false);
 
-    const out = base.map((b) => b.recipient);
-    if (out.length === 0 || out.length >= MIN_SEND_EMAILS) return out;
+  /** Everything that survives the client guard — the input to both the send
+   *  list and the top-up estimate, so the two can never disagree. */
+  const sendable = useMemo(() => {
+    const excluded = new Set(clientBlocked.map((h) => h.recipient));
+    return excluded.size > 0 ? sendBase.filter((b) => !excluded.has(b.recipient)) : sendBase;
+  }, [sendBase, clientBlocked]);
+
+  const recipients = useMemo<Recipient[]>(() => {
+    const out = sendable.map((b) => b.recipient);
+    if (!padToMinimum || out.length === 0 || out.length >= MIN_SEND_EMAILS) return out;
 
     const used = new Set(out.map((r) => r.email.toLowerCase()));
-    for (const b of base) {
+    for (const b of sendable) {
       if (out.length >= MIN_SEND_EMAILS) break;
       for (const email of alternateEmails(b.emails, used)) {
         if (out.length >= MIN_SEND_EMAILS) break;
@@ -597,7 +618,25 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       }
     }
     return out;
-  }, [sendBase, clientBlocked]);
+  }, [sendable, padToMinimum]);
+
+  /** How many alternate addresses the top-up WOULD add if it were switched on.
+   *  Shown next to the toggle so the choice is made against a real number
+   *  rather than discovered in the send log afterwards. */
+  const padAvailable = useMemo(() => {
+    const base = sendable.map((b) => b.recipient);
+    if (base.length === 0 || base.length >= MIN_SEND_EMAILS) return 0;
+    const used = new Set(base.map((r) => r.email.toLowerCase()));
+    let n = 0;
+    for (const b of sendable) {
+      for (const email of alternateEmails(b.emails, used)) {
+        if (base.length + n >= MIN_SEND_EMAILS) return n;
+        used.add(email.toLowerCase());
+        n++;
+      }
+    }
+    return n;
+  }, [sendable]);
   const recipientCount = recipients.length;
   // distinct LEADS being mailed — with the top-up, one lead can hold several
   // recipient rows, so lead-facing copy must not count rows
@@ -1240,6 +1279,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         clientWarned={clientWarned}
         guardReady={guardReady}
         guardError={guardError}
+        padToMinimum={padToMinimum}
+        padAvailable={padAvailable}
+        onTogglePad={setPadToMinimum}
         onBack={() => setSelected(1)}
         onSend={send}
         sending={sending}
@@ -2449,6 +2491,9 @@ function ReviewPanel({
   clientWarned,
   guardReady,
   guardError,
+  padToMinimum,
+  padAvailable,
+  onTogglePad,
   onBack,
   onSend,
   sending,
@@ -2468,6 +2513,11 @@ function ReviewPanel({
   clientWarned: Array<{ recipient: Recipient; match: ClientMatch }>;
   guardReady: boolean;
   guardError: string | null;
+  /** whether the MIN_SEND_EMAILS top-up is switched on (default off) */
+  padToMinimum: boolean;
+  /** how many alternate addresses turning it on would add */
+  padAvailable: number;
+  onTogglePad: (on: boolean) => void;
   onBack: () => void;
   onSend: () => void;
   sending: boolean;
@@ -2539,12 +2589,43 @@ function ReviewPanel({
         </div>
       )}
 
-      {altCount > 0 && (
-        <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
-          Fewer than {MIN_SEND_EMAILS} addresses resolved — {altCount.toLocaleString("en-US")} alternate address
-          {altCount === 1 ? "" : "es"} from leads with more than one stored email {altCount === 1 ? "was" : "were"} added
-          (marked <span className="text-foreground/80">2nd address</span> above), so every inbox we know about is reached.
-        </p>
+      {/* The top-up control. Only shown when there is actually something to
+          top up with — below the floor AND holding unused alternates — so a
+          normal full-size send never sees it. */}
+      {(padAvailable > 0 || altCount > 0) && (
+        <div className="rounded-lg border border-border bg-card/40 p-3">
+          <label className="flex cursor-pointer items-start gap-2.5">
+            <input
+              type="checkbox"
+              checked={padToMinimum}
+              onChange={(e) => onTogglePad(e.target.checked)}
+              data-track="campaign_pad_to_minimum"
+              className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[hsl(var(--primary))]"
+            />
+            <span className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+              <span className="text-foreground">
+                Top up to {MIN_SEND_EMAILS} using second addresses
+              </span>
+              {padToMinimum ? (
+                <>
+                  {" — on. "}
+                  {altCount.toLocaleString("en-US")} alternate address
+                  {altCount === 1 ? "" : "es"} added (marked{" "}
+                  <span className="text-foreground/80">2nd address</span> above). Some organisations
+                  in this batch will receive more than one email.
+                </>
+              ) : (
+                <>
+                  {" — off. "}
+                  This send is exactly the {recipientCount.toLocaleString("en-US")} address
+                  {recipientCount === 1 ? "" : "es"} listed. Turning it on would add{" "}
+                  {padAvailable.toLocaleString("en-US")} more, drawn from leads with a second or
+                  third stored mailbox — including organisations already in this batch.
+                </>
+              )}
+            </span>
+          </label>
+        </div>
       )}
 
       {!ai && droppedCount > 0 && (
