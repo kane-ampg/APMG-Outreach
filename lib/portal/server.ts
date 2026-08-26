@@ -446,6 +446,62 @@ export async function countEmailsSentByLead(
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/**
+ * Is this address one we could plausibly have mailed?
+ *
+ * WHY THIS EXISTS. On 2026-08-25/26 the suppression list went from 2 rows to 44
+ * in about a day. Almost all of the new rows carried scrambled local parts on
+ * real prospect domains (`vaab@windsorccc.org.au`, `jlbzvat@firstgrammar.com.au`)
+ * under a campaign tag — `bhgefbdu-5359` — that has never sent a single email.
+ * Something was walking the tracked links and detonating the unsubscribe
+ * behind them with mangled parameters, and the endpoint wrote every one.
+ *
+ * The `email_sent` ledger does not store the recipient address, so "did we mail
+ * this?" cannot be answered directly. What CAN be answered is "is this an
+ * address we hold for this lead" — every real recipient came from `leads.emails`.
+ *
+ * Advisory, never a gate. A false negative here must not swallow a real
+ * person's opt-out, so the caller logs an unverified human request and records
+ * it anyway; this only exists so a machine-generated address is recognisable.
+ */
+export async function isKnownRecipient(
+  base: string,
+  key: string,
+  email: string,
+  leadId?: string | null,
+): Promise<boolean> {
+  const addr = email.trim().toLowerCase();
+  if (!EMAIL_RE.test(addr)) return false;
+  const headers = { apikey: key, Authorization: `Bearer ${key}` };
+
+  try {
+    // Lead-scoped: the overwhelmingly common shape, and exact. Compared in JS
+    // so stored casing ("Alicia.Goddard@…") still matches.
+    if (leadId && isUuid(leadId)) {
+      const res = await fetch(
+        `${base}/rest/v1/leads?id=eq.${encodeURIComponent(leadId)}&select=emails&limit=1`,
+        { headers, cache: "no-store" },
+      );
+      if (res.ok) {
+        const rows = (await res.json()) as { emails: string[] | null }[];
+        const held = rows[0]?.emails ?? [];
+        if (held.some((e) => String(e).trim().toLowerCase() === addr)) return true;
+      }
+    }
+
+    // No lead id (or the lead didn't hold it): does ANY lead hold this address?
+    const res = await fetch(
+      `${base}/rest/v1/leads?select=id&emails=cs.${encodeURIComponent(JSON.stringify([addr]))}&limit=1`,
+      { headers, cache: "no-store" },
+    );
+    if (!res.ok) return false;
+    return ((await res.json()) as unknown[]).length > 0;
+  } catch {
+    // Network/DB trouble must never make a real opt-out look forged.
+    return false;
+  }
+}
+
 /** Record an opt-out (idempotent upsert on lower(email)). Returns "ok",
  *  "needs_migration" when the table is absent, or "error" on anything else —
  *  the endpoint still shows the customer a success page regardless, but a

@@ -1,5 +1,10 @@
 import { isUuid, supabaseTarget } from "@/lib/pipeline/server";
-import { lookupLead, recordUnsubscribe } from "@/lib/portal/server";
+import {
+  isBotRequest,
+  isKnownRecipient,
+  lookupLead,
+  recordUnsubscribe,
+} from "@/lib/portal/server";
 import { senderIdentityLine } from "@/lib/legal/company";
 
 // One-click unsubscribe for outreach email (Spam Act 2003: a functional opt-out
@@ -94,6 +99,42 @@ export async function GET(req: Request): Promise<Response> {
     );
   }
 
+  /*
+   * SCANNER DETONATION. A mail gateway that pre-fetches every link in a message
+   * reaches this endpoint exactly as a person would, and until 2026-08-26 the
+   * write happened either way. Between 2026-08-25 and 2026-08-26 that took the
+   * suppression list from 2 rows to 44, nearly all of them scrambled local
+   * parts on real prospect domains under a campaign tag that has never sent an
+   * email — the signature of a gateway replaying a mangled URL.
+   *
+   * /t/[id] has always refused to record scanner clicks for the same reason
+   * (see classifyClick / isBotRequest). This endpoint now applies the same
+   * test. The customer-facing page is IDENTICAL in every branch: a scanner
+   * gets its 200 and learns nothing, and a human always reads "you're all set".
+   *
+   * DIRECTION OF ERROR IS DELIBERATE. Failing to record a real opt-out is a
+   * Spam Act problem; recording one nobody asked for only costs a prospect. So
+   * a bot is the ONLY case that skips the write. A human whose address we
+   * cannot verify is still suppressed — the address is merely logged, because
+   * an unverifiable address arriving from a real browser is more likely to be
+   * our data being stale than an attack.
+   */
+  const bot = isBotRequest(req);
+  const known = await isKnownRecipient(target.base, target.key, email, leadId);
+
+  if (bot) {
+    console.warn(
+      `[unsubscribe] SKIPPED (automated request): ${email} lead=${leadId || "-"} campaign=${campaign || "-"} ua=${(req.headers.get("user-agent") || "").slice(0, 120)}`,
+    );
+    return successPage(email, portalHref);
+  }
+
+  if (!known) {
+    console.warn(
+      `[unsubscribe] address not held on any lead, recording anyway: ${email} lead=${leadId || "-"} campaign=${campaign || "-"}`,
+    );
+  }
+
   const result = await recordUnsubscribe(target.base, target.key, email, { leadId, campaign });
   if (result === "needs_migration") {
     console.error("[unsubscribe] email_suppression table missing — run supabase/unsubscribe.sql");
@@ -101,6 +142,13 @@ export async function GET(req: Request): Promise<Response> {
 
   // Always show success to the customer: their intent is recorded/logged, and a
   // failed DB write is our problem to fix, not a reason to tell them it failed.
+  return successPage(email, portalHref);
+}
+
+/** The one confirmation page. Every branch above returns THIS — recorded,
+ *  skipped as automated, or written despite an unverifiable address — so the
+ *  response never tells a caller which happened. */
+function successPage(email: string, portalHref: string): Response {
   return page(
     "Sorry to see you go",
     `<p>You're all set — we've removed <strong>${email.replace(/[<>&"]/g, "")}</strong> from APMG Services outreach, and you won't hear from us again.</p>
