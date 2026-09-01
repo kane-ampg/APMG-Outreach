@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useCan } from "@/lib/rbac/RbacProvider";
 import { MAX_FIND_LEADS } from "@/lib/pipeline/campaign";
 import { Button } from "@/components/ui/button";
 import { ErrorInline, LeadsTableView, TableSkeleton, type LeadView } from "./LeadsTable";
@@ -127,7 +128,11 @@ export function StoredLeadsPanel({
           onChanged={() => setLocalRefresh((n) => n + 1)}
         />
       ) : (
-        <FoldersView refreshKey={refreshSignal + localRefresh} onOpen={setOpen} />
+        <FoldersView
+          refreshKey={refreshSignal + localRefresh}
+          onOpen={setOpen}
+          onChanged={() => setLocalRefresh((n) => n + 1)}
+        />
       )}
     </div>
   );
@@ -357,7 +362,15 @@ function AllLeadsView({
           </div>
         ) : (
           // the grid gets its own Export (every lead, one sheet per folder)
-          <FoldersView refreshKey={refreshKey} onOpen={onOpen} exportRows={rows} />
+          <FoldersView
+            refreshKey={refreshKey}
+            onOpen={onOpen}
+            exportRows={rows}
+            onChanged={() => {
+              onChanged();
+              load();
+            }}
+          />
         ))}
     </div>
   );
@@ -471,6 +484,9 @@ function SelectableLeads({
   const [tab, setTab] = useState<"with" | "no">("with");
   const tabLayoutId = useId();
   const reduce = !!useReducedMotion();
+  // The DELETE route requires pipeline.import; a role with only leads.view (the
+  // client portal) would get a 403, so don't offer it a button that can't work.
+  const canDelete = useCan("pipeline.import");
 
   // drop selected ids that no longer exist (after a refresh)
   useEffect(() => {
@@ -646,7 +662,7 @@ function SelectableLeads({
           </div>
         )}
         <div className={cn("flex items-center gap-2", !hideSearch && "ml-auto")}>
-          {selected.size > 0 && !confirming && (
+          {canDelete && selected.size > 0 && !confirming && (
             <Button
               variant="destructive"
               size="sm"
@@ -825,6 +841,7 @@ function FoldersView({
   refreshKey,
   onOpen,
   exportRows,
+  onChanged,
 }: {
   refreshKey: number;
   onOpen: (batch: string) => void;
@@ -832,8 +849,20 @@ function FoldersView({
    *  folder. Supplied by the Leads tab (which already holds them); omitted in the
    *  Pipeline import flow, where the grid has no rows loaded. */
   exportRows?: LeadView[];
+  /** Called after a bulk folder delete so the parent can refetch whatever it
+   *  derives from the same rows (the Leads tab's search list + folder filter).
+   *  When omitted the grid just reloads itself. */
+  onChanged?: () => void;
 }) {
   const [state, setState] = useState<FoldersState>({ status: "loading" });
+  // Bulk folder delete. The tick boxes are always on the cards (no mode to
+  // enter first), and only the box itself selects — the card body still opens
+  // the folder, so browsing and selecting never compete for the same click.
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [bulkConfirm, setBulkConfirm] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkError, setBulkError] = useState<string | null>(null);
+  const canManage = useCan("pipeline.import");
 
   const load = useCallback(async () => {
     setState({ status: "loading" });
@@ -860,6 +889,65 @@ function FoldersView({
     load();
   }, [load, refreshKey]);
 
+  const batches = state.status === "ready" ? state.batches : [];
+
+  // Drop ticks for folders that no longer exist (after a delete or a refresh),
+  // so the confirm bar can never count a folder that isn't on screen.
+  useEffect(() => {
+    setPicked((prev) => {
+      if (prev.size === 0) return prev;
+      const live = new Set(batches.map((b) => b.batch));
+      const next = new Set<string>();
+      for (const key of prev) if (live.has(key)) next.add(key);
+      return next.size === prev.size ? prev : next;
+    });
+  }, [batches]);
+
+  const pickedBatches = batches.filter((b) => picked.has(b.batch));
+  const pickedLeads = pickedBatches.reduce((n, b) => n + b.count, 0);
+  const allPicked = batches.length > 0 && picked.size === batches.length;
+
+  function togglePick(key: string) {
+    setBulkError(null);
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function clearPicked() {
+    setPicked(new Set());
+    setBulkConfirm(false);
+    setBulkError(null);
+  }
+
+  /** DELETE every ticked folder in one request (`batches=` takes the list, and
+   *  the Ungrouped bucket rides along as its sentinel). */
+  async function deletePicked() {
+    if (picked.size === 0) return;
+    setBulkDeleting(true);
+    setBulkError(null);
+    try {
+      const list = [...picked].map(encodeURIComponent).join(",");
+      const res = await fetch(`/api/pipeline/leads?batches=${list}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) {
+        setBulkError(data?.error ?? `Delete failed (${res.status}).`);
+        return;
+      }
+      clearPicked();
+      // the parent owns the refresh when it has rows of its own to re-derive
+      if (onChanged) onChanged();
+      else load();
+    } catch {
+      setBulkError("Network error during delete.");
+    } finally {
+      setBulkDeleting(false);
+    }
+  }
+
   // Before the folders migration: guide the migration, but still show every lead
   // in a flat, fully manageable list.
   if (state.status === "error" && state.needsMigration) {
@@ -875,6 +963,23 @@ function FoldersView({
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2.5">
+          {canManage && batches.length > 0 && (
+            <input
+              type="checkbox"
+              aria-label="Select all folders"
+              data-track="folders_select_all"
+              className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+              checked={allPicked}
+              ref={(el) => {
+                // partial selection reads as a dash, not an empty box
+                if (el) el.indeterminate = !allPicked && picked.size > 0;
+              }}
+              onChange={() => {
+                setBulkError(null);
+                setPicked(allPicked ? new Set() : new Set(batches.map((b) => b.batch)));
+              }}
+            />
+          )}
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/40 bg-primary/10 text-primary">
             <Database className="h-4 w-4" aria-hidden />
           </span>
@@ -883,10 +988,36 @@ function FoldersView({
             <div className="font-mono text-[10.5px] text-muted-foreground">
               public.leads
               {state.status === "ready" ? ` · ${state.batches.length} folder${state.batches.length === 1 ? "" : "s"}` : ""}
+              {picked.size > 0 ? ` · ${picked.size} ticked` : ""}
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {canManage && picked.size > 0 && (
+            <>
+              {!bulkConfirm && (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => setBulkConfirm(true)}
+                  data-track="folders_delete_selected"
+                  className="gap-1.5"
+                >
+                  <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                  Delete {picked.size} folder{picked.size === 1 ? "" : "s"}
+                </Button>
+              )}
+              <button
+                type="button"
+                onClick={clearPicked}
+                data-track="folders_select_clear"
+                className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden />
+                Clear
+              </button>
+            </>
+          )}
           {exportRows && exportRows.length > 0 && (
             <LeadsExportMenu rows={exportRows} scope="All folders" />
           )}
@@ -902,6 +1033,49 @@ function FoldersView({
           </button>
         </div>
       </div>
+
+      {/* bulk confirm: names the blast radius in leads, not just folders — a
+          folder count alone hides how much of the database is about to go. */}
+      {bulkConfirm && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-destructive/40 bg-destructive/[0.04] px-3 py-2">
+          <Trash2 className="h-4 w-4 shrink-0 text-destructive" aria-hidden />
+          <span className="text-[12px] text-foreground">
+            Permanently delete {picked.size} folder{picked.size === 1 ? "" : "s"} and all{" "}
+            {pickedLeads.toLocaleString("en-US")} lead{pickedLeads === 1 ? "" : "s"} inside{" "}
+            {picked.size === 1 ? "it" : "them"} from Supabase?
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setBulkConfirm(false);
+                setBulkError(null);
+              }}
+              disabled={bulkDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={deletePicked}
+              disabled={bulkDeleting}
+              data-track="folders_delete_confirm"
+              className="gap-1.5"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              {bulkDeleting ? "Deleting…" : `Delete ${picked.size} folder${picked.size === 1 ? "" : "s"}`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {bulkError && (
+        <p role="alert" className="font-mono text-[11px] text-destructive">
+          {bulkError}
+        </p>
+      )}
 
       {state.status === "loading" && <TableSkeleton />}
       {state.status === "error" && <ErrorInline message={state.error} onRetry={load} />}
@@ -919,7 +1093,16 @@ function FoldersView({
         ) : (
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
             {state.batches.map((b) => (
-              <FolderCard key={b.batch} batch={b} onOpen={onOpen} onDeleted={load} onRenamed={load} />
+              <FolderCard
+                key={b.batch}
+                batch={b}
+                onOpen={onOpen}
+                onDeleted={load}
+                onRenamed={load}
+                canManage={canManage}
+                picked={picked.has(b.batch)}
+                onPick={togglePick}
+              />
             ))}
           </div>
         ))}
@@ -928,18 +1111,30 @@ function FoldersView({
 }
 
 /** One folder tile in the grid. Opens the folder on click; the trash button
- *  (revealed on hover/focus) slides a delete confirmation in over the card so a
- *  stray click can't wipe a whole import. Confirm → DELETE the batch. */
+ *  slides a delete confirmation in over the card so a stray click can't wipe a
+ *  whole import. Confirm → DELETE the batch.
+ *
+ *  The tick box on the left feeds the grid's bulk delete. Only the box itself
+ *  selects: the card body always opens the folder, so ticking a few folders and
+ *  browsing into one never compete for the same click. */
 function FolderCard({
   batch,
   onOpen,
   onDeleted,
   onRenamed,
+  canManage,
+  picked,
+  onPick,
 }: {
   batch: BatchSummary;
   onOpen: (batch: string) => void;
   onDeleted: () => void;
   onRenamed: () => void;
+  /** Whether this user may rename/delete folders (pipeline.import). Also gates
+   *  the tick box — selecting folders exists only to bulk-delete them. */
+  canManage: boolean;
+  picked: boolean;
+  onPick: (batch: string) => void;
 }) {
   const reduce = !!useReducedMotion();
   const [confirming, setConfirming] = useState(false);
@@ -950,7 +1145,8 @@ function FolderCard({
   const [savingName, setSavingName] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
 
-  const canRename = batch.batch !== UNGROUPED;
+  // the Ungrouped bucket is `batch IS NULL` — no name to rename
+  const canRename = canManage && batch.batch !== UNGROUPED;
 
   function startRename() {
     setName(batch.batch);
@@ -998,7 +1194,9 @@ function FolderCard({
         "group relative overflow-hidden rounded-lg border bg-background/40 transition-colors",
         confirming
           ? "border-destructive/50"
-          : "border-border hover:border-primary/40 hover:bg-muted/40 focus-within:border-primary/40",
+          : picked
+            ? "border-primary/60 bg-primary/[0.07]"
+            : "border-border hover:border-primary/40 hover:bg-muted/40 focus-within:border-primary/40",
       )}
     >
       {/* base: the openable folder — always mounted so the card keeps its size,
@@ -1009,6 +1207,17 @@ function FolderCard({
           (confirming || renaming) && "pointer-events-none",
         )}
       >
+        {canManage && (
+          <input
+            type="checkbox"
+            checked={picked}
+            onChange={() => onPick(batch.batch)}
+            aria-label={`Select ${folderLabel(batch.batch)} folder`}
+            data-track="folder_pick"
+            data-track-batch={batch.batch}
+            className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-primary"
+          />
+        )}
         <button
           type="button"
           onClick={() => onOpen(batch.batch)}
@@ -1018,7 +1227,12 @@ function FolderCard({
           data-track-batch={batch.batch}
           className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left focus-visible:outline-none"
         >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-primary">
+          <span
+            className={cn(
+              "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border transition-colors",
+              picked ? "border-primary/50 bg-primary/10 text-primary" : "border-border bg-card text-primary",
+            )}
+          >
             <Folder className="h-4 w-4" aria-hidden />
           </span>
           <div className="min-w-0 flex-1">
@@ -1040,22 +1254,24 @@ function FolderCard({
             tabIndex={confirming || renaming ? -1 : undefined}
             data-track="folder_rename"
             data-track-batch={batch.batch}
-            className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-primary/10 hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-70 transition-opacity hover:bg-primary/10 hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
           >
             <Pencil className="h-3.5 w-3.5" aria-hidden />
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => setConfirming(true)}
-          aria-label={`Delete ${folderLabel(batch.batch)} folder`}
-          tabIndex={confirming || renaming ? -1 : undefined}
-          data-track="folder_delete"
-          data-track-batch={batch.batch}
-          className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
-        >
-          <Trash2 className="h-3.5 w-3.5" aria-hidden />
-        </button>
+        {canManage && (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            aria-label={`Delete ${folderLabel(batch.batch)} folder`}
+            tabIndex={confirming || renaming ? -1 : undefined}
+            data-track="folder_delete"
+            data-track-batch={batch.batch}
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-70 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        )}
       </div>
 
       {/* rename overlay: slides in over the card (same footprint) with an inline
@@ -1230,7 +1446,8 @@ function FolderDetail({
   const [savingName, setSavingName] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
 
-  const canRename = batch !== UNGROUPED;
+  const canManage = useCan("pipeline.import");
+  const canRename = canManage && batch !== UNGROUPED;
 
   async function saveRename() {
     setSavingName(true);
@@ -1411,7 +1628,7 @@ function FolderDetail({
                 Rename
               </Button>
             )}
-            {state.status === "ready" && rows.length > 0 && (
+            {canManage && state.status === "ready" && rows.length > 0 && (
               <Button
                 variant="outline"
                 size="sm"

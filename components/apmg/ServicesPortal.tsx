@@ -909,16 +909,13 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
       />
 
       {/* Chat and the enquiry modal are unchanged — same components, same
-          consent gate, same events.
-
-          `data-portal-chat` is the one exemption from the square-corner reset in
-          app/portal/portal-world.css. The reference keeps its chat rounded for
-          the same reason: the page is the contractor's work — tape lines and
-          flat slabs — while the chat is a conversation floating over it, and
-          every convention a visitor has for that surface is round. */}
-      <div data-portal-chat>
-        <PortalChat />
-      </div>
+          consent gate, same events, and now the same corners they were authored
+          with: the Corners rule in app/portal/portal-world.css remaps only
+          `rounded` / `rounded-md` / `rounded-lg`, and both of these are built
+          from `rounded-xl` and `rounded-2xl`. An earlier revision wrapped this
+          in `data-portal-chat` to exempt it from a blanket square-corner reset;
+          that reset is gone, so the wrapper is too. */}
+      <PortalChat />
       <ServiceInquiryModal
         service={active}
         onClose={() => setActive(null)}

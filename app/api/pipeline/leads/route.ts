@@ -11,6 +11,8 @@ import { countEmailsSentByLead } from "@/lib/portal/server";
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Reads back (GET) and deletes (DELETE) stored leads for the Pipeline view.
+// DELETE takes exactly one of: `ids` (individual leads), `batches` (several
+// folders at once), or `batch` (one folder).
 // Server-side (keeps the service role key off the browser).
 export const runtime = "nodejs";
 
@@ -33,6 +35,33 @@ function batchFilter(value: string | null): string | null {
   if (value === UNGROUPED) return "batch=is.null";
   const safe = safeBatchName(value);
   return safe ? `batch=eq.${encodeURIComponent(safe)}` : null;
+}
+
+/**
+ * PostgREST filter for a comma-separated list of folders (bulk folder delete).
+ *
+ * The Ungrouped bucket is `batch IS NULL`, which cannot sit inside an `in.()`
+ * list, so a mixed selection needs an `or=(...)` instead. A single unparseable
+ * name rejects the WHOLE request rather than being silently dropped: quietly
+ * deleting a subset of what the operator ticked is worse than deleting nothing.
+ */
+function batchesFilter(value: string | null): string | null {
+  if (!value) return null;
+  const parts = value.split(",").map((s) => s.trim()).filter(Boolean);
+  if (parts.length === 0) return null;
+
+  const ungrouped = parts.includes(UNGROUPED);
+  const names: string[] = [];
+  for (const part of parts) {
+    if (part === UNGROUPED) continue;
+    const safe = safeBatchName(part);
+    if (!safe) return null;
+    names.push(encodeURIComponent(safe));
+  }
+
+  if (names.length === 0) return ungrouped ? "batch=is.null" : null;
+  const list = names.join(",");
+  return ungrouped ? `or=(batch.in.(${list}),batch.is.null)` : `batch=in.(${list})`;
 }
 
 function fetchLeads(target: Target, cols: string, filter: string | null, offset = 0): Promise<Response> {
@@ -283,6 +312,7 @@ export async function DELETE(req: Request): Promise<Response> {
 
   const params = new URL(req.url).searchParams;
   const idsParam = params.get("ids");
+  const batchesParam = params.get("batches");
   const batchParam = params.get("batch");
 
   // Build EXACTLY one filter. Never issue an unfiltered DELETE (would wipe the table).
@@ -293,6 +323,15 @@ export async function DELETE(req: Request): Promise<Response> {
       return Response.json({ ok: false, deleted: 0, mode: "live", error: "Invalid row ids." }, { status: 400 });
     }
     filter = `id=in.(${ids.join(",")})`;
+  } else if (batchesParam !== null) {
+    // `batches=` (plural) is the bulk folder delete. Checked before the single
+    // `batch=` so a caller that sends both can't get a wider delete than the
+    // list it validated.
+    const bf = batchesFilter(batchesParam);
+    if (!bf) {
+      return Response.json({ ok: false, deleted: 0, mode: "live", error: "Invalid folder selection." }, { status: 400 });
+    }
+    filter = bf;
   } else {
     const bf = batchFilter(batchParam);
     if (!bf) {

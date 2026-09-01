@@ -10,64 +10,68 @@
  * WHY THIS FILE EXISTS. The 2026-08-24 port brought the painting site's PALETTE
  * across (ink / paper / brand in tailwind.config.ts) and stopped there. But most
  * of what makes apmg-painting.vercel.app look like itself lives in its CSS
- * layer, not its colour scale — square corners, the display face's real weight,
- * the scroll reveal, and the process rail. Copying the class names without these
- * rules produced a page with the right colours and the wrong character.
+ * layer, not its colour scale — the corner scale, the display face's real
+ * weight, the scroll reveal, and the process rail. Copying the class names
+ * without these rules produced a page with the right colours and the wrong
+ * character.
  *
- * The reference sets the first two GLOBALLY: a `borderRadius` override that
- * zeroes every step, and a `.font-display { font-weight: 600 }` rule. This
- * project cannot do either — the console depends on Tailwind's default radii and
- * on its own heading face — so they are scoped here instead.
+ * The reference sets the first two GLOBALLY: a `borderRadius` override and a
+ * `.font-display { font-weight: 600 }` rule. This project cannot do either — the
+ * console depends on Tailwind's default radii and on its own heading face — so
+ * they are scoped here instead. The radius values themselves deliberately differ
+ * from the reference's; see the Corners section below.
  */
 
 /* ---------------------------------------------------------------------------
- * Corners: square, deliberately.
+ * Corners
  * ---------------------------------------------------------------------------
  *
- * The reference zeroes every step of `borderRadius` in its Tailwind config —
- * one decision in one place, quoted at length in that file. A painting
- * contractor's work is masking tape, straight edges and cut lines; soft corners
- * read as generic SaaS and fight a palette that is at its best when it is
- * structural: hard rules, flat slabs, no softening.
+ * A DELIBERATE DEPARTURE FROM THE REFERENCE, at the operator's request.
  *
- * Done as a scoped reset rather than by deleting the `rounded-*` utilities one
- * by one, because three of the portal's blocks are SHARED components that also
- * render inside the dark console — GoogleReviewsPanel, TeamSection and
- * ServiceInquiryModal — and carry semantic tokens with their own radii. Editing
- * those files would square them in the console too. This squares them only
- * where they are the portal.
+ * apmg-painting.vercel.app zeroes every step of `borderRadius` in its Tailwind
+ * config, and argues the case at length there: a painting contractor's work is
+ * masking tape, straight edges and cut lines, so soft corners read as generic
+ * SaaS and fight a palette that is at its best when it is structural. This
+ * portal was built square first and then rounded back, so the departure is a
+ * decision rather than a drift — and reversing it again means editing the three
+ * values below, nothing else.
  *
- * `!important` is load-bearing: nearly every target is a Tailwind utility of
- * equal specificity, and this has to win without a specificity arms race.
+ * They are set here rather than left to Tailwind's defaults because the defaults
+ * are not a scale anyone chose: `rounded-lg` is 8px, which on a card the size of
+ * the lead service tile is close enough to square that it reads as a rendering
+ * artefact rather than as rounding.
  *
- * Genuine circles are exempt. `full: '9999px'` survives the reference's override
- * untouched — the two places using it there are real circles, not softened
- * rectangles — and the same is true here of the social chips, the avatars and
- * the chat launcher. The exemption is expressed as a selector because CSS cannot
- * ask "was this value 9999px".
+ *   chips, small anchors, focus targets    6px
+ *   buttons and inputs                     8px
+ *   cards and panels                      12px
+ *
+ * 12px is not arbitrary. It is what the SHARED components already use for their
+ * cards — `rounded-xl` on the Google review tiles and the team tiles — so the
+ * portal's own cards now land on exactly the same corner as the two blocks it
+ * hosts, with the enquiry dialog keeping its 16px above them. One scale across
+ * the whole surface, rather than three that happen to coexist.
+ *
+ * ONLY those three utilities are remapped. `rounded-xl`, `rounded-2xl` and
+ * `rounded-full` are left exactly as authored, which is what keeps the review
+ * and team tiles, the enquiry dialog, the chat and every genuine circle
+ * untouched — and is why the chat needs no exemption here, where it needed one
+ * from the blanket square-corner reset this replaces.
+ *
+ * `~=` matches a whole whitespace-separated class token, so `[class~="rounded"]`
+ * catches `rounded` and never `rounded-md`. `!important` is load-bearing: these
+ * targets are Tailwind utilities of equal specificity, and this file's position
+ * in the built stylesheet is not guaranteed to fall after theirs.
  */
-/*
- * The chat is the documented exception, and the reference names it as such: the
- * page is the contractor's work — tape lines and flat slabs — while the chat is
- * a conversation floating over it, and every convention a visitor has for that
- * surface, from every messaging app they own, is round. Square there does not
- * read as disciplined, it reads as unfinished.
- *
- * It is exempted by EXCLUSION rather than by winning a later rule, so the chat's
- * own Tailwind radii are never overridden in the first place and it keeps
- * exactly the rounding it was authored with.
- *
- * The first attempt was a second, more specific rule setting `border-radius:
- * revert-layer`. That does not restore the utility — from unlayered author
- * styles `revert-layer` rolls back past the whole author origin, so it resolved
- * to the UA default of 0 and squared the panel, the bubbles and the input just as
- * thoroughly as the reset it was meant to undo.
- */
-.portal-world
-  [class*="rounded"]:not([class*="rounded-full"]):not([data-portal-chat]):not(
-    [data-portal-chat] *
-  ) {
-  border-radius: 0 !important;
+.portal-world [class~="rounded"] {
+  border-radius: 0.375rem !important;
+}
+
+.portal-world [class~="rounded-md"] {
+  border-radius: 0.5rem !important;
+}
+
+.portal-world [class~="rounded-lg"] {
+  border-radius: 0.75rem !important;
 }
 
 /* ---------------------------------------------------------------------------
