@@ -65,6 +65,21 @@ export interface AnonymousActivity {
   topServices: Array<{ service: string; opens: number }>;
 }
 
+/** One recorded opt-out — a row of the `email_suppression` list the send route
+ *  filters against. Keyed by ADDRESS (that's what a Spam Act opt-out attaches
+ *  to, and it survives lead re-imports); `business` is resolved through the
+ *  lead id the unsubscribe link carried, so a bare-address opt-out has none. */
+export interface UnsubscribedPerson {
+  email: string;
+  business: string | null;
+  category: string | null;
+  leadId: string | null;
+  campaign: string | null;
+  /** "unsubscribe" for every self-service opt-out */
+  reason: string;
+  createdAt: string;
+}
+
 /** Full GET /api/portal/lead-activity response shape. */
 export interface LeadActivityResponse {
   ok: boolean;
@@ -74,6 +89,14 @@ export interface LeadActivityResponse {
   /** sorted lastSeen DESC, capped at 100 */
   leads: LeadActivity[];
   anonymous: AnonymousActivity;
+  /** sorted createdAt DESC, capped at 100 */
+  unsubscribes: UnsubscribedPerson[];
+  /** exact total — the KPI count stays honest past the row cap */
+  unsubscribesTotal: number;
+  /** false = the opt-out list couldn't be read (its migration,
+   *  supabase/unsubscribe.sql, is separate from the portal tables). Zero
+   *  unsubscribes and an unreadable list are different facts. */
+  unsubscribesAvailable: boolean;
 }
 
 /** The four KPI-row totals the page reads off GET /api/portal/summary. */

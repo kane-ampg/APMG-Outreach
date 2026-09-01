@@ -23,7 +23,12 @@ import {
 import { serviceBySlug } from "@/lib/pipeline/services";
 import { loadPlaybooks, playbookPdfUrl } from "@/lib/pipeline/sectorStore";
 import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
-import { fetchSuppressedEmails, insertPortalEvents } from "@/lib/portal/server";
+import {
+  fetchSuppressedDomains,
+  fetchSuppressedEmails,
+  insertPortalEvents,
+  organisationDomain,
+} from "@/lib/portal/server";
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Sends an outreach email campaign to a set of stored leads. Each message's CTA
@@ -81,6 +86,12 @@ interface SendResult {
   /** who they were, so the operator is told rather than left to notice the
    *  count not adding up (capped — the message is a report, not a dump) */
   clientMatches?: Array<{ business: string; email: string; client: string; reason: string }>;
+  /** how many recipients were dropped because ANOTHER address at the same
+   *  organisation has unsubscribed — the address picked was not itself on the
+   *  list, so this needs saying out loud */
+  suppressedDomains?: number;
+  /** who they were, and which colleague's opt-out covered them (capped) */
+  domainMatches?: Array<{ business: string; email: string; optedOut: string }>;
 }
 
 interface CleanRecipient {
@@ -246,6 +257,8 @@ export async function POST(req: Request): Promise<Response> {
   // opt-out list is only enforced once supabase/unsubscribe.sql has been run.
   // We only bother when a real DB is configured (demo mode has no list).
   let suppressedCount = 0;
+  /** recipients dropped because ANOTHER address at their organisation opted out */
+  const domainMatches: Array<{ business: string; email: string; optedOut: string }> = [];
   const sb = supabaseTarget();
   if (sb.state === "ok") {
     const suppressed = await fetchSuppressedEmails(
@@ -260,6 +273,39 @@ export async function POST(req: Request): Promise<Response> {
       }
       suppressedCount = before - recipients.length;
     }
+
+    // An opt-out belongs to the business, not to the one string it arrived
+    // from. fetchSuppressedDomains rolls the list up to ORGANISATION domains
+    // (public providers like gmail.com excluded), so a second address at a
+    // business that already unsubscribed is dropped too. Same fail-open
+    // contract as above. Reported separately from `suppressed` because it is
+    // the surprising one: the operator picked an address that is not itself on
+    // the list.
+    const optedOutDomains = await fetchSuppressedDomains(
+      sb.base,
+      sb.key,
+      recipients.map((r) => r.email),
+    );
+    if (optedOutDomains.size > 0) {
+      for (let i = recipients.length - 1; i >= 0; i--) {
+        const domain = organisationDomain(recipients[i].email.toLowerCase());
+        const optedOut = domain ? optedOutDomains.get(domain) : undefined;
+        if (!optedOut) continue;
+        domainMatches.push({
+          business: recipients[i].business ?? recipients[i].email,
+          email: recipients[i].email,
+          optedOut,
+        });
+        recipients.splice(i, 1);
+      }
+      if (domainMatches.length > 0) {
+        domainMatches.reverse(); // restore the operator's send order
+        console.warn(
+          `[pipeline/campaigns] dropped ${domainMatches.length} recipient(s) whose organisation has unsubscribed:`,
+          domainMatches.map((m) => `${m.email} (${m.optedOut} opted out)`).join("; ").slice(0, 1000),
+        );
+      }
+    }
   }
   if (recipients.length === 0) {
     return json(
@@ -270,7 +316,12 @@ export async function POST(req: Request): Promise<Response> {
         suppressed: suppressedCount,
         clients: clientMatches.length || undefined,
         clientMatches: clientMatches.length ? clientMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
-        error: "Every recipient has unsubscribed.",
+        suppressedDomains: domainMatches.length || undefined,
+        domainMatches: domainMatches.length ? domainMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
+        error:
+          domainMatches.length > 0 && suppressedCount === 0
+            ? "Every recipient's organisation has already unsubscribed, so nothing was sent."
+            : "Every recipient has unsubscribed.",
       },
       400,
     );
@@ -384,6 +435,8 @@ export async function POST(req: Request): Promise<Response> {
     suppressed: suppressedCount,
     clients: clientMatches.length || undefined,
     clientMatches: clientMatches.length ? clientMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
+    suppressedDomains: domainMatches.length || undefined,
+    domainMatches: domainMatches.length ? domainMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
   });
 }
 

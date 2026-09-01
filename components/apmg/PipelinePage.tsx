@@ -25,6 +25,7 @@ import { SignalLed } from "./SignalLed";
 import { LeadsTableView } from "./pipeline/LeadsTable";
 import { SendCampaigns } from "./pipeline/SendCampaigns";
 import { MigrationCard, StoredLeadsPanel } from "./pipeline/StoredLeads";
+import { UnsubscribedList } from "./pipeline/UnsubscribedList";
 import { StepRail, type FlowStep, type StepStatus } from "./pipeline/StepRail";
 
 const EASE = [0.16, 1, 0.3, 1] as const;
@@ -65,7 +66,10 @@ function makeBatchName(seq: number): string {
   return `leads-${String(seq).padStart(4, "0")}-${ts}`;
 }
 
-type PipelineSub = "leads" | "campaigns";
+type PipelineSub = "leads" | "campaigns" | "unsubscribed";
+
+/** Left-to-right tab order, so the slide direction matches the pills. */
+const SUB_ORDER: PipelineSub[] = ["leads", "campaigns", "unsubscribed"];
 
 const SUB_VARIANTS = {
   enter: (dir: number) => ({ opacity: 0, x: dir >= 0 ? 24 : -24 }),
@@ -74,10 +78,12 @@ const SUB_VARIANTS = {
 };
 
 /**
- * Pipeline shell — hosts two sub-tabs: "Leads" (the CSV importer) and
- * "Send Campaigns (Automation)" (tracked outreach to stored leads). The campaign
- * tab is gated on the `campaigns.send` permission, so a role without it sees
- * only Leads. Sub-views unmount on switch (AnimatePresence), exactly like the
+ * Pipeline shell — hosts three sub-tabs: "Leads" (the CSV importer), "Send
+ * Campaigns (Automation)" (tracked outreach to stored leads), and "Unsubscribed"
+ * (the opt-out list, read from the same endpoint the Telemetry tab uses). The
+ * campaign and opt-out tabs are gated on the `campaigns.send` permission — both
+ * only mean anything to someone who sends — so a role without it sees only
+ * Leads. Sub-views unmount on switch (AnimatePresence), exactly like the
  * top-level tabs in DashboardShell.
  */
 export function PipelinePage() {
@@ -85,13 +91,16 @@ export function PipelinePage() {
   const { can } = useRbac();
   const canSend = can("campaigns.send");
   const [sub, setSub] = useState<PipelineSub>("leads");
+  // which way the panel slides: left when moving back up the tab order
+  const prevSub = useRef<PipelineSub>("leads");
 
   // a role that loses send rights can't sit on the campaign tab
   useEffect(() => {
-    if (sub === "campaigns" && !canSend) setSub("leads");
+    if ((sub === "campaigns" || sub === "unsubscribed") && !canSend) setSub("leads");
   }, [sub, canSend]);
 
-  const dir = sub === "campaigns" ? 1 : -1;
+  const dir = SUB_ORDER.indexOf(sub) >= SUB_ORDER.indexOf(prevSub.current) ? 1 : -1;
+  prevSub.current = sub;
 
   return (
     <div className="flex min-h-full flex-col">
@@ -110,6 +119,8 @@ export function PipelinePage() {
           >
             {sub === "leads" ? (
               <PipelineLeads />
+            ) : sub === "unsubscribed" ? (
+              <UnsubscribedList />
             ) : (
               <SendCampaigns onSwitchToLeads={() => setSub("leads")} />
             )}
@@ -144,13 +155,22 @@ function PipelineSubNav({
           onClick={() => onSelect("leads")}
         />
         {canSend && (
-          <SubTabPill
-            id="campaigns"
-            label="Send Campaigns (Automation)"
-            active={sub === "campaigns"}
-            reduce={reduce}
-            onClick={() => onSelect("campaigns")}
-          />
+          <>
+            <SubTabPill
+              id="campaigns"
+              label="Send Campaigns (Automation)"
+              active={sub === "campaigns"}
+              reduce={reduce}
+              onClick={() => onSelect("campaigns")}
+            />
+            <SubTabPill
+              id="unsubscribed"
+              label="Unsubscribed"
+              active={sub === "unsubscribed"}
+              reduce={reduce}
+              onClick={() => onSelect("unsubscribed")}
+            />
+          </>
         )}
       </div>
     </Reveal>

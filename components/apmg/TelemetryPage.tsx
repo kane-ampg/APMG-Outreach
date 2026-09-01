@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Inbox,
   LayoutGrid,
+  MailX,
   MousePointerClick,
   RefreshCw,
   Send,
@@ -25,6 +26,7 @@ import {
   type AnonymousActivity,
   type LeadActivity,
   type LeadActivityEvent,
+  type UnsubscribedPerson,
 } from "@/lib/data/leadActivity";
 import { EventTrail, TimelineLine, fmtStamp } from "./LeadTrail";
 import { leadScore, scoreTier } from "@/lib/data/leadScore";
@@ -52,10 +54,16 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  *   GET /api/portal/lead-activity → per-lead click trails + anonymous rollup
  *   GET /api/portal/summary       → funnel totals for the KPI row
  *
- * The heart of the page is the lead-activity list: one row per attributed
- * lead (someone who opened a tracked outreach email), with a compact
- * horizontal event trail (icon chips, chronological left → right) and an
- * expandable full timeline in plain English ("Clicked the email link" →
+ * The main table is tabbed: the lead-activity list, and the opt-out list —
+ * everyone who has unsubscribed, which is the one audience the send route will
+ * never mail again. Both ride the same lead-activity payload.
+ *
+ * The heart of the page is the lead-activity list: a real six-column table
+ * (Lead · ID · Score · Sector · Events · Last seen) under a shared column
+ * head, one row per attributed lead (someone who opened a tracked outreach
+ * email). The Events column carries the compact horizontal trail (icon chips,
+ * chronological left → right) plus its count, and every row expands to a
+ * full timeline in plain English ("Clicked the email link" →
  * "Viewed Painting Services" → "Sent an enquiry — Painting Services").
  * Attribution exists because /t/[id] set the apmg_ref cookie; the API
  * allowlists the customer-journey event names on both streams, so internal
@@ -116,6 +124,17 @@ function activeEventCount(lead: LeadActivity): number {
 /** Sentinel for the "all sectors" chip (no `category` filter applied). */
 const ALL_SECTORS = "__all__";
 
+/* ───────────────────────────  main-table tabs  ─────────────────────────── */
+
+/** The two audiences the main table shows: everyone who engaged, and everyone
+ *  who asked us to stop. They share one payload, one pager and one panel. */
+type TableTab = "activity" | "unsubscribed";
+
+const TABS: { id: TableTab; label: string }[] = [
+  { id: "activity", label: "Lead activity" },
+  { id: "unsubscribed", label: "Unsubscribed" },
+];
+
 /* ───────────────────────────  load state  ─────────────────────────── */
 
 type LoadState =
@@ -128,6 +147,12 @@ type LoadState =
       leads: LeadActivity[];
       anonymous: AnonymousActivity;
       totals: ActivityTotals;
+      unsubscribes: UnsubscribedPerson[];
+      /** exact count — the KPI never shows only what fitted in the page cap */
+      unsubscribesTotal: number;
+      /** false = the opt-out list couldn't be read at all (its migration is
+       *  separate), so "0" would be a claim we can't make */
+      unsubscribesAvailable: boolean;
     };
 
 /* ─────────────────────  defensive payload normalisers  ───────────────────── */
@@ -170,6 +195,23 @@ function toLead(v: unknown): LeadActivity | null {
   };
 }
 
+/** Rebuild one opt-out row. The address is the row's entire point, so a row
+ *  without one is dropped rather than rendered as a nameless person. */
+function toUnsubscribed(v: unknown): UnsubscribedPerson | null {
+  const o = (v ?? {}) as Partial<UnsubscribedPerson>;
+  if (typeof o.email !== "string" || !o.email) return null;
+  if (typeof o.createdAt !== "string" || !o.createdAt) return null;
+  return {
+    email: o.email,
+    business: str(o.business),
+    category: str(o.category),
+    leadId: str(o.leadId),
+    campaign: str(o.campaign),
+    reason: str(o.reason) ?? "unsubscribe",
+    createdAt: o.createdAt,
+  };
+}
+
 function toAnonymous(v: unknown): AnonymousActivity {
   const o = (v ?? {}) as Partial<AnonymousActivity>;
   return {
@@ -202,9 +244,11 @@ function fmtWhen(iso: string): string {
   return new Date(t).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 }
 
-/** Row title when the lead row was deleted since the click (spec fallback). */
+/** Row title. When the lead row was deleted/reimported since the click there
+ *  is no business name — and the uuid now has a column of its own, so this says
+ *  so in words rather than repeating the id back at the operator. */
 function leadDisplayName(lead: LeadActivity): string {
-  return lead.business ?? `Lead ${lead.leadId.slice(0, 8)}…`;
+  return lead.business ?? "Unattributed lead";
 }
 
 const ratio = (count: number, total: number) => (total > 0 ? count / total : 0);
@@ -285,11 +329,24 @@ function StatCard({ stat }: { stat: TelemetryStat }) {
   );
 }
 
+/** The fused KPI panel's grid — one definition, shared by the live row and its
+ *  skeleton so they can't drift apart. Five gauges: two columns on a phone,
+ *  three once the sidebar is beside them, five across only from xl, where a
+ *  column is still wide enough for a 40px count-up readout. */
+const KPI_GRID =
+  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-3 xl:grid-cols-5";
+
+/** Five cards divide into neither two nor three columns, and the panel is fused
+ *  by a 1px border-coloured gap — so the empty cell at the end of the last row
+ *  would render as a slab of border. This card-coloured filler closes it, and
+ *  disappears at xl where five columns come out even. */
+const KPI_FILLER = <div className="bg-card xl:hidden" aria-hidden />;
+
 /** Skeleton mirroring the fused KPI panel while both endpoints are in flight. */
 function KpiPanelSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-4">
-      {Array.from({ length: 4 }).map((_, i) => (
+    <div className={KPI_GRID}>
+      {Array.from({ length: 5 }).map((_, i) => (
         <div key={i} className="flex h-full flex-col bg-card p-5" aria-busy>
           <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
           <div className="mt-3 h-[34px] w-3/4 animate-pulse rounded bg-muted sm:h-[40px]" />
@@ -299,6 +356,7 @@ function KpiPanelSkeleton() {
           </div>
         </div>
       ))}
+      {KPI_FILLER}
     </div>
   );
 }
@@ -315,6 +373,71 @@ function PanelHead({ title, meta }: { title: string; meta?: ReactNode }) {
   );
 }
 
+/** Tabbed panel head — the main table's two audiences (who engaged, who asked
+ *  us to stop) with the same title weight PanelHead gives a single-panel
+ *  heading, so switching tabs reads as changing the table, not the page. */
+function PanelTabs({
+  tab,
+  counts,
+  onTab,
+  meta,
+}: {
+  tab: TableTab;
+  /** count chip per tab — null while that number isn't known yet */
+  counts: Record<TableTab, number | null>;
+  onTab: (tab: TableTab) => void;
+  meta?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-x-3 border-b border-border px-4">
+      <div role="tablist" aria-label="Telemetry table" className="flex items-center gap-4 pt-3">
+        {TABS.map((t) => {
+          const active = t.id === tab;
+          const count = counts[t.id];
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              id={`telemetry-tab-${t.id}`}
+              aria-selected={active}
+              aria-controls={TABPANEL_ID}
+              onClick={() => onTab(t.id)}
+              data-track="telemetry_table_tab"
+              data-track-tab={t.id}
+              className={cn(
+                // -mb-px drops the active underline onto the head's own
+                // hairline instead of stacking a second rule beneath it.
+                "-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 pb-3 font-heading text-sm font-semibold outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                active
+                  ? "border-primary text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t.label}
+              {count !== null && (
+                <span
+                  className={cn(
+                    "tnum rounded-full px-1.5 py-px font-mono text-[10px] font-medium",
+                    active ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
+                  )}
+                >
+                  {formatInt(count)}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {meta ? <div className="pb-3">{meta}</div> : null}
+    </div>
+  );
+}
+
+/** One id for the single rendered tabpanel — only the active tab's body is in
+ *  the DOM, so it re-labels itself rather than there being one panel per tab. */
+const TABPANEL_ID = "telemetry-tabpanel";
+
 function PanelEmpty({ icon: Icon, hint }: { icon: LucideIcon; hint: string }) {
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
@@ -329,6 +452,65 @@ function PanelEmpty({ icon: Icon, hint }: { icon: LucideIcon; hint: string }) {
 }
 
 /* ───────────────────────────  lead row  ─────────────────────────── */
+
+/** The activity list's column template — Lead · ID · Score · Sector · Events ·
+ *  Last seen. ONE definition, read by both the column head and every row, so
+ *  the headings can't drift off the cells they sit over. Deliberately left
+ *  unprefixed: below lg the row is flex-col, where a grid template is inert,
+ *  so the stacked layout needs no second definition.
+ *
+ *  The five named tracks are deliberately mean, because everything they don't
+ *  take goes to Events — and the trail is the one cell whose content can be
+ *  400px wide. Below that width it wraps and the row doubles in height, which
+ *  is what the tighter sub-xl set is for. */
+const LEAD_COLS =
+  "grid-cols-[minmax(0,8.5rem)_4.5rem_5.5rem_minmax(0,6rem)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,13rem)_6rem_5.5rem_minmax(0,9rem)_minmax(0,1fr)_auto]";
+
+/** Width of the per-row trash column, mirrored by a spacer in the head so the
+ *  headings stay over their own columns instead of sliding one gap right. */
+const ROW_ACTION_W = "w-10";
+
+/** Below lg the row stacks and the column head is hidden, so a bare uuid or a
+ *  bare number has nothing above it saying what it is. This is that label. */
+function CellLabel({ children }: { children: ReactNode }) {
+  return (
+    <span className="mr-1.5 shrink-0 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground/70 lg:hidden">
+      {children}
+    </span>
+  );
+}
+
+/** First segment of the lead uuid — enough to tell two rows apart at a glance
+ *  and to match a row against Supabase; the cell carries the full value in
+ *  its title. */
+function shortLeadId(id: string): string {
+  return id.length > 8 ? `${id.slice(0, 8)}…` : id;
+}
+
+/** Column head for the activity list. Hidden below lg, where the rows stack
+ *  and name their own cells instead. */
+function LeadTableHead() {
+  return (
+    <div className="hidden items-stretch border-b border-border bg-muted/25 lg:flex">
+      <div
+        className={cn(
+          "grid min-w-0 flex-1 items-center gap-3 px-4 py-2 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground",
+          LEAD_COLS,
+        )}
+      >
+        <span>Lead</span>
+        <span>ID</span>
+        <span>Score</span>
+        <span>Sector</span>
+        <span>Events</span>
+        {/* pr-7 clears the row's chevron (1rem, plus the 0.75rem grid gap) so
+            the heading sits over the timestamp, not over the expand cue. */}
+        <span className="pr-7 text-right">Last seen</span>
+      </div>
+      <div className={cn("shrink-0 border-l border-border/70", ROW_ACTION_W)} aria-hidden />
+    </div>
+  );
+}
 
 /** This row's delete flow: null = quiet, "confirm" = strip shown, "busy" =
  *  the DELETE request is in flight. */
@@ -384,9 +566,12 @@ const LeadRow = memo(function LeadRow({
           data-track="telemetry_lead_toggle"
           data-track-lead={lead.leadId}
           aria-label={`${name}: intent score ${score} of 100, ${tier.label}. ${visible.length} ${visible.length === 1 ? "event" : "events"}${unseen > 0 ? ` (${unseen} new)` : ""}, last seen ${fmtWhen(lead.lastSeen)}. ${open ? "Collapse" : "Expand"} timeline`}
-          className="flex min-w-0 flex-1 flex-col gap-2.5 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] md:grid md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] md:items-center md:gap-3"
+          className={cn(
+            "flex min-w-0 flex-1 flex-col gap-2 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] lg:grid lg:items-center lg:gap-3",
+            LEAD_COLS,
+          )}
         >
-          {/* identity: business + sector/campaign chips */}
+          {/* ── Lead: who it is, plus the campaign that reached them ───── */}
           <span className="block min-w-0">
             <span className="flex min-w-0 items-center gap-2">
               {/* new-activity dot: blinks until the row is toggled (acked) */}
@@ -405,45 +590,82 @@ const LeadRow = memo(function LeadRow({
               >
                 {name}
               </span>
-              {/* intent score — the hotter the lead the louder the chip; an
-                  enquiry always lands in the top (Hottest) band. */}
-              <span
-                title={`Intent score ${score}/100 · ${tier.label}`}
-                className={cn(
-                  "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.08em]",
-                  tier.chip,
-                )}
-              >
-                <span className="tnum">{score}</span>
-                <span className={cn("font-medium normal-case tracking-normal", tier.ring)}>
-                  {tier.label}
+            </span>
+            {lead.campaign && (
+              <span className="mt-1 flex min-w-0">
+                <span
+                  title={lead.campaign}
+                  className="inline-flex max-w-full items-center rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary"
+                >
+                  <span className="truncate">{lead.campaign}</span>
                 </span>
               </span>
-            </span>
-            <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-              {lead.category && (
-                <span className="inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {lead.category}
-                </span>
-              )}
-              {lead.campaign && (
-                <span className="inline-flex max-w-full items-center truncate rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary">
-                  {lead.campaign}
-                </span>
-              )}
+            )}
+          </span>
+
+          {/* ── ID: the lead uuid, truncated; hover carries the full value ── */}
+          <span className="flex min-w-0 items-center">
+            <CellLabel>ID</CellLabel>
+            <span
+              title={lead.leadId}
+              className="truncate font-mono text-[10px] text-muted-foreground"
+            >
+              {shortLeadId(lead.leadId)}
             </span>
           </span>
 
-          {/* the trail itself */}
-          <EventTrail events={visible} />
+          {/* ── Score: the number and the band it lands in. The hotter the
+                 lead the louder the chip; an enquiry is always Hottest. ──── */}
+          <span className="flex min-w-0 items-center">
+            <CellLabel>Score</CellLabel>
+            <span
+              title={`Intent score ${score}/100 · ${tier.label}`}
+              className={cn(
+                "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.08em]",
+                tier.chip,
+              )}
+            >
+              <span className="tnum">{score}</span>
+              <span className={cn("font-medium normal-case tracking-normal", tier.ring)}>
+                {tier.label}
+              </span>
+            </span>
+          </span>
 
-          {/* meta: event count · last seen · expand cue */}
-          <span className="flex shrink-0 items-center justify-between gap-3 md:justify-end">
+          {/* ── Sector: its own column, so the operator can read it down the
+                 page and see what the sector filter above is acting on. ─── */}
+          <span className="flex min-w-0 items-center">
+            <CellLabel>Sector</CellLabel>
+            {lead.category ? (
+              <span
+                title={lead.category}
+                className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+              >
+                <span className="truncate">{lead.category}</span>
+              </span>
+            ) : (
+              <span className="font-mono text-[10px] text-muted-foreground/60">—</span>
+            )}
+          </span>
+
+          {/* ── Events: the trail, with the count it adds up to ──────── */}
+          <span className="flex min-w-0 items-center gap-2">
+            <CellLabel>Events</CellLabel>
+            <EventTrail events={visible} />
+            <span
+              className="tnum shrink-0 font-mono text-[10px] text-muted-foreground"
+              title={`${formatInt(visible.length)} ${visible.length === 1 ? "event" : "events"}`}
+            >
+              {formatInt(visible.length)}
+            </span>
+          </span>
+
+          {/* ── Last seen, and the expand cue ─────────────────── */}
+          <span className="flex shrink-0 items-center justify-between gap-3 lg:justify-end">
             <span
               className="tnum font-mono text-[10.5px] text-muted-foreground"
               title={fmtStamp(lead.lastSeen)}
             >
-              {formatInt(visible.length)} {visible.length === 1 ? "event" : "events"} ·{" "}
               {fmtWhen(lead.lastSeen)}
             </span>
             <ChevronDown
@@ -465,7 +687,10 @@ const LeadRow = memo(function LeadRow({
           aria-label={`Delete ${name}'s click activity`}
           data-track="telemetry_lead_delete"
           data-track-lead={lead.leadId}
-          className="flex shrink-0 items-center border-l border-border/70 px-3 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50"
+          className={cn(
+            "flex shrink-0 items-center justify-center border-l border-border/70 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50",
+            ROW_ACTION_W,
+          )}
         >
           <Trash2 className="h-3.5 w-3.5" aria-hidden />
         </button>
@@ -530,6 +755,116 @@ const LeadRow = memo(function LeadRow({
     </li>
   );
 });
+
+/* ───────────────────────────  unsubscribed row  ─────────────────────────── */
+
+/** One recorded opt-out. Read-only by design: a suppression row is the record
+ *  of someone asking us to stop, so there is no delete affordance here — the
+ *  only way back onto the list is the person themselves getting back in touch
+ *  (see the unsubscribe confirmation page). */
+const UnsubscribedRow = memo(function UnsubscribedRow({ person }: { person: UnsubscribedPerson }) {
+  // A bare-address opt-out (no lead id on the link, or the lead has since been
+  // reimported) still names a real person — the address leads the row instead.
+  const named = person.business !== null;
+  return (
+    <li className="border-t border-border/70 first:border-t-0">
+      <div className="flex flex-col gap-1.5 px-4 py-3.5 md:grid md:grid-cols-[minmax(0,1fr)_auto] md:items-center md:gap-3">
+        <div className="min-w-0">
+          <div
+            className={cn(
+              "truncate text-[13px] font-medium",
+              named ? "text-foreground" : "font-mono text-muted-foreground",
+            )}
+          >
+            {person.business ?? person.email}
+          </div>
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
+            {named && (
+              <span className="truncate font-mono text-[10.5px] text-muted-foreground">
+                {person.email}
+              </span>
+            )}
+            {person.category && (
+              <span className="inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                {person.category}
+              </span>
+            )}
+            {person.campaign && (
+              <span className="inline-flex max-w-full items-center truncate rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary">
+                {person.campaign}
+              </span>
+            )}
+            {/* Every self-service opt-out reads "unsubscribe"; anything else was
+                recorded by hand and is worth saying out loud. */}
+            {person.reason !== "unsubscribe" && (
+              <span className="inline-flex max-w-full items-center truncate rounded-full border border-border px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                {person.reason}
+              </span>
+            )}
+          </div>
+        </div>
+        <span
+          className="tnum shrink-0 font-mono text-[10.5px] text-muted-foreground"
+          title={fmtStamp(person.createdAt)}
+        >
+          {fmtWhen(person.createdAt)}
+        </span>
+      </div>
+    </li>
+  );
+});
+
+/* ───────────────────────────  shared list foot  ─────────────────────────── */
+
+/** The pager under either tab — it only exists once a list outgrows a page. */
+function Pager({
+  page,
+  pageCount,
+  total,
+  onPage,
+}: {
+  /** clamped 0-based page */
+  page: number;
+  pageCount: number;
+  total: number;
+  onPage: (page: number) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2.5">
+      <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+        {formatInt(page * PAGE_SIZE + 1)}–{formatInt(Math.min((page + 1) * PAGE_SIZE, total))} of{" "}
+        {formatInt(total)}
+      </span>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={page === 0}
+          onClick={() => onPage(page - 1)}
+          data-track="telemetry_page_prev"
+          className="gap-1"
+        >
+          <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+          Prev
+        </Button>
+        <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          Page {formatInt(page + 1)} / {formatInt(pageCount)}
+        </span>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={page >= pageCount - 1}
+          onClick={() => onPage(page + 1)}
+          data-track="telemetry_page_next"
+          className="gap-1"
+        >
+          Next
+          <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function LeadListSkeleton() {
   return (
@@ -743,6 +1078,9 @@ interface ActivityPayload {
   needsMigration?: boolean;
   leads?: unknown;
   anonymous?: unknown;
+  unsubscribes?: unknown;
+  unsubscribesTotal?: unknown;
+  unsubscribesAvailable?: unknown;
   error?: string;
 }
 interface SummaryPayload {
@@ -759,6 +1097,8 @@ export function TelemetryPage() {
    *  clamps it, so a shrinking list (deletes, refetch) can't strand the view
    *  on a page that no longer exists. */
   const [page, setPage] = useState(0);
+  /** Which audience the main table is showing (engaged leads / opt-outs). */
+  const [tab, setTab] = useState<TableTab>("activity");
   /** How the list is ranked — the "where's the interest" control. */
   const [sort, setSort] = useState<SortKey>("recent");
   /** Sector narrowing (a lead `category`, or ALL_SECTORS for no filter). */
@@ -827,6 +1167,10 @@ export function TelemetryPage() {
           leads: [],
           anonymous: { visitors: 0, events: 0, topServices: [] },
           totals: { attributionClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0 },
+          unsubscribes: [],
+          unsubscribesTotal: 0,
+          // No database, so the opt-out list is unknown rather than empty.
+          unsubscribesAvailable: false,
         });
         return;
       }
@@ -857,6 +1201,9 @@ export function TelemetryPage() {
       const leads = (Array.isArray(act.leads) ? act.leads : [])
         .map(toLead)
         .filter((l): l is LeadActivity => l !== null);
+      const unsubscribes = (Array.isArray(act.unsubscribes) ? act.unsubscribes : [])
+        .map(toUnsubscribed)
+        .filter((u): u is UnsubscribedPerson => u !== null);
       // Feed the notification store the same data this page renders so the
       // row dots / nav badge never lag behind what's on screen.
       ingestLeadActivity(leads);
@@ -872,6 +1219,11 @@ export function TelemetryPage() {
           serviceOpens: num(sum.totals.serviceOpens),
           inquiries: num(sum.totals.inquiries),
         },
+        unsubscribes,
+        // The exact total can exceed what the route sends; never let the KPI
+        // read lower than the rows the table is actually showing either.
+        unsubscribesTotal: Math.max(num(act.unsubscribesTotal), unsubscribes.length),
+        unsubscribesAvailable: act.unsubscribesAvailable === true,
       });
     } catch {
       if (mountedRef.current) {
@@ -1011,6 +1363,9 @@ export function TelemetryPage() {
 
   const ready = load.status === "ready" ? load : null;
   const leads = ready?.leads ?? [];
+  /** Newest-first already (the route orders it) — the opt-out tab shows the
+   *  list as recorded, with no re-ranking to choose between. */
+  const unsubscribes = ready?.unsubscribes ?? [];
   demoRef.current = ready?.mode === "demo";
 
   // Funnel gauges: engaged leads → clicks → browsing → conversions.
@@ -1019,6 +1374,11 @@ export function TelemetryPage() {
     const t = ready.totals;
     const enquiredLeads = leads.filter((l) => l.counts.inquiries > 0).length;
     const attributedInquiries = leads.reduce((sum, l) => sum + l.counts.inquiries, 0);
+    // Opt-outs whose link carried a lead id — the rest arrived as a bare
+    // address we can't tie to anyone, which is worth seeing as a proportion
+    // (a run of unmatched rows is the signature of a gateway detonating the
+    // link rather than of people leaving).
+    const matchedOptOuts = ready.unsubscribes.filter((u) => u.leadId !== null).length;
     return [
       {
         id: "engaged",
@@ -1054,6 +1414,24 @@ export function TelemetryPage() {
           value: ratio(attributedInquiries, t.inquiries),
           label: "from tracked leads",
         },
+      },
+      {
+        id: "unsubscribed",
+        label: "Unsubscribed",
+        // Zero and "we couldn't read the list" must not look the same on a
+        // gauge, so an unreadable list says so in the caption instead of
+        // quietly reading as nobody having opted out.
+        value: ready.unsubscribesAvailable ? ready.unsubscribesTotal : 0,
+        icon: MailX,
+        caption: ready.unsubscribesAvailable
+          ? "opted out — never emailed again"
+          : "opt-out list unavailable",
+        ratio: ready.unsubscribesAvailable
+          ? {
+              value: ratio(matchedOptOuts, ready.unsubscribes.length),
+              label: "matched to a lead",
+            }
+          : null,
       },
     ];
   }, [ready, leads]);
@@ -1102,18 +1480,26 @@ export function TelemetryPage() {
     }
     return ranked;
   }, [leads, activeSector, sort]);
-  const pageCount = Math.max(1, Math.ceil(sortedLeads.length / PAGE_SIZE));
+  // One pager serves both tabs, so the row count it works off is the ACTIVE
+  // tab's — and `page` is re-clamped against it, which is what stops a switch
+  // from page 3 of the trails to a two-page opt-out list showing nothing.
+  const rowCount = tab === "activity" ? sortedLeads.length : unsubscribes.length;
+  const pageCount = Math.max(1, Math.ceil(rowCount / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pagedLeads = useMemo(
     () => sortedLeads.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
     [sortedLeads, safePage],
   );
+  const pagedUnsubscribes = useMemo(
+    () => unsubscribes.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
+    [unsubscribes, safePage],
+  );
 
-  // Changing the sort or sector re-frames the list — jump back to its first
-  // page so the top of the new ranking is what's on screen.
+  // Changing the tab, sort or sector re-frames the list — jump back to its
+  // first page so the top of the new ranking is what's on screen.
   useEffect(() => {
     setPage(0);
-  }, [sort, activeSector]);
+  }, [tab, sort, activeSector]);
 
   // "Last signal" is the freshest lead overall, independent of the current
   // ranking/filter, so it stays a true clock even under "Hottest" or a sector.
@@ -1267,10 +1653,11 @@ export function TelemetryPage() {
           {/* ── KPI row, fused instrument panel (OverviewPage grammar) ──── */}
           <Reveal delay={0.04}>
             {ready ? (
-              <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-4">
+              <div className={KPI_GRID}>
                 {stats.map((stat) => (
                   <StatCard key={stat.id} stat={stat} />
                 ))}
+                {KPI_FILLER}
               </div>
             ) : (
               <KpiPanelSkeleton />
@@ -1278,165 +1665,196 @@ export function TelemetryPage() {
           </Reveal>
 
           {/* ── lead trails + anonymous rollup ──────────────────────────── */}
-          <div className="mt-3 grid grid-cols-1 items-start gap-3 lg:grid-cols-[1.7fr_1fr]">
+          {/* The table is six columns wide now, and the widest of them (the
+              trail) is the one that suffers first — so the rollup card only
+              keeps its place beside the table where there is genuinely room
+              for both. Under ~1700px it drops below, and the table takes the
+              full width rather than wrapping every trail onto three lines. */}
+          <div className="mt-3 grid grid-cols-1 items-start gap-3 wide:grid-cols-[minmax(0,1fr)_20rem]">
             <Reveal delay={0.1} className="min-w-0">
               <section className="flex min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10">
-                <PanelHead
-                  title="Lead activity"
+                <PanelTabs
+                  tab={tab}
+                  onTab={setTab}
+                  counts={{
+                    activity: ready ? leads.length : null,
+                    // The exact total, not the page cap — and nothing at all
+                    // when the opt-out list couldn't be read.
+                    unsubscribed: ready?.unsubscribesAvailable ? ready.unsubscribesTotal : null,
+                  }}
                   meta={
                     <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                      {ready
-                        ? activeSector === ALL_SECTORS
-                          ? `${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"} · ${formatInt(totalEvents)} events`
-                          : `${formatInt(sortedLeads.length)} of ${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"}`
-                        : "loading"}
+                      {!ready
+                        ? "loading"
+                        : tab === "unsubscribed"
+                          ? ready.unsubscribesAvailable
+                            ? `${formatInt(ready.unsubscribesTotal)} opted out`
+                            : "list unavailable"
+                          : activeSector === ALL_SECTORS
+                            ? `${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"} · ${formatInt(totalEvents)} events`
+                            : `${formatInt(sortedLeads.length)} of ${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"}`}
                     </span>
                   }
                 />
-                {/* interest controls: rank by engagement + narrow by sector, so
-                    the operator can steer the list to where the interest is.
-                    Sort is a segmented control (few, fixed options); Sector is a
-                    dropdown (open-ended — grows with the sectors in the data). */}
-                {ready && leads.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border px-4 py-2.5">
-                    <div
-                      className="flex flex-wrap items-center gap-1.5"
-                      role="group"
-                      aria-label="Sort lead activity"
-                    >
-                      <span className="mr-0.5 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
-                        Sort
-                      </span>
-                      {SORTS.map((s) => (
-                        <button
-                          key={s.id}
-                          type="button"
-                          data-track="telemetry_sort"
-                          data-track-sort={s.id}
-                          onClick={() => setSort(s.id)}
-                          aria-pressed={sort === s.id}
-                          className={cn(
-                            "rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
-                            sort === s.id
-                              ? "border-primary/40 bg-primary/10 text-foreground"
-                              : "border-border bg-background text-muted-foreground hover:text-foreground",
-                          )}
-                        >
-                          {s.label}
-                        </button>
-                      ))}
-                    </div>
-                    {sectors.length > 1 && (
-                      <div className="flex items-center gap-1.5">
-                        <label
-                          htmlFor="telemetry-sector"
-                          className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground"
-                        >
-                          Sector
-                        </label>
-                        {/* Native <select> — a real dropdown that stays tidy no
-                            matter how many sectors the data grows to; the caret
-                            is the app's own ChevronDown behind the control. */}
-                        <div className="relative">
-                          <select
-                            id="telemetry-sector"
-                            value={activeSector}
-                            onChange={(e) => setSector(e.target.value)}
-                            data-track="telemetry_sector"
-                            aria-label="Filter lead activity by sector"
-                            className="h-7 max-w-[13rem] cursor-pointer appearance-none truncate rounded-md border border-border bg-background py-0 pl-2.5 pr-7 text-[11px] font-medium text-foreground outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring"
+                <div
+                  role="tabpanel"
+                  id={TABPANEL_ID}
+                  aria-labelledby={`telemetry-tab-${tab}`}
+                  className="flex min-w-0 flex-1 flex-col"
+                >
+                  {tab === "activity" ? (
+                    <>
+                      {/* interest controls: rank by engagement + narrow by sector, so
+                          the operator can steer the list to where the interest is.
+                          Sort is a segmented control (few, fixed options); Sector is a
+                          dropdown (open-ended — grows with the sectors in the data). */}
+                      {ready && leads.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border px-4 py-2.5">
+                          <div
+                            className="flex flex-wrap items-center gap-1.5"
+                            role="group"
+                            aria-label="Sort lead activity"
                           >
-                            <option value={ALL_SECTORS}>All sectors</option>
-                            {sectors.map((s) => (
-                              <option key={s} value={s}>
-                                {s}
-                              </option>
+                            <span className="mr-0.5 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+                              Sort
+                            </span>
+                            {SORTS.map((s) => (
+                              <button
+                                key={s.id}
+                                type="button"
+                                data-track="telemetry_sort"
+                                data-track-sort={s.id}
+                                onClick={() => setSort(s.id)}
+                                aria-pressed={sort === s.id}
+                                className={cn(
+                                  "rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
+                                  sort === s.id
+                                    ? "border-primary/40 bg-primary/10 text-foreground"
+                                    : "border-border bg-background text-muted-foreground hover:text-foreground",
+                                )}
+                              >
+                                {s.label}
+                              </button>
                             ))}
-                          </select>
-                          <ChevronDown
-                            className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-                            aria-hidden
-                          />
+                          </div>
+                          {sectors.length > 1 && (
+                            <div className="flex items-center gap-1.5">
+                              <label
+                                htmlFor="telemetry-sector"
+                                className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground"
+                              >
+                                Sector
+                              </label>
+                              {/* Native <select> — a real dropdown that stays tidy no
+                                  matter how many sectors the data grows to; the caret
+                                  is the app's own ChevronDown behind the control. */}
+                              <div className="relative">
+                                <select
+                                  id="telemetry-sector"
+                                  value={activeSector}
+                                  onChange={(e) => setSector(e.target.value)}
+                                  data-track="telemetry_sector"
+                                  aria-label="Filter lead activity by sector"
+                                  className="h-7 max-w-[13rem] cursor-pointer appearance-none truncate rounded-md border border-border bg-background py-0 pl-2.5 pr-7 text-[11px] font-medium text-foreground outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring"
+                                >
+                                  <option value={ALL_SECTORS}>All sectors</option>
+                                  {sectors.map((s) => (
+                                    <option key={s} value={s}>
+                                      {s}
+                                    </option>
+                                  ))}
+                                </select>
+                                <ChevronDown
+                                  className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                                  aria-hidden
+                                />
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {!ready ? (
-                  <LeadListSkeleton />
-                ) : leads.length === 0 ? (
-                  <PanelEmpty
-                    icon={MousePointerClick}
-                    hint="No attributed clicks yet — trails appear the moment a lead opens a tracked outreach email."
-                  />
-                ) : sortedLeads.length === 0 ? (
-                  <PanelEmpty
-                    icon={MousePointerClick}
-                    hint="No leads in this sector — clear the filter to see every attributed trail."
-                  />
-                ) : (
-                  <>
-                    <ul>
-                      {pagedLeads.map((lead) => (
-                        <LeadRow
-                          key={lead.leadId}
-                          lead={lead}
-                          open={expanded.has(lead.leadId)}
-                          unseen={unseenByLead.get(lead.leadId) ?? 0}
-                          onToggle={toggleLead}
-                          deletePhase={
-                            deleteFlow?.id === lead.leadId
-                              ? deleteFlow.busy
-                                ? "busy"
-                                : "confirm"
-                              : null
-                          }
-                          deleteError={deleteFlow?.id === lead.leadId ? deleteFlow.error : null}
-                          onDeleteRequest={requestDelete}
-                          onDeleteCancel={cancelDelete}
-                          onDeleteConfirm={confirmDelete}
+                      )}
+                      {!ready ? (
+                        <LeadListSkeleton />
+                      ) : leads.length === 0 ? (
+                        <PanelEmpty
+                          icon={MousePointerClick}
+                          hint="No attributed clicks yet — trails appear the moment a lead opens a tracked outreach email."
                         />
-                      ))}
-                    </ul>
-                    {/* pager foot — only exists once the list outgrows a page */}
-                    {sortedLeads.length > PAGE_SIZE && (
-                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2.5">
-                        <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                          {formatInt(safePage * PAGE_SIZE + 1)}–
-                          {formatInt(Math.min((safePage + 1) * PAGE_SIZE, sortedLeads.length))} of{" "}
-                          {formatInt(sortedLeads.length)}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={safePage === 0}
-                            onClick={() => setPage(safePage - 1)}
-                            data-track="telemetry_page_prev"
-                            className="gap-1"
-                          >
-                            <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
-                            Prev
-                          </Button>
-                          <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                            Page {formatInt(safePage + 1)} / {formatInt(pageCount)}
-                          </span>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={safePage >= pageCount - 1}
-                            onClick={() => setPage(safePage + 1)}
-                            data-track="telemetry_page_next"
-                            className="gap-1"
-                          >
-                            Next
-                            <ChevronRight className="h-3.5 w-3.5" aria-hidden />
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
+                      ) : sortedLeads.length === 0 ? (
+                        <PanelEmpty
+                          icon={MousePointerClick}
+                          hint="No leads in this sector — clear the filter to see every attributed trail."
+                        />
+                      ) : (
+                        <>
+                          <LeadTableHead />
+                          <ul>
+                            {pagedLeads.map((lead) => (
+                              <LeadRow
+                                key={lead.leadId}
+                                lead={lead}
+                                open={expanded.has(lead.leadId)}
+                                unseen={unseenByLead.get(lead.leadId) ?? 0}
+                                onToggle={toggleLead}
+                                deletePhase={
+                                  deleteFlow?.id === lead.leadId
+                                    ? deleteFlow.busy
+                                      ? "busy"
+                                      : "confirm"
+                                    : null
+                                }
+                                deleteError={
+                                  deleteFlow?.id === lead.leadId ? deleteFlow.error : null
+                                }
+                                onDeleteRequest={requestDelete}
+                                onDeleteCancel={cancelDelete}
+                                onDeleteConfirm={confirmDelete}
+                              />
+                            ))}
+                          </ul>
+                        </>
+                      )}
+                    </>
+                  ) : !ready ? (
+                    <LeadListSkeleton />
+                  ) : !ready.unsubscribesAvailable ? (
+                    /* "We couldn't read the list" — never dressed up as "nobody
+                       has opted out". email_suppression has its own migration. */
+                    <PanelEmpty
+                      icon={MailX}
+                      hint="Couldn’t read the opt-out list. If supabase/unsubscribe.sql hasn’t been run in the Supabase SQL editor yet, run it — until then, unsubscribes aren’t being recorded either."
+                    />
+                  ) : unsubscribes.length === 0 ? (
+                    <PanelEmpty
+                      icon={MailX}
+                      hint="Nobody has unsubscribed — opt-outs land here the moment someone clicks the unsubscribe link in an outreach email."
+                    />
+                  ) : (
+                    <>
+                      <ul>
+                        {pagedUnsubscribes.map((person) => (
+                          <UnsubscribedRow
+                            key={`${person.email}-${person.createdAt}`}
+                            person={person}
+                          />
+                        ))}
+                      </ul>
+                      <p className="border-t border-border px-4 py-2.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
+                        Permanent. Every send drops these addresses — and any other address at the
+                        same business domain, so a colleague&rsquo;s opt-out covers the branch.
+                      </p>
+                    </>
+                  )}
+                  {/* one pager, whichever list is on screen */}
+                  {rowCount > PAGE_SIZE && (
+                    <Pager
+                      page={safePage}
+                      pageCount={pageCount}
+                      total={rowCount}
+                      onPage={setPage}
+                    />
+                  )}
+                </div>
               </section>
             </Reveal>
 

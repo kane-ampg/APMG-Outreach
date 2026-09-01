@@ -123,6 +123,24 @@ export interface AnonymousPortalActivity {
   topServices: Array<{ service: string; opens: number }>;
 }
 
+/** One recorded opt-out (an `email_suppression` row) — the people the send
+ *  route will never mail again. Keyed by address, because that's what the
+ *  Spam Act opt-out attaches to; `leadId`/`business` are context the
+ *  unsubscribe link happened to carry, and are null for a bare-address row. */
+export interface UnsubscribedPerson {
+  email: string;
+  /** leads.name for `leadId` at read time; null when the link carried no lead
+   *  id, or that lead has since been deleted/reimported */
+  business: string | null;
+  /** sector, from the same leads lookup as `business` */
+  category: string | null;
+  leadId: string | null;
+  campaign: string | null;
+  /** email_suppression.reason — "unsubscribe" for every self-service opt-out */
+  reason: string;
+  createdAt: string;
+}
+
 /** Full GET /api/portal/lead-activity response. `needsMigration` rides along
  *  with mode "demo" when the portal tables don't exist yet, so the UI can say
  *  "run supabase/portal-telemetry.sql" instead of showing demo data silently. */
@@ -133,6 +151,14 @@ export interface LeadActivityResponse {
   error?: string;
   leads: LeadActivity[];
   anonymous: AnonymousPortalActivity;
+  /** newest-first, capped — see MAX_UNSUBSCRIBES in the route */
+  unsubscribes: UnsubscribedPerson[];
+  /** exact row count (count=exact), so the KPI stays honest past the cap */
+  unsubscribesTotal: number;
+  /** false when the opt-out list couldn't be read at all — its migration
+   *  (supabase/unsubscribe.sql) is separate from the portal tables, so a
+   *  missing table must read as "unknown", never as "nobody opted out" */
+  unsubscribesAvailable: boolean;
 }
 
 /**
@@ -502,6 +528,49 @@ export async function isKnownRecipient(
   }
 }
 
+/**
+ * ROT13 the LOCAL PART of an address, leaving the domain untouched.
+ *
+ * Not cryptography — the exact transform a link-rewriting mail gateway applies
+ * to the query string of a URL it walks. `vaab@windsorccc.org.au`,
+ * `jlbzvat@firstgrammar.com.au` and
+ * `avgmeblabegu.faebyzfagf@saints.vic.edu.au` are all real rows it produced;
+ * the domain in each is genuine and only the local part came back rotated.
+ */
+export function rot13Local(email: string): string | null {
+  const at = email.lastIndexOf("@");
+  if (at < 1) return null;
+  const local = email.slice(0, at);
+  if (!/[a-z]/i.test(local)) return null;
+  const rotated = local.replace(/[a-z]/gi, (c) => {
+    const base = c <= "Z" ? 65 : 97;
+    return String.fromCharCode(((c.charCodeAt(0) - base + 13) % 26) + base);
+  });
+  return rotated + email.slice(at);
+}
+
+/**
+ * The scanner-rewrite tell: an address held on NO lead whose ROT13 IS held on
+ * one. A person's mail client sends the address exactly as we wrote it into the
+ * link, so a rotated local part can only come from something rewriting the URL
+ * in transit. Returns the REAL address behind the rewrite, or null when this
+ * isn't one (which is every ordinary opt-out — the check costs one lookup and
+ * only ever runs on an address we don't recognise).
+ *
+ * Deliberately narrow. It fires only when the decoded form matches a lead we
+ * actually hold, so a genuine opt-out from an address our data has gone stale
+ * on can never trip it.
+ */
+export async function rewrittenRecipient(
+  base: string,
+  key: string,
+  email: string,
+): Promise<string | null> {
+  const decoded = rot13Local(email.trim().toLowerCase());
+  if (!decoded || decoded === email.trim().toLowerCase()) return null;
+  return (await isKnownRecipient(base, key, decoded)) ? decoded : null;
+}
+
 /** Record an opt-out (idempotent upsert on lower(email)). Returns "ok",
  *  "needs_migration" when the table is absent, or "error" on anything else —
  *  the endpoint still shows the customer a success page regardless, but a
@@ -583,6 +652,92 @@ export async function fetchSuppressedEmails(
     return new Set();
   }
 }
+
+/**
+ * Mailbox providers where an address says nothing about the organisation behind
+ * it. An opt-out from `someone@gmail.com` must never mute every other Gmail
+ * address in the list, so these are excluded from the domain rollup below.
+ */
+const SHARED_MAIL_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "outlook.com", "outlook.com.au", "hotmail.com",
+  "hotmail.com.au", "live.com", "live.com.au", "msn.com", "yahoo.com",
+  "yahoo.com.au", "y7mail.com", "icloud.com", "me.com", "mac.com", "aol.com",
+  "protonmail.com", "proton.me", "gmx.com", "mail.com", "zoho.com",
+  "bigpond.com", "bigpond.net.au", "optusnet.com.au", "iinet.net.au",
+  "tpg.com.au", "internode.on.net", "westnet.com.au", "dodo.com.au",
+  "adam.com.au", "exemail.com.au", "ozemail.com.au", "netspace.net.au",
+  "aussiebroadband.com.au", "spin.net.au", "hotkey.net.au",
+]);
+
+/** Only ever `[a-z0-9.-]`, so the value is safe to splice into a PostgREST
+ *  filter. Returns null for a public provider or an unparseable address. */
+export function organisationDomain(email: string): string | null {
+  const at = email.lastIndexOf("@");
+  if (at < 1) return null;
+  const domain = email.slice(at + 1).trim().toLowerCase();
+  if (!/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/.test(domain)) return null;
+  if (SHARED_MAIL_DOMAINS.has(domain)) return null;
+  return domain;
+}
+
+/**
+ * Domain-level opt-outs: for each ORGANISATION domain in `emails`, the address
+ * at that domain that has already unsubscribed, if any.
+ *
+ * WHY THIS EXISTS. `fetchSuppressedEmails` matches one exact address, so a
+ * second address at a business that already opted out sails straight through.
+ * On 2026-08-30 that was live: `maidengully@jennyselc.com.au` unsubscribed on
+ * 25 Aug, and `info@jennyselc.com.au` — the same small childcare business — was
+ * still the top of the never-emailed queue. The Spam Act opt-out attaches to
+ * the person's request, not to the string they happened to send it from, and a
+ * multi-branch prospect (aged care groups, childcare chains, school networks) is
+ * exactly who this list is made of.
+ *
+ * Public mailbox providers are excluded (see SHARED_MAIL_DOMAINS) — one Gmail
+ * opt-out must not mute every other Gmail address in the batch.
+ *
+ * Fails OPEN (empty map) on any error or a missing table, exactly like its
+ * sibling: a broken lookup must never block a legitimate send.
+ */
+export async function fetchSuppressedDomains(
+  base: string,
+  key: string,
+  emails: string[],
+): Promise<Map<string, string>> {
+  const domains = [...new Set(emails.map((e) => organisationDomain(e.trim().toLowerCase())).filter(Boolean) as string[])];
+  if (domains.length === 0) return new Map();
+  try {
+    // or=(email.ilike.*@a.com,email.ilike.*@b.com) — domains are validated to
+    // [a-z0-9.-] above, so neither a comma nor a paren can reach this filter.
+    const or = `(${domains.map((d) => `email.ilike.*@${d}`).join(",")})`;
+    const res = await fetch(
+      `${base}/rest/v1/email_suppression?select=email&or=${encodeURIComponent(or)}`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: "no-store" },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      if (!isMissingPortalTable(res.status, detail)) {
+        console.error(`[portal] domain suppression lookup ${res.status}:`, detail.slice(0, 300));
+      }
+      return new Map();
+    }
+    const rows = (await res.json().catch(() => [])) as Array<{ email?: unknown }>;
+    const out = new Map<string, string>();
+    for (const r of rows) {
+      if (typeof r.email !== "string") continue;
+      const address = r.email.trim().toLowerCase();
+      const domain = organisationDomain(address);
+      // ilike is a suffix match, so re-check the domain is one we asked about —
+      // never let "@notjennyselc.com.au" answer for "@jennyselc.com.au".
+      if (domain && domains.includes(domain) && !out.has(domain)) out.set(domain, address);
+    }
+    return out;
+  } catch (e) {
+    console.error("[portal] domain suppression lookup failed:", e);
+    return new Map();
+  }
+}
+
 
 /* ── Scanner-click suppression (/t/[id]) ─────────────────────────────────
    isBotRequest (above) matches on User-Agent only, so a scanner that presents

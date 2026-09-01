@@ -7,21 +7,24 @@ import {
   type LeadActivity,
   type LeadActivityCounts,
   type LeadActivityEvent,
+  type UnsubscribedPerson,
 } from "@/lib/portal/server";
 
 // GET /api/portal/lead-activity — the per-lead click stream behind the admin
 // Telemetry tab: for every ATTRIBUTED lead (someone who clicked the tracked
 // outreach link, so their portal_events rows carry lead_id) the chronological
 // trail of what they did — email click → PDF download → portal view → service
-// opens → enquiry — plus one aggregate block for anonymous portal visitors.
-// Grouped here in the route (two bounded PostgREST GETs + one leads lookup)
+// opens → enquiry — plus one aggregate block for anonymous portal visitors and
+// the recorded opt-out list (who unsubscribed, and when).
+// Grouped here in the route (three bounded PostgREST GETs + the leads lookups)
 // rather than in SQL, the same trade-off as /api/portal/summary — at portal
 // traffic volumes that's plenty, and it keeps every read in this repo a plain
 // PostgREST fetch. Server-side (keeps the service role key off the browser).
 //
 // SECURITY — unlike /api/portal/summary (pure aggregates), this response names
 // leads: each row carries the lead's uuid, which is exactly the token /t/[id]
-// accepts, plus the business name and its behavioural click trail. The portal
+// accepts, plus the business name and its behavioural click trail, and the
+// opt-out list carries recipients' email addresses outright. The portal
 // deliberately sends external strangers to this origin, so per-lead reads must
 // NOT ship publicly behind the sameOrigin (CSRF-only) floor — on top of it,
 // live mode requires the PORTAL_ADMIN_KEY shared secret (x-portal-admin-key
@@ -35,6 +38,9 @@ const EVENTS_LIMIT = 2000;
 const MAX_LEADS = 100;
 const MAX_EVENTS_PER_LEAD = 50;
 const TOP_SERVICES_LIMIT = 6;
+/** Opt-out rows returned. The KPI count comes from count=exact, so the cap
+ *  only limits what the table can page through, never the number shown. */
+const MAX_UNSUBSCRIBES = 100;
 
 /** The client-side duplicate of the server-canonical `portal_inquiry` row
  *  (ServiceInquiryModal fires both for one submission). Hidden from timelines
@@ -96,7 +102,23 @@ type AnonymousRow = {
   created_at: string;
 };
 
+/** The opt-out list, newest first. A separate table with a separate migration
+ *  (supabase/unsubscribe.sql) — deliberately NOT part of the portal-tables
+ *  migration check below, so a console that has never run it still renders
+ *  every other panel. */
+const UNSUBSCRIBE_QUERY =
+  `email_suppression?select=email,lead_id,campaign,reason,created_at` +
+  `&order=created_at.desc&limit=${MAX_UNSUBSCRIBES}`;
+
 type LeadRow = { id?: unknown; name?: unknown; category?: unknown };
+
+type SuppressionRow = {
+  email?: unknown;
+  lead_id?: unknown;
+  campaign?: unknown;
+  reason?: unknown;
+  created_at?: unknown;
+};
 
 /** Mutable per-lead accumulator. Events are collected newest-first (the fetch
  *  order) and reversed once at the end — that's what makes "keep the MOST
@@ -115,6 +137,11 @@ type LeadBucket = {
 const EMPTY = {
   leads: [] as LeadActivity[],
   anonymous: { visitors: 0, events: 0, topServices: [] } as AnonymousPortalActivity,
+  unsubscribes: [] as UnsubscribedPerson[],
+  unsubscribesTotal: 0,
+  // "we couldn't read the list", not "nobody has opted out" — every early
+  // return here is a state where we genuinely don't know.
+  unsubscribesAvailable: false,
 };
 
 /** 401 body — same grammar as the enquiries route's shared-secret gate. */
@@ -130,6 +157,59 @@ function restGet(base: string, key: string, pathAndQuery: string): Promise<Respo
     headers: { apikey: key, Authorization: `Bearer ${key}` },
     cache: "no-store",
   });
+}
+
+/** As restGet, but asks for the exact row total in Content-Range — a capped
+ *  window can then still report an honest count (the report route's trick). */
+function countingGet(base: string, key: string, pathAndQuery: string): Promise<Response> {
+  return fetch(`${base}/rest/v1/${pathAndQuery}`, {
+    headers: { apikey: key, Authorization: `Bearer ${key}`, Prefer: "count=exact" },
+    cache: "no-store",
+  });
+}
+
+/** Exact row total from a count=exact response ("0-24/137" → 137). */
+function totalOf(res: Response): number {
+  const total = Number((res.headers.get("content-range") ?? "").split("/")[1]);
+  return Number.isFinite(total) && total >= 0 ? total : 0;
+}
+
+/**
+ * ONE bounded leads lookup for display names (+ category fallback).
+ * Best-effort by contract: leads get reimported/deleted, so a miss just means
+ * `business` stays null — nothing this route renders may depend on the leads
+ * table still holding the row.
+ *
+ * Callers pass at most MAX_LEADS / MAX_UNSUBSCRIBES ids, and each id has been
+ * through isUuid, so comma-joining them into the in.() filter is both safe
+ * (uuids never need PostgREST quoting) and bounded well inside URL limits.
+ */
+async function lookupLeadNames(
+  base: string,
+  key: string,
+  ids: string[],
+): Promise<Map<string, { name: string | null; category: string | null }>> {
+  const out = new Map<string, { name: string | null; category: string | null }>();
+  if (ids.length === 0) return out;
+  try {
+    const res = await restGet(base, key, `leads?select=id,name,category&id=in.(${ids.join(",")})`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[portal/lead-activity] leads lookup ${res.status}:`, detail.slice(0, 500));
+      return out;
+    }
+    const rows = (await res.json().catch(() => [])) as LeadRow[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!row || !isUuid(row.id)) continue;
+      out.set(row.id, {
+        name: typeof row.name === "string" && row.name ? row.name : null,
+        category: typeof row.category === "string" && row.category ? row.category : null,
+      });
+    }
+  } catch (e) {
+    console.error("[portal/lead-activity] leads lookup failed:", e);
+  }
+  return out;
 }
 
 /** Lift one string prop out of the raw jsonb (null for absent/non-string). */
@@ -164,10 +244,12 @@ export async function GET(req: Request): Promise<Response> {
 
   let attributedRes: Response;
   let anonRes: Response;
+  let unsubRes: Response;
   try {
-    [attributedRes, anonRes] = await Promise.all([
+    [attributedRes, anonRes, unsubRes] = await Promise.all([
       restGet(target.base, target.key, ATTRIBUTED_QUERY),
       restGet(target.base, target.key, ANON_QUERY),
+      countingGet(target.base, target.key, UNSUBSCRIBE_QUERY),
     ]);
   } catch (e) {
     console.error("[portal/lead-activity] fetch to Supabase failed:", e);
@@ -218,6 +300,28 @@ export async function GET(req: Request): Promise<Response> {
   const anonRaw = (await anonRes.json().catch(() => [])) as AnonymousRow[];
   const attributedRows = Array.isArray(attributedRaw) ? attributedRaw : [];
   const anonRows = Array.isArray(anonRaw) ? anonRaw : [];
+
+  // ── the opt-out list ──────────────────────────────────────────────────────
+  // email_suppression has its OWN migration (supabase/unsubscribe.sql), so it
+  // is read outside the portal-tables gate above: a console missing it still
+  // gets every other panel. It also can't fall back to zero — "no rows" and
+  // "no table" are different facts, and the second one must not render as
+  // "nobody has unsubscribed" on a KPI card. `unsubscribesAvailable` carries
+  // that distinction to the UI.
+  const unsubscribesAvailable = unsubRes.ok;
+  const unsubRows: SuppressionRow[] = [];
+  if (unsubRes.ok) {
+    const raw = await unsubRes.json().catch(() => []);
+    if (Array.isArray(raw)) unsubRows.push(...(raw as SuppressionRow[]));
+  } else {
+    const detail = await unsubRes.text().catch(() => "");
+    console.error(
+      isMissingPortalTable(unsubRes.status, detail)
+        ? "[portal/lead-activity] email_suppression missing — run supabase/unsubscribe.sql"
+        : `[portal/lead-activity] suppression read ${unsubRes.status}: ${detail.slice(0, 500)}`,
+    );
+  }
+  const unsubscribesTotal = unsubscribesAvailable ? Math.max(totalOf(unsubRes), unsubRows.length) : 0;
 
   // ── group the attributed stream per lead ──────────────────────────────────
   // The whole pass leans on rows arriving newest-first: the first row seen for
@@ -280,33 +384,24 @@ export async function GET(req: Request): Promise<Response> {
     .sort((a, b) => (a[1].lastSeen < b[1].lastSeen ? 1 : a[1].lastSeen > b[1].lastSeen ? -1 : 0))
     .slice(0, MAX_LEADS);
 
-  // ── ONE leads lookup for business names (+ category fallback) ────────────
-  // Best-effort: leads get reimported/deleted, so a miss just means business
-  // stays null — the timeline itself must never depend on the leads table.
-  const leadInfo = new Map<string, { name: string | null; category: string | null }>();
-  if (keptLeads.length > 0) {
-    // Every key passed isUuid above, so comma-joined interpolation into the
-    // in.() filter is safe (uuids never need PostgREST value quoting).
-    const ids = keptLeads.map(([leadId]) => leadId).join(",");
-    try {
-      const res = await restGet(target.base, target.key, `leads?select=id,name,category&id=in.(${ids})`);
-      if (res.ok) {
-        const rows = (await res.json().catch(() => [])) as LeadRow[];
-        for (const row of Array.isArray(rows) ? rows : []) {
-          if (!row || !isUuid(row.id)) continue;
-          leadInfo.set(row.id, {
-            name: typeof row.name === "string" && row.name ? row.name : null,
-            category: typeof row.category === "string" && row.category ? row.category : null,
-          });
-        }
-      } else {
-        const detail = await res.text().catch(() => "");
-        console.error(`[portal/lead-activity] leads lookup ${res.status}:`, detail.slice(0, 500));
-      }
-    } catch (e) {
-      console.error("[portal/lead-activity] leads lookup failed:", e);
-    }
-  }
+  // ── leads lookups for business names (+ category fallback) ───────────────
+  // Two id sets — the trails and the opt-outs — resolved as two parallel
+  // bounded queries rather than one union, so neither in.() filter can grow
+  // past a comfortable URL length as the caps rise.
+  const trailIds = keptLeads.map(([leadId]) => leadId);
+  const trailIdSet = new Set(trailIds);
+  const unsubIds = [
+    ...new Set(
+      unsubRows
+        .map((r) => (isUuid(r.lead_id) ? (r.lead_id as string) : null))
+        .filter((id): id is string => id !== null && !trailIdSet.has(id)),
+    ),
+  ];
+  const [trailInfo, unsubInfo] = await Promise.all([
+    lookupLeadNames(target.base, target.key, trailIds),
+    lookupLeadNames(target.base, target.key, unsubIds),
+  ]);
+  const leadInfo = new Map([...trailInfo, ...unsubInfo]);
 
   const leads: LeadActivity[] = keptLeads.map(([leadId, bucket]) => {
     const info = leadInfo.get(leadId);
@@ -357,7 +452,36 @@ export async function GET(req: Request): Promise<Response> {
     topServices,
   };
 
-  return Response.json({ ok: true, mode: "live", leads, anonymous });
+  // Rebuilt field-by-field (the address is the row's whole point, so a row
+  // without one is dropped rather than rendered as a blank person). The name
+  // resolves through the lead id the unsubscribe link carried — an opt-out sent
+  // from an address we hold on no lead simply reads as the address.
+  const unsubscribes: UnsubscribedPerson[] = [];
+  for (const row of unsubRows) {
+    if (!row || typeof row.email !== "string" || !row.email) continue;
+    if (typeof row.created_at !== "string" || !row.created_at) continue;
+    const leadId = isUuid(row.lead_id) ? (row.lead_id as string) : null;
+    const info = leadId ? leadInfo.get(leadId) : undefined;
+    unsubscribes.push({
+      email: row.email,
+      business: info?.name ?? null,
+      category: info?.category ?? null,
+      leadId,
+      campaign: typeof row.campaign === "string" && row.campaign ? row.campaign : null,
+      reason: typeof row.reason === "string" && row.reason ? row.reason : "unsubscribe",
+      createdAt: row.created_at,
+    });
+  }
+
+  return Response.json({
+    ok: true,
+    mode: "live",
+    leads,
+    anonymous,
+    unsubscribes,
+    unsubscribesTotal,
+    unsubscribesAvailable,
+  });
 }
 
 // DELETE /api/portal/lead-activity — two scopes, one per thing this page shows:

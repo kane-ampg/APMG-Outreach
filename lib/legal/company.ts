@@ -2,11 +2,11 @@
 // surfaces (unsubscribe page, email footer, consent copy, Terms & Privacy).
 // Centralised so the name, contact, address and ABN never drift between places.
 //
-// Values here are the ones ALREADY used across the app; the only field not yet
-// supplied is the ABN — left as null so surfaces render an explicit "(ABN: TBC)"
-// marker rather than a fabricated number. Fill `abn` (and, if the entity is a
-// company, its registered "... Pty Ltd" legalEntity + acn) before going live on
-// anything a solicitor would review.
+// The ABN is set (2026-08-30). Still outstanding: the registered legal entity
+// (e.g. "... Pty Ltd") and its ACN, both left null so surfaces omit them rather
+// than print a fabricated one. Fill those before going live on anything a
+// solicitor would review — the Terms/Privacy placeholders in legalDocs.ts name
+// them explicitly.
 
 export interface CompanyIdentity {
   /** Public trading name shown everywhere. */
@@ -43,7 +43,9 @@ export interface CompanyIdentity {
 export const COMPANY: CompanyIdentity = {
   tradingName: "APMG Services",
   legalEntity: null, // TODO: set the registered entity (e.g. "APMG Services Pty Ltd") for the legal docs
-  abn: null, // TODO: set the ABN before going live; null renders "(ABN: TBC)"
+  // Supplied by the operator 2026-08-30 as the company's public ABN; the
+  // weighted-modulus-89 checksum validates. Spaced in the ATO display grouping.
+  abn: "63 633 883 897",
   acn: null,
   address: "1 Tesmar Cct, Chirnside Park, VIC, Australia",
   contactEmail: "kane@apmgservices.com.au",

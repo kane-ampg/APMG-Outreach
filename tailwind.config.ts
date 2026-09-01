@@ -151,6 +151,9 @@ const config: Config = {
         // Short AND narrow — a small phone. Declared after `short` so it wins
         // where both match.
         tight: { raw: "(max-height: 760px) and (max-width: 639px)" },
+        // Wider than 2xl. Where a six-column table and a side panel BOTH fit
+        // without squeezing the widest column (Telemetry's lead-activity list).
+        wide: "1700px",
       },
       borderRadius: {
         "4xl": "1.75rem",

@@ -10,16 +10,26 @@ vi.mock("@/lib/rbac/server", async (importOriginal) => {
   return { ...actual, requirePermission: (...a: unknown[]) => requirePermission(...a) };
 });
 
+const supabaseTarget = vi.fn(() => ({ state: "demo" }) as unknown);
+
 vi.mock("@/lib/pipeline/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/pipeline/server")>();
-  return { ...actual, campaignWebhook: () => campaignWebhook() };
+  return { ...actual, campaignWebhook: () => campaignWebhook(), supabaseTarget: () => supabaseTarget() };
 });
 
-// Keep the test off the network: neither helper is what we're exercising.
-vi.mock("@/lib/portal/server", () => ({
-  fetchSuppressedEmails: async () => new Set<string>(),
-  insertPortalEvents: async () => true,
-}));
+// Keep the test off the network. organisationDomain is a pure helper and stays
+// REAL — mocking it would hide the very matching this suite checks.
+const fetchSuppressedEmails = vi.fn(async () => new Set<string>());
+const fetchSuppressedDomains = vi.fn(async () => new Map<string, string>());
+vi.mock("@/lib/portal/server", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/portal/server")>();
+  return {
+    ...actual,
+    fetchSuppressedEmails: (...a: unknown[]) => fetchSuppressedEmails(...(a as [])),
+    fetchSuppressedDomains: (...a: unknown[]) => fetchSuppressedDomains(...(a as [])),
+    insertPortalEvents: async () => true,
+  };
+});
 vi.mock("@/lib/pipeline/sectorStore", () => ({
   loadPlaybooks: async () => [],
   playbookPdfUrl: () => null,
@@ -30,6 +40,9 @@ import { POST } from "./route";
 beforeEach(() => {
   vi.clearAllMocks();
   requirePermission.mockResolvedValue({ ok: true, role: "admin", email: "kane@apmgservices.com.au" });
+  supabaseTarget.mockReturnValue({ state: "demo" });
+  fetchSuppressedEmails.mockResolvedValue(new Set<string>());
+  fetchSuppressedDomains.mockResolvedValue(new Map<string, string>());
 });
 
 function sendReq(body: unknown): Request {
@@ -169,5 +182,68 @@ describe("POST /api/pipeline/campaigns/send — never emails an existing client"
     expect(data.sent).toBe(1);
     expect(data.clients).toBeUndefined();
     fetchSpy.mockRestore();
+  });
+});
+
+describe("POST /api/pipeline/campaigns/send — an opt-out covers the organisation, not just the address", () => {
+  const JENNYS = {
+    campaign: "outreach-2026",
+    subject: "Hello {{business}}",
+    bodyHtml: "<p>Hi {{business}} — {{link}}</p>",
+    recipients: [
+      { id: "11111111-1111-4111-8111-111111111111", business: "Jenny's ELC Epsom", email: "info@jennyselc.com.au" },
+      { id: "22222222-2222-4222-8222-222222222222", business: "Acme", email: "a@acme.test" },
+    ],
+  };
+
+  beforeEach(() => {
+    supabaseTarget.mockReturnValue({ state: "ok", base: "https://db.test", key: "k" });
+    campaignWebhook.mockResolvedValue({ state: "ok", url: "https://n8n.example/h", source: "setting" });
+  });
+
+  it("drops a recipient whose colleague unsubscribed, and says who and why", async () => {
+    fetchSuppressedDomains.mockResolvedValue(
+      new Map([["jennyselc.com.au", "maidengully@jennyselc.com.au"]]),
+    );
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await POST(sendReq(JENNYS));
+    const data = await res.json();
+
+    expect(data.ok).toBe(true);
+    expect(data.sent).toBe(1); // Acme only
+    expect(data.suppressedDomains).toBe(1);
+    expect(data.domainMatches).toEqual([
+      { business: "Jenny's ELC Epsom", email: "info@jennyselc.com.au", optedOut: "maidengully@jennyselc.com.au" },
+    ]);
+
+    // and the address itself never reached the automation
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.messages.map((m: { to: string }) => m.to)).toEqual(["a@acme.test"]);
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses the whole send when every recipient's organisation has opted out", async () => {
+    fetchSuppressedDomains.mockResolvedValue(
+      new Map([["jennyselc.com.au", "maidengully@jennyselc.com.au"], ["acme.test", "boss@acme.test"]]),
+    );
+    const res = await POST(sendReq(JENNYS));
+    const data = await res.json();
+
+    expect(res.status).toBe(400);
+    expect(data.ok).toBe(false);
+    expect(data.sent).toBe(0);
+    expect(data.error).toMatch(/organisation has already unsubscribed/i);
+  });
+
+  it("sends normally when nothing at the organisation has opted out", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 200 })));
+    const res = await POST(sendReq(JENNYS));
+    const data = await res.json();
+    expect(data.ok).toBe(true);
+    expect(data.sent).toBe(2);
+    expect(data.suppressedDomains).toBeUndefined();
+    vi.unstubAllGlobals();
   });
 });

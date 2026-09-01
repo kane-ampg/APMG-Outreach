@@ -218,6 +218,13 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
      *  this screen removes them first — but a stale guard index or a lead the
      *  browser couldn't match makes this the authoritative count. */
     clients: number;
+    /** recipients dropped because ANOTHER address at the same organisation had
+     *  unsubscribed. The browser cannot know this — the suppression list is
+     *  server-side — so this count only ever arrives with the response, and it
+     *  is the one an operator would otherwise never learn about. */
+    suppressedDomains: number;
+    /** who they were, so the drop is legible rather than a number that doesn't add up */
+    domainMatches: Array<{ business: string; email: string; optedOut: string }>;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -1008,6 +1015,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           campaign?: string;
           error?: string;
           clients?: number;
+          suppressedDomains?: number;
+          domainMatches?: Array<{ business: string; email: string; optedOut: string }>;
         }
       | null;
     if (!live()) return;
@@ -1029,6 +1038,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       mode: data.mode ?? "unconfigured",
       campaign: data.campaign ?? tag,
       clients: typeof data.clients === "number" ? data.clients : 0,
+      suppressedDomains: typeof data.suppressedDomains === "number" ? data.suppressedDomains : 0,
+      domainMatches: Array.isArray(data.domainMatches) ? data.domainMatches : [],
     });
     setSendPhase("done");
   }, [recipients, campaign, subject, body, service, reduce]);
@@ -2913,7 +2924,14 @@ function SuccessBanner({
   onNextBatch,
   onReset,
 }: {
-  result: { sent: number; mode: SendMode; campaign: string; clients: number };
+  result: {
+    sent: number;
+    mode: SendMode;
+    campaign: string;
+    clients: number;
+    suppressedDomains: number;
+    domainMatches: Array<{ business: string; email: string; optedOut: string }>;
+  };
   /** batching progress — set when this send was one batch of a larger selection */
   batch: { no: number; total: number; nextCount: number; queuedLeads: number } | null;
   onNextBatch: () => void;
@@ -2962,6 +2980,37 @@ function SuccessBanner({
           New send
         </Button>
       </div>
+
+      {/* Silent drops. The send button's count is what the operator approved;
+          these are the recipients the SERVER removed after that, and until now
+          they were reported in the response and rendered nowhere. A send that
+          quietly went to fewer inboxes than the screen promised is exactly the
+          kind of thing that has to be said out loud. */}
+      {(result.suppressedDomains > 0 || result.clients > 0) && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2.5">
+          <div className="flex items-center gap-2 text-[13px] font-semibold text-foreground">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-600" aria-hidden />
+            {[
+              result.suppressedDomains > 0
+                ? `${result.suppressedDomains} removed — their organisation has unsubscribed`
+                : null,
+              result.clients > 0 ? `${result.clients} removed — already an APMG client` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </div>
+          {result.domainMatches.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5 text-[11.5px] leading-relaxed text-muted-foreground">
+              {result.domainMatches.map((m) => (
+                <li key={m.email} className="truncate">
+                  <span className="text-foreground">{m.business}</span> — {m.email}, because{" "}
+                  <span className="font-mono">{m.optedOut}</span> opted out
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* next queued batch — compose it right from the success banner. Nothing
           is sent until that batch is reviewed and confirmed in turn. */}

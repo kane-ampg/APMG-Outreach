@@ -4,6 +4,7 @@ import {
   isKnownRecipient,
   lookupLead,
   recordUnsubscribe,
+  rewrittenRecipient,
 } from "@/lib/portal/server";
 import { senderIdentityLine } from "@/lib/legal/company";
 
@@ -129,6 +130,28 @@ export async function GET(req: Request): Promise<Response> {
     return successPage(email, portalHref);
   }
 
+  /*
+   * THE REWRITE TELL. isBotRequest reads the User-Agent, so a gateway that
+   * presents a browser string walks straight past it — which is how
+   * `avgmeblabegu.faebyzfagf@saints.vic.edu.au` (ROT13 of a real enrolments
+   * desk at saints.vic.edu.au) came to sit on the suppression list as an
+   * opt-out nobody made. A rotated local part cannot come from a person: their
+   * mail client sends the address exactly as we wrote it into the link.
+   *
+   * Skipped, not decoded-and-recorded. A GET is what a gateway PRE-FETCHES;
+   * treating it as a click would let every scanner suppress a real prospect.
+   * The decoded address is logged so a genuine one can still be honoured by
+   * hand — and the one-click POST below, which only a person can trigger, does
+   * record the decoded address instead of ignoring it.
+   */
+  const rewrittenAs = known ? null : await rewrittenRecipient(target.base, target.key, email);
+  if (rewrittenAs) {
+    console.warn(
+      `[unsubscribe] SKIPPED (rewritten link, no click): ${email} decodes to ${rewrittenAs} — lead=${leadId || "-"} campaign=${campaign || "-"}`,
+    );
+    return successPage(email, portalHref);
+  }
+
   if (!known) {
     console.warn(
       `[unsubscribe] address not held on any lead, recording anyway: ${email} lead=${leadId || "-"} campaign=${campaign || "-"}`,
@@ -156,4 +179,76 @@ function successPage(email: string, portalHref: string): Response {
      <p style="margin-top:20px;"><a href="${portalHref}" style="display:inline-block;background:#c8102e;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 22px;border-radius:8px;">Explore our services</a></p>
      <p style="color:#6b7280;font-size:13px;margin-top:22px;">Changed your mind, or didn't mean to unsubscribe? You can always <a href="${portalHref}" style="color:#c8102e;text-decoration:underline;">get back in touch through our services portal</a> — or just reply to any of our emails and we'll add you straight back.</p>`,
   );
+}
+
+/**
+ * RFC 8058 one-click unsubscribe. Gmail and Yahoo POST here when the recipient
+ * uses the native "Unsubscribe" control rendered next to the sender name — the
+ * body is `List-Unsubscribe=One-Click` and there is no browser session behind
+ * it. Paired with the `List-Unsubscribe` / `List-Unsubscribe-Post` headers set
+ * on the outgoing message; a header advertising one-click MUST be backed by an
+ * endpoint that accepts POST, or the provider's request 405s and the opt-out is
+ * lost.
+ *
+ * THE BOT FILTER IS DELIBERATELY NOT APPLIED HERE. isBotRequest exists to stop
+ * a mail gateway that PRE-FETCHES every link from detonating the GET version
+ * (see the scanner-detonation note above). A POST is never speculative: no
+ * scanner invents a form body, and the provider only issues it after a person
+ * clicks. These requests also arrive with a non-browser user-agent, so running
+ * them through the filter would silently discard genuine opt-outs — the one
+ * error this endpoint must never make.
+ *
+ * Answers 200 text/plain: the provider shows its own confirmation UI, so there
+ * is no page to render, and a non-2xx makes Gmail surface a failure to a person
+ * who has already been told they're unsubscribed.
+ */
+export async function POST(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  let email = (url.searchParams.get("e") || url.searchParams.get("email") || "").trim();
+  const leadId = (url.searchParams.get("lead") || "").trim();
+  const campaign = (url.searchParams.get("c") || url.searchParams.get("campaign") || "").trim();
+
+  // Some providers post the address in the form body instead of the URL.
+  if (!email) {
+    const form = await req.formData().catch(() => null);
+    const field = form?.get("email") ?? form?.get("e");
+    if (typeof field === "string") email = field.trim();
+  }
+
+  const ok = () => new Response("Unsubscribed.\n", {
+    status: 200,
+    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+  });
+
+  if (!email) {
+    console.error("[unsubscribe] one-click POST carried no address; nothing recorded", url.search);
+    return ok(); // never hand the provider a failure — we log and fix our end
+  }
+
+  const target = supabaseTarget();
+  if (target.state !== "ok") {
+    console.error("[unsubscribe] one-click POST but no Supabase target; NOT recorded:", email);
+    return ok();
+  }
+
+  // A one-click POST is always a person, so a rotated address here means the
+  // List-Unsubscribe header itself was rewritten in transit — the click is
+  // real, only the address is mangled. Suppress who they ACTUALLY are: writing
+  // the rotated string would suppress nobody, while the domain rollup in the
+  // send route would go on to mute their whole organisation.
+  const rewrittenAs = await rewrittenRecipient(target.base, target.key, email);
+  if (rewrittenAs) {
+    console.warn(`[unsubscribe] one-click carried a rewritten address: ${email} → ${rewrittenAs}`);
+    email = rewrittenAs;
+  }
+
+  const result = await recordUnsubscribe(target.base, target.key, email, { leadId, campaign });
+  if (result === "needs_migration") {
+    console.error("[unsubscribe] email_suppression table missing — run supabase/unsubscribe.sql");
+  } else if (result !== "ok") {
+    console.error("[unsubscribe] one-click POST failed to record:", email);
+  } else {
+    console.warn(`[unsubscribe] one-click (RFC 8058): ${email} lead=${leadId || "-"} campaign=${campaign || "-"}`);
+  }
+  return ok();
 }
