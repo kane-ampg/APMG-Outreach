@@ -4,16 +4,11 @@ import { useEffect, useState } from "react";
 import Image, { type StaticImageData } from "next/image";
 import {
   ArrowRight,
-  BadgeCheck,
   Droplets,
-  Globe,
   Hammer,
   Layers,
-  Mail,
-  MapPin,
   MessageSquare,
   Paintbrush,
-  Phone,
   ShieldCheck,
   Sprout,
   Wrench,
@@ -21,13 +16,19 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+// The portal's design layer — square corners, the display face's real weight,
+// the scroll reveal and the process rail, all scoped to `.portal-world`.
+// Imported HERE rather than from app/portal/layout.tsx so it travels with the
+// component: ServicesPortal has two hosts (the public /portal route and the
+// internal "Our Services" tab) and both need it.
+import "@/app/portal/portal-world.css";
 import {
   Container,
   ContentBlock,
   CtaBand,
   Eyebrow,
-  FactStrip,
   FeatureGrid,
+  HeroProof,
   mediaZoom,
   microLabel,
   PortalButton,
@@ -36,11 +37,11 @@ import {
   ProcessSteps,
   SectionHeading,
 } from "./portal/kit";
+import { PortalReveal } from "./portal/reveal";
+import type { ProcessIconName } from "./portal/process-icons";
 import { COMPANY } from "@/lib/legal/company";
-import { WhatsAppIcon } from "./WhatsAppIcon";
 import { GoogleReviewsPanel } from "./GoogleReviewsPanel";
 import heroBg from "@/app/apmgbg.jpg";
-import brandLogo from "@/app/icon.png";
 // Card backgrounds — real APMG job-site photos, self-hosted in the repo
 // (app/services/*, mirroring app/team/*) and static-imported so Next optimises
 // them and hands us a blur placeholder. Keyed to each service slug below.
@@ -53,9 +54,7 @@ import photoGardening from "@/app/services/gardening.png";
 import photoHandyman from "@/app/services/handyman.png";
 import photoMakeSafe from "@/app/services/make-safe.png";
 import { track } from "@/lib/telemetry";
-import { Footer } from "./Footer";
-import { SocialLinks } from "./SocialLinks";
-import { PortalUnsubscribe } from "./PortalUnsubscribe";
+import { PortalFooter } from "./PortalFooter";
 import { PortalChat } from "./PortalChat";
 import { ServiceInquiryModal } from "./ServiceInquiryModal";
 import { TeamSection } from "./TeamSection";
@@ -66,7 +65,8 @@ import { TeamSection } from "./TeamSection";
  * A scrolling marketing page in the visual world of the APMG Painting site
  * (see components/apmg/portal/kit.tsx): white paper, `#0F1113` ink, `#C8102E`
  * as the only accent, Fraunces display against Inter body. Sections run hero →
- * figures → the eight trades → process → approach → reviews → team → CTA.
+ * the eight trades → process → approach → reviews → team → CTA → footer, with
+ * the figures band inside that last one.
  *
  * Serves two hosts unchanged: the "Our Services" tab inside DashboardShell
  * (`standalone={false}`), and the public /portal route where tracked outreach
@@ -95,22 +95,22 @@ import { TeamSection } from "./TeamSection";
  */
 
 /**
- * PROOF BAND — the facts a cold visitor can check, shown right under the hero.
- * Every line here must be substantiated (knowledgebase/business.md); adjectives
+ * PROOF — the facts a cold visitor can check. Three figures on the fold's bottom
+ * edge (see the HeroProof call below), stated at length in the footer's figures
+ * band. Every one must be substantiated (knowledgebase/business.md); adjectives
  * don't build trust with facility managers, verifiable claims do.
  *
+ * It used to be five ticked sentences in a row on that strip — a paragraph
+ * wearing a list's clothes, none of it scannable, on the most valuable strip of
+ * the page. The reference sets figures there instead, and does not repeat in the
+ * fold what the footer states properly.
+ *
  * TODO(trust): the highest-value additions are still waiting on documentation —
- * public liability insurance (amount), trade licence numbers, police checks /
- * WWCC policy, and the ABN. Add each line the day the certificate is in hand;
- * never before (Company-Brief: no unsupported claims).
+ * public liability insurance (amount), trade licence numbers, and police checks
+ * / WWCC policy. Add each the day the certificate is in hand; never before
+ * (Company-Brief: no unsupported claims). This is also why the reference's taped
+ * wall of accreditation logos is NOT ported into the footer — see PortalFooter.
  */
-const PROOF_POINTS = [
-  "Australian Property Maintenance Group · Est. 2015",
-  "Licensed, multi-trade professionals",
-  "Melbourne & Victoria-wide",
-  "Reactive & preventative maintenance",
-  "One partner for every trade",
-] as const;
 
 /**
  * Sector line for the hero (message-match with the outreach email). The lead's
@@ -312,29 +312,38 @@ const SERVICES: Service[] = [
  *  knowledgebase/business.md ("Est. 2015"). */
 const FOUNDED = 2015;
 
+/** How `Service.description` separates its paragraphs. Named because the lead
+ *  service card shows only the first one. */
+const PARAGRAPH_BREAK = "\n\n";
+
 /**
  * What happens after an enquiry. The sequence IS the information — a facility
  * manager reading this is deciding whether contacting us costs them anything,
  * so each step names who does what and when.
  */
-const PROCESS: readonly { step: string; body: string }[] = [
+const PROCESS: readonly { step: string; body: string; icon: ProcessIconName }[] = [
   {
+    icon: "enquiry",
     step: "You tell us what's wrong",
     body: "A photo and a sentence is enough to start. Pick the trade if you know it, or send a general enquiry and we'll work out which trades the job needs.",
   },
   {
+    icon: "site-visit",
     step: "We come and look",
     body: "We attend before quoting. Scope, access and the hours we're allowed on site get established rather than assumed — which is what stops a quote turning into a variation.",
   },
   {
+    icon: "quote",
     step: "An itemised quote",
     body: "Labour, materials and scheduling broken out separately, so whoever approves the spend can see what they're approving. Multi-site work is priced per location.",
   },
   {
+    icon: "delivery",
     step: "Work around your operations",
     body: "Staged zone by zone, after hours or on weekends where the space has to stay in use. Aged care and childcare sites are scheduled around residents and sessions.",
   },
   {
+    icon: "handover",
     step: "Handed back clean",
     body: "Each area cleaned down and returned as it finishes rather than everything at the end, so you get the use of the space back progressively.",
   },
@@ -453,56 +462,66 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
   }, [standalone]);
 
   return (
-    <div className="bg-white text-ink">
+    // `portal-world` is the scope every rule in app/portal/portal-world.css
+    // hangs off — square corners, the display face's real weight, the reveal and
+    // the process rail. Without it this renders as the palette-only port it used
+    // to be: right colours, wrong character.
+    <div className="portal-world bg-white text-ink">
+      {/* Arms the scroll reveal. Renders nothing, and nothing on the page is
+          hidden until it has confirmed the element was below the fold — see
+          portal/reveal.tsx. */}
+      <PortalReveal />
+
       {/* ── Top bar ───────────────────────────────────────────────────────
-          Sticky only on the customer host. Inside the dashboard the portal is
-          a preview panel in a shell that already has its own chrome, and a
-          second sticky bar there would pin itself over the operator's UI.
+          WHITE, as the reference is. It used to be ink, and the comment here
+          explained why: the only mark in this repo was app/icon.png, white on
+          transparency, invisible on a white bar — "swap `bg-ink/95` for
+          `bg-white/90` the day an ink logo lands."
 
-          INK, not the white the painting site uses. There is exactly one logo
-          asset in this repo (app/icon.png — a white mark on transparency), and
-          on a white bar it is invisible. The painting site can run a white
-          header because it ships two files, an ink mark and a white one; until
-          an ink version exists, the ground goes dark instead of the mark going
-          missing.
+          It has landed. The painting repo ships the same APMG mark in both
+          recolours (public/images/brand/apmg-logo-{ink,white}.webp — verified as
+          the identical artwork at luminance 17 and 255), so both are now in this
+          repo too: the ink mark rides the white bar here, the white one the ink
+          footer.
 
-          It earns its keep: bar and hero are the same ink, so at rest the bar
-          dissolves into the hero and the page opens on one uninterrupted black
-          field. It only declares itself once white content scrolls under it,
-          which is the moment a persistent phone number and CTA start being
-          useful. Swap `bg-ink/95` for `bg-white/90` and the border back to
-          `border-paper-edge` the day an ink logo lands. */}
+          Translucent with a backdrop blur, which the ink bar could not be — over
+          a photograph a glassy dark bar computes lighter than the hero beneath
+          it and draws a seam across the fold. Over white content there is no
+          such seam, and the blur is what keeps the bar legible while the
+          hero photograph scrolls under it.
+
+          Sticky only on the customer host: inside the dashboard the portal is a
+          preview panel in a shell that already has its own chrome, and a second
+          sticky bar there would pin itself over the operator's UI. */}
       <div
         className={cn(
-          // Solid, not translucent. A glassy bar computes as ink-over-white at
-          // scroll-top, which is lighter than the hero directly beneath it and
-          // draws a seam across the fold — the one thing this bar is supposed
-          // not to do. Opaque ink dissolves into the hero exactly.
-          "z-30 border-b border-white/10 bg-ink",
+          "z-30 border-b border-paper-edge bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80",
           standalone && "sticky top-0",
         )}
       >
         <Container width="wide">
+          {/* h-16 plus this bar's 1px rule is what `.portal-hero-fold`
+              subtracts to size the fold. Change one, change both. */}
           <div className="flex h-16 items-center justify-between gap-4">
             <Image
-              src={brandLogo}
+              src="/images/brand/apmg-logo-ink.webp"
               alt="APMG Services"
-              width={240}
-              height={184}
+              width={378}
+              height={285}
               priority
-              className="h-9 w-auto sm:h-11"
+              className="h-10 w-auto sm:h-12"
             />
             <div className="flex items-center gap-2 sm:gap-3">
               <a
                 href={COMPANY.phoneHref}
                 data-track="portal_phone_click"
-                className="rounded-md px-2 py-2 text-sm font-semibold text-white hover:text-brand-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 sm:px-3"
+                className="rounded-md px-2 py-2 text-sm font-semibold text-brand-700 hover:bg-paper-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 sm:px-3"
               >
                 <span className="sr-only">Call </span>
                 {COMPANY.phone}
               </a>
               <PortalButton
-                variant="accent"
+                variant="primary"
                 onClick={() => setActive(GENERAL_SERVICE)}
                 data-track={openEvent}
                 data-track-service="general"
@@ -516,55 +535,89 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
       </div>
 
       {/* ── Hero ──────────────────────────────────────────────────────────
-          A photographic band above the copy below lg, the photograph in the
-          right half beside it from lg up. The copy never sits on the
-          photograph, which is what makes its contrast a token rather than a
-          measurement against a fleet of white utes. */}
-      <section
+          The reference's fold: the media full-bleed behind the whole section,
+          the copy over it, and a translucent strip of figures along the bottom
+          edge. Minus the video — the reference runs a looping reel here; this
+          carries the reel's equivalent still (app/apmgbg.jpg, the APMG yard),
+          which is also what that reel falls back to.
+
+          It replaces a split composition — copy on a solid ink panel, photograph
+          in the right half — chosen because that made the copy's contrast a
+          token value rather than a measurement against a fleet of white utes.
+          The full-bleed version needs that problem solved rather than avoided,
+          and it is, twice over: a two-stop scrim over the whole frame, and the
+          same offset text-shadow the reference puts on its headline for exactly
+          this reason (its brightest frames — a hazy skyline, a fluorescent-lit
+          office — sit behind the descenders when the loop restarts). The scrim
+          is heaviest on the left, where the type is, and thins to nothing on the
+          right so the yard is still legible as a photograph.
+
+          `reveal={false}`: this section IS the first viewport. There is nothing
+          to scroll to, and hiding it to animate it back would be a flash on the
+          one screen that has to land instantly. */}
+      <PortalSection
+        reveal={false}
+        tone="ink"
         className={cn(
-          "relative isolate flex flex-col overflow-hidden bg-ink text-white",
-          "min-h-[30rem] sm:min-h-[34rem]",
-          // One viewport on the customer host, where <main> owns the dvh.
-          standalone && "lg:min-h-[calc(100dvh-4rem)]",
+          "portal-hero-fold relative isolate flex flex-col overflow-hidden py-0 sm:py-0",
+          // Exactly one viewport, and no more, from `lg` up — so the proof strip
+          // along the bottom edge sits ON the fold and the services section
+          // begins at the seam. `height`, not a min-height: a long line of copy
+          // must not be able to push the fold past the screen.
+          //
+          // Customer host only. `<main>` there is `h-dvh`, so one dynamic
+          // viewport height IS the scroll container, minus this page's sticky
+          // header (h-16) and its 1px rule. Inside the dashboard the same
+          // component is a panel in a shell with its own chrome, where a
+          // viewport unit would size the hero to the browser window instead of
+          // to the panel — see .portal-hero-fold in portal-world.css.
+          standalone && "lg:h-[calc(100dvh-4rem-1px)]",
         )}
       >
-        <div className="relative min-h-20 flex-1 lg:absolute lg:inset-0 lg:left-1/2 lg:min-h-0 lg:flex-none tight:hidden">
-          <Image
-            src={heroBg}
-            alt=""
-            fill
-            priority
-            placeholder="blur"
-            sizes="(min-width: 1024px) 50vw, 100vw"
-            className="object-cover object-[50%_55%] lg:object-center"
-          />
-          {/* Fade the band into the ink panel under it rather than butting it. */}
-          <div
-            aria-hidden
-            className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-ink to-transparent lg:hidden"
-          />
-          {/* Desktop: dissolve the seam down the middle of the section. */}
-          <div
-            aria-hidden
-            className="absolute inset-y-0 left-0 hidden w-32 bg-gradient-to-r from-ink to-transparent lg:block"
-          />
-        </div>
+        <Image
+          src={heroBg}
+          alt=""
+          fill
+          priority
+          placeholder="blur"
+          sizes="100vw"
+          className="-z-10 object-cover object-[50%_55%]"
+        />
+        {/*
+         * The scrim, in two parts. Horizontal carries the type: ink at 92% under
+         * the headline, thinning through 55% to a bare 20% at the right edge, so
+         * the copy sits on a value it can be measured against while the
+         * photograph keeps its own contrast. Vertical is the lesser of the two —
+         * it darkens the top so the white bar's blur has something to bite on,
+         * and the bottom so the proof strip is a seam rather than a stripe.
+         */}
+        <div
+          aria-hidden
+          className="absolute inset-0 -z-10 bg-gradient-to-r from-ink/95 via-ink/80 to-ink/45 lg:via-ink/70 lg:to-ink/30"
+        />
+        <div
+          aria-hidden
+          className="absolute inset-0 -z-10 bg-gradient-to-b from-ink/55 via-ink/25 to-ink/70"
+        />
 
-        <div className="relative z-10 lg:flex lg:flex-1 lg:items-center tight:flex tight:flex-1 tight:items-center">
+        <div className="relative z-10 flex flex-1 items-center">
           <Container width="wide">
-            <div className="grid py-10 sm:py-12 lg:grid-cols-2 lg:py-16 short:py-8 tight:py-6">
+            <div className="grid py-12 sm:py-14 lg:grid-cols-2 lg:py-16 short:py-8 tight:py-6">
               <div className="lg:pr-12">
-                <p className={cn(microLabel, "flex items-center gap-3 text-brand-400")}>
+                <p className={cn(microLabel, "flex items-center gap-3 text-brand-400 tight:text-[0.625rem]")}>
                   <span aria-hidden className="h-px w-8 bg-brand-500" />
                   Melbourne property maintenance
                 </p>
 
-                <h1 className="mt-4 text-balance font-display text-[1.95rem] leading-[1.06] tracking-tight sm:text-[2.6rem] lg:text-[3.4rem] short:text-[2.35rem] tight:text-[1.7rem]">
-                  Every trade,{" "}
-                  <span className="text-brand-400">one partner</span>
+                {/* Larger than the split version carried, because the fold is
+                    one image now rather than a copy panel beside a photograph —
+                    the headline is competing with the whole frame for the first
+                    second of attention and has to win it. */}
+                <h1 className="mt-4 text-balance font-display text-[2.15rem] leading-[1.05] tracking-tight [text-shadow:0_2px_28px_rgba(15,17,19,0.65)] sm:text-[2.85rem] lg:text-[3.3rem] xl:text-[3.6rem] short:text-[2.4rem] tight:text-[1.8rem]">
+                  Every trade, <span className="text-brand-400">one partner</span>
                 </h1>
 
-                <p className="mt-4 max-w-lg text-base text-white/75 sm:text-lg short:text-base tight:text-sm">
+                <p className="mt-5 max-w-lg text-base text-white/85 [text-shadow:0_1px_16px_rgba(15,17,19,0.75)] sm:text-lg short:mt-4 short:text-base tight:text-sm">
                   Electrical, plumbing, painting, carpentry, flooring, grounds, handyman and
                   make-safe work across Melbourne and Victoria — run by one team, from the first
                   call to the job done.
@@ -573,7 +626,9 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                 {/* Sector message-match — only when the visitor arrived from a
                     sector-targeted outreach link. */}
                 {sector && (
-                  <p className="mt-3 max-w-lg text-sm text-brand-100">{sectorLine(sector)}</p>
+                  <p className="mt-3 max-w-lg text-sm text-brand-100 [text-shadow:0_1px_16px_rgba(15,17,19,0.75)]">
+                    {sectorLine(sector)}
+                  </p>
                 )}
 
                 <div className="mt-7 flex flex-wrap gap-3 short:mt-5">
@@ -591,7 +646,7 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                   </PortalButtonLink>
                 </div>
 
-                <p className="mt-5 text-sm text-white/70 short:mt-4">
+                <p className="mt-5 text-sm text-white/80 [text-shadow:0_1px_16px_rgba(15,17,19,0.75)] short:mt-4">
                   Or call{" "}
                   <a
                     href={COMPANY.phoneHref}
@@ -607,23 +662,226 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
           </Container>
         </div>
 
-        {/* The fold's bottom edge. Translucent so the photograph continues
-            behind it rather than being cut off by a solid bar. */}
-        <div className="relative z-10 border-t border-white/15 bg-ink/70 backdrop-blur-sm">
-          <Container width="wide">
-            <ul className="flex flex-wrap items-center gap-x-6 gap-y-2 py-3.5 sm:gap-x-8 sm:py-4">
-              {PROOF_POINTS.map((point) => (
-                <li key={point} className="flex items-center gap-2 text-xs text-white/75 sm:text-sm">
-                  <BadgeCheck aria-hidden className="h-3.5 w-3.5 shrink-0 text-brand-400" />
-                  {point}
-                </li>
-              ))}
-            </ul>
-          </Container>
-        </div>
-      </section>
+        {/* The fold's bottom edge. Three figures at display size where five
+            ticked sentences used to be — see HeroProof in portal/kit.tsx for why
+            that trade is worth making on the page's most valuable strip. Each
+            one is stated at length in the footer's figures band. */}
+        <HeroProof
+          proof={[
+            { figure: `${yearsTrading} years`, label: "In business" },
+            { figure: `${SERVICES.length} trades`, label: "Under one contact" },
+            { figure: "Victoria", label: "Melbourne & regional" },
+          ]}
+          scrollTo={{ label: "What we handle", href: "#services" }}
+        />
+      </PortalSection>
 
-      <FactStrip
+      {/* ── Services ────────────────────────────────────────────────────
+          The reference's shape: the first trade leads at the full width of the
+          row with its photograph taking half the card, and the rest run beneath
+          it four across. Two reasons it is not the even three-column grid it
+          was. Eight services into three columns left an orphan row of two; and
+          the identical `sm:grid-cols-2 lg:grid-cols-3` shape ran three times
+          down this page — here, then the approach cards, then the team — so the
+          services section, the one block that answers what the company actually
+          does, read as the same furniture as everything else.
+
+          The lead is `SERVICES[0]`, not a slug named here, so reordering the
+          array is what changes which trade gets the large card.
+
+          `width="wide"` because this is now a grid of photographs: prose wants a
+          narrow measure, a photographic grid wants the page. */}
+      <ContentBlock
+        id="services"
+        eyebrow="Services"
+        heading="The eight trades we handle"
+        lede="Most jobs draw on more than one of them — an office repaint that turns out to need the patching and the flooring, or a make-safe that becomes a carpentry repair. Open any trade to see what it covers and send it straight through."
+        width="wide"
+      >
+        <ul className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {SERVICES.map((service, index) => {
+            const lead = index === 0;
+
+            return (
+              <li key={service.slug} className={cn(lead && "sm:col-span-2 lg:col-span-4")}>
+                <article
+                  className={cn(
+                    "group relative flex h-full flex-col overflow-hidden rounded-lg border border-paper-edge bg-white",
+                    lead && "lg:flex-row",
+                  )}
+                >
+                  {service.photo && (
+                    <div
+                      className={cn(
+                        "relative aspect-[16/9] overflow-hidden bg-paper-sunken",
+                        lead && "lg:aspect-[3/2] lg:w-1/2 lg:shrink-0",
+                      )}
+                    >
+                      <Image
+                        src={service.photo}
+                        alt=""
+                        fill
+                        loading="lazy"
+                        placeholder="blur"
+                        sizes={
+                          lead
+                            ? "(min-width: 1024px) 50vw, 100vw"
+                            : "(min-width: 1024px) 22vw, (min-width: 640px) 45vw, 100vw"
+                        }
+                        className={cn("object-cover", mediaZoom)}
+                      />
+                    </div>
+                  )}
+                  <div
+                    className={cn(
+                      "flex flex-1 flex-col gap-3 p-5",
+                      lead && "gap-4 p-6 lg:justify-center lg:p-10",
+                    )}
+                  >
+                    {/* SC 1.3.1: the heading is a real heading, NOT nested inside
+                        the button. ARIA gives buttons presentational children, so
+                        a card that IS a button strips its own service name out of
+                        the document's heading outline and reads the whole card as
+                        one run-on accessible name. The roles stay split. */}
+                    <h3
+                      className={cn(
+                        "font-display text-lg tracking-tight",
+                        lead && "text-2xl lg:text-3xl",
+                      )}
+                    >
+                      {service.name}
+                    </h3>
+                    <p
+                      className={cn(
+                        "flex-1 text-sm text-ink-soft",
+                        lead && "max-w-prose flex-none text-base",
+                      )}
+                    >
+                      {service.blurb}
+                    </p>
+                    {/* The lead card is twice the height of its neighbours, so
+                        it gets the opening paragraph of the trade's own copy to
+                        fill it — the reference does the same with
+                        `service.body[0]`. Desktop only: on a phone the card is
+                        already the tallest thing on the page. Split on the blank
+                        line because `description` stores its paragraphs that
+                        way. */}
+                    {lead && service.description && (
+                      <p className="hidden max-w-prose text-sm text-ink-soft lg:block">
+                        {service.description.split(PARAGRAPH_BREAK)[0]}
+                      </p>
+                    )}
+                    {service.includes && (
+                      <ul className="flex flex-wrap gap-1.5">
+                        {service.includes.slice(0, lead ? 5 : 3).map((item) => (
+                          <li
+                            key={item}
+                            className="rounded bg-paper-sunken px-2 py-1 text-xs font-medium text-ink-soft"
+                          >
+                            {item}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <PortalButton
+                      variant={lead ? "primary" : "outline"}
+                      onClick={() => setActive(service)}
+                      data-track={openEvent}
+                      data-track-service={service.slug}
+                      className={cn("mt-1", lead ? "self-start" : "w-full")}
+                    >
+                      Tell me more
+                      <ArrowRight aria-hidden className="h-4 w-4" />
+                    </PortalButton>
+                  </div>
+                </article>
+              </li>
+            );
+          })}
+        </ul>
+      </ContentBlock>
+
+      {/* ── Process ───────────────────────────────────────────────────── */}
+      <ContentBlock
+        tone="sunken"
+        eyebrow="How it works"
+        heading="What happens after you enquire"
+        lede="The same five stages whether it's one dripping tap or a maintenance programme across a campus."
+      >
+        <ProcessSteps steps={PROCESS} />
+      </ContentBlock>
+
+      {/* ── Approach ──────────────────────────────────────────────────── */}
+      <ContentBlock
+        eyebrow="How we work"
+        heading="What actually makes the difference"
+        lede="Almost nobody picks a maintenance contractor on the trade work itself. These are the things that separate a job that lands on time from one that doesn't."
+      >
+        <FeatureGrid items={APPROACH} />
+      </ContentBlock>
+
+      {/* ── Reviews ───────────────────────────────────────────────────────
+          GoogleReviewsPanel and TeamSection are SHARED with the internal
+          console, so their card internals still carry semantic tokens
+          (bg-card / ring-foreground/10). On this pinned-light host those resolve
+          to light cards, and the square-corner reset in portal-world.css brings
+          their frames into line, so they sit inside the portal's world without
+          either component being forked.
+
+          What could not be fixed from the outside was their HEADERS: each one
+          rendered its own eyebrow + h2 in the console's `font-mono` /
+          `font-heading` voice, directly under the portal's own Fraunces
+          heading — two headings saying the same thing in two typefaces. Both now
+          take `heading={false}`, which defaults to true so the console is
+          unchanged, and the portal supplies the header itself. */}
+      <PortalSection tone="sunken" id="reviews">
+        <Container>
+          <Eyebrow>In their words</Eyebrow>
+          <SectionHeading className="mb-3">What clients say</SectionHeading>
+          <p className="mb-8 max-w-prose text-ink-soft">
+            Straight from Google, unedited. Don&rsquo;t take our word for it — read what the people
+            we work for say.
+          </p>
+          <GoogleReviewsPanel heading={false} />
+        </Container>
+      </PortalSection>
+
+      {/* ── Team ──────────────────────────────────────────────────────── */}
+      <PortalSection id="team">
+        <Container>
+          <Eyebrow>The team</Eyebrow>
+          <SectionHeading className="mb-3">Who&rsquo;ll actually turn up</SectionHeading>
+          <p className="mb-8 max-w-prose text-ink-soft">
+            The same people from the first call to the job done — not a call centre and a
+            subcontractor you&rsquo;ve never met.
+          </p>
+          <TeamSection heading={false} />
+        </Container>
+      </PortalSection>
+
+      {/* ── Closing CTA ───────────────────────────────────────────────── */}
+      <CtaBand
+        heading="Tell us what needs doing"
+        body="A photo and a sentence is enough to start. We'll come and look before quoting, and the quote is itemised so you can see where the cost sits."
+        action={{ label: "Send an enquiry", onClick: () => setActive(GENERAL_SERVICE) }}
+        phone={{ display: COMPANY.phone, href: COMPANY.phoneHref }}
+      />
+
+      {/* ── Footer ──────────────────────────────────────────────────────
+          One ink slab under a red rule, in the reference's shape. It replaces
+          two things that used to end this page: a white "Get in touch" section,
+          and below it the console's own 11px muted-grey strip — the internal
+          chrome leaking onto a customer surface, with the chat launcher sitting
+          on top of its right-hand end.
+
+          The figures band moves here with it. It used to be a black slab
+          directly under the hero, which meant the page's first move after the
+          headline was to recite statistics before the visitor had been told what
+          the eight trades even are. In the footer it runs under every scroll
+          depth and reads as standing evidence, and the services grid gets the
+          slot after the fold it should always have had. */}
+      <PortalFooter
+        standalone={standalone}
         facts={[
           {
             label: "In business",
@@ -650,196 +908,17 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
         ]}
       />
 
-      {/* ── Services ──────────────────────────────────────────────────── */}
-      <ContentBlock
-        id="services"
-        eyebrow="Services"
-        heading="The eight trades we handle"
-        lede="Most jobs draw on more than one of them — an office repaint that turns out to need the patching and the flooring, or a make-safe that becomes a carpentry repair. Open any trade to see what it covers and send it straight through."
-      >
-        <ul className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-          {SERVICES.map((service) => (
-            <li key={service.slug}>
-              <article className="group relative flex h-full flex-col overflow-hidden rounded-lg border border-paper-edge bg-white">
-                {service.photo && (
-                  <div className="relative aspect-[3/2] overflow-hidden bg-paper-sunken">
-                    <Image
-                      src={service.photo}
-                      alt=""
-                      fill
-                      loading="lazy"
-                      placeholder="blur"
-                      sizes="(min-width: 1024px) 30vw, (min-width: 640px) 45vw, 100vw"
-                      className={cn("object-cover", mediaZoom)}
-                    />
-                  </div>
-                )}
-                <div className="flex flex-1 flex-col gap-3 p-5">
-                  {/* SC 1.3.1: the heading is a real heading, NOT nested inside
-                      the button. ARIA gives buttons presentational children, so
-                      a card that IS a button strips its own service name out of
-                      the document's heading outline and reads the whole card as
-                      one run-on accessible name. The roles stay split. */}
-                  <h3 className="font-display text-lg tracking-tight">{service.name}</h3>
-                  <p className="flex-1 text-sm text-ink-soft">{service.blurb}</p>
-                  {service.includes && (
-                    <ul className="flex flex-wrap gap-1.5">
-                      {service.includes.slice(0, 3).map((item) => (
-                        <li
-                          key={item}
-                          className="rounded bg-paper-sunken px-2 py-1 text-xs font-medium text-ink-soft"
-                        >
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <PortalButton
-                    variant="outline"
-                    onClick={() => setActive(service)}
-                    data-track={openEvent}
-                    data-track-service={service.slug}
-                    className="mt-1 w-full"
-                  >
-                    Tell me more
-                    <ArrowRight aria-hidden className="h-4 w-4" />
-                  </PortalButton>
-                </div>
-              </article>
-            </li>
-          ))}
-        </ul>
-      </ContentBlock>
-
-      {/* ── Process ───────────────────────────────────────────────────── */}
-      <ContentBlock
-        tone="sunken"
-        eyebrow="How it works"
-        heading="What happens after you enquire"
-        lede="The same five stages whether it's one dripping tap or a maintenance programme across a campus."
-      >
-        <ProcessSteps steps={PROCESS} />
-      </ContentBlock>
-
-      {/* ── Approach ──────────────────────────────────────────────────── */}
-      <ContentBlock
-        eyebrow="How we work"
-        heading="What actually makes the difference"
-        lede="Almost nobody picks a maintenance contractor on the trade work itself. These are the things that separate a job that lands on time from one that doesn't."
-      >
-        <FeatureGrid items={APPROACH} />
-      </ContentBlock>
-
-      {/* ── Reviews ───────────────────────────────────────────────────────
-          GoogleReviewsPanel and TeamSection still carry the console's semantic
-          tokens internally (bg-card / text-foreground). On this pinned-light
-          host they render as light cards, so nothing is unreadable — but they
-          are not yet in the portal's own palette. Porting those two internals
-          is the follow-up to this pass. */}
-      <PortalSection tone="sunken" id="reviews">
-        <Container>
-          <Eyebrow>In their words</Eyebrow>
-          <SectionHeading className="mb-3">What clients say</SectionHeading>
-          <p className="mb-8 max-w-prose text-ink-soft">
-            Straight from Google, unedited. Don&rsquo;t take our word for it — read what the people
-            we work for say.
-          </p>
-          <GoogleReviewsPanel />
-        </Container>
-      </PortalSection>
-
-      {/* ── Team ──────────────────────────────────────────────────────── */}
-      <PortalSection id="team">
-        <Container>
-          <Eyebrow>The team</Eyebrow>
-          <SectionHeading className="mb-3">Who&rsquo;ll actually turn up</SectionHeading>
-          <p className="mb-8 max-w-prose text-ink-soft">
-            The same people from the first call to the job done — not a call centre and a
-            subcontractor you&rsquo;ve never met.
-          </p>
-          <TeamSection />
-        </Container>
-      </PortalSection>
-
-      {/* ── Closing CTA ───────────────────────────────────────────────── */}
-      <CtaBand
-        heading="Tell us what needs doing"
-        body="A photo and a sentence is enough to start. We'll come and look before quoting, and the quote is itemised so you can see where the cost sits."
-        action={{ label: "Send an enquiry", onClick: () => setActive(GENERAL_SERVICE) }}
-        phone={{ display: COMPANY.phone, href: COMPANY.phoneHref }}
-      />
-
-      {/* ── Contact + legal ──────────────────────────────────────────── */}
-      <PortalSection tone="paper" className="py-12">
-        <Container>
-          <div className="flex flex-col gap-8 sm:flex-row sm:items-start sm:justify-between">
-            <div className="space-y-3 text-sm text-ink-soft">
-              <h2 className={cn(microLabel, "text-ink")}>Get in touch</h2>
-              <p className="flex items-center gap-2">
-                <Phone aria-hidden className="h-4 w-4 text-brand-600" />
-                <a
-                  href={COMPANY.phoneHref}
-                  data-track="portal_phone_click"
-                  className="font-semibold text-ink hover:text-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
-                >
-                  {COMPANY.phone}
-                </a>
-              </p>
-              <p className="flex items-center gap-2">
-                <Mail aria-hidden className="h-4 w-4 text-brand-600" />
-                <a
-                  href={`mailto:${COMPANY.contactEmail}`}
-                  data-track="portal_email_click"
-                  className="hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
-                >
-                  {COMPANY.contactEmail}
-                </a>
-              </p>
-              <p className="flex items-center gap-2">
-                <Globe aria-hidden className="h-4 w-4 text-brand-600" />
-                <a
-                  href={COMPANY.website}
-                  data-track="portal_website_click"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
-                >
-                  apmgservices.com.au
-                </a>
-              </p>
-              <p className="flex items-start gap-2">
-                <MapPin aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-brand-600" />
-                {COMPANY.address}
-              </p>
-              <a
-                href={COMPANY.whatsappHref}
-                data-track="portal_whatsapp_click"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-md border border-paper-edge px-3 py-2 font-semibold text-ink hover:bg-paper-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
-              >
-                <WhatsAppIcon className="h-4 w-4" />
-                Message us on WhatsApp
-              </a>
-            </div>
-
-            <div className="space-y-4">
-              <h2 className={cn(microLabel, "text-ink")}>Follow</h2>
-              <SocialLinks
-                linkClassName="rounded-full border border-paper-edge p-2 text-ink-soft transition-colors hover:bg-paper-sunken hover:text-ink"
-                iconClassName="h-4 w-4"
-              />
-              {standalone && <PortalUnsubscribe />}
-            </div>
-          </div>
-        </Container>
-      </PortalSection>
-
-      <Footer consoleTag={false} />
-
       {/* Chat and the enquiry modal are unchanged — same components, same
-          consent gate, same events. */}
-      <PortalChat />
+          consent gate, same events.
+
+          `data-portal-chat` is the one exemption from the square-corner reset in
+          app/portal/portal-world.css. The reference keeps its chat rounded for
+          the same reason: the page is the contractor's work — tape lines and
+          flat slabs — while the chat is a conversation floating over it, and
+          every convention a visitor has for that surface is round. */}
+      <div data-portal-chat>
+        <PortalChat />
+      </div>
       <ServiceInquiryModal
         service={active}
         onClose={() => setActive(null)}

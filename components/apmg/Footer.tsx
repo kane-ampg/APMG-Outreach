@@ -4,8 +4,17 @@ import { SocialLinks } from "./SocialLinks";
 
 /** Page footer, host-aware (ui-standards §17.8).
  *
- *  INTERNAL (consoleTag=true, the default): unchanged — the client-requested
- *  "Developed by APMG AI Team" credit plus the Signal Console build identity.
+ *  NOTE: `consoleTag={false}` NO LONGER HAS A CALLER. The customer portal used
+ *  to end on it; it now ends on components/apmg/PortalFooter.tsx — an ink slab
+ *  under a red rule, in the APMG Painting visual world, which is where any
+ *  change to the customer-facing footer belongs. This branch is kept because it
+ *  is the only record of what that surface must carry (trading name, address,
+ *  ABN, contact, socials, Terms/Privacy — and no "AI Team" credit), but editing
+ *  it will not change anything a customer sees.
+ *
+ *  INTERNAL (consoleTag=true, the default): unchanged, and still the footer on
+ *  every console page — the client-requested "Developed by APMG AI Team" credit
+ *  plus the Signal Console build identity.
  *
  *  CUSTOMER (consoleTag=false, the public /portal host): a legitimate-business
  *  footer instead. A cold outreach recipient scans the footer for exactly four

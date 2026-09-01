@@ -82,7 +82,20 @@ function Stars({ rating, className }: { rating: number; className?: string }) {
   );
 }
 
-export function GoogleReviewsPanel() {
+export function GoogleReviewsPanel({
+  /**
+   * Renders this panel's own eyebrow + <h2>. TRUE by default, so the internal
+   * console is byte-identical to before.
+   *
+   * The customer portal passes false: it supplies the section header itself, in
+   * the portal's voice (a red uppercase eyebrow over a Fraunces heading — see
+   * ServicesPortal). With both, the reviews section opened on two stacked
+   * headings that said the same thing in two different typefaces, the second of
+   * them in the console's `font-mono` / `font-heading` pairing that exists
+   * nowhere else on a customer-facing page.
+   */
+  heading = true,
+}: { heading?: boolean } = {}) {
   const reduce = useReducedMotion();
   const [page, setPage] = useState(0);
   const [dir, setDir] = useState(1);
@@ -116,14 +129,16 @@ export function GoogleReviewsPanel() {
 
   return (
     <div>
-      <div className="mb-4">
-        <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-          Third-party proof
+      {heading && (
+        <div className="mb-4">
+          <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            Third-party proof
+          </div>
+          <h2 className="mt-1.5 font-heading text-lg font-semibold tracking-tight text-foreground">
+            What our clients say
+          </h2>
         </div>
-        <h2 className="mt-1.5 font-heading text-lg font-semibold tracking-tight text-foreground">
-          What our clients say
-        </h2>
-      </div>
+      )}
 
       {/* ── Rating header — the listing's own numbers, linked to the source ── */}
       <Reveal y={10}>

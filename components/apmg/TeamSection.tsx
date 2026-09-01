@@ -106,24 +106,41 @@ const TEAM: TeamGroup[] = [
   },
 ];
 
-export function TeamSection() {
+export function TeamSection({
+  /**
+   * Renders this section's own eyebrow, <h2> and lede. TRUE by default, so the
+   * internal console is byte-identical to before.
+   *
+   * The customer portal passes false and supplies the header itself, in the
+   * portal's voice. Same reason as GoogleReviewsPanel: with both, the section
+   * opened on two headings saying the same thing, the second in the console's
+   * typographic voice.
+   *
+   * The per-tier <h3> labels below are NOT gated — they are the organising idea
+   * of the roster, not a section header, and the portal's own <h2> above keeps
+   * the outline (h2 -> h3 -> h4) intact either way.
+   */
+  heading = true,
+}: { heading?: boolean } = {}) {
   const reduce = useReducedMotion();
 
   return (
     <section aria-label="Our team">
-      <Reveal delay={0.04} className="mb-6">
-        <div className="border-b border-border pb-3">
-          <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-            Our team
+      {heading && (
+        <Reveal delay={0.04} className="mb-6">
+          <div className="border-b border-border pb-3">
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+              Our team
+            </div>
+            <h2 className="mt-1.5 font-heading text-lg font-semibold tracking-tight text-foreground">
+              Meet the people who&rsquo;ll look after your property
+            </h2>
           </div>
-          <h2 className="mt-1.5 font-heading text-lg font-semibold tracking-tight text-foreground">
-            Meet the people who&rsquo;ll look after your property
-          </h2>
-        </div>
-        <p className="mt-3 max-w-xl text-xs leading-relaxed text-muted-foreground">
-          Our Melbourne-based teams, across every trade we deliver.
-        </p>
-      </Reveal>
+          <p className="mt-3 max-w-xl text-xs leading-relaxed text-muted-foreground">
+            Our Melbourne-based teams, across every trade we deliver.
+          </p>
+        </Reveal>
+      )}
 
       <div className="flex flex-col gap-8">
         {TEAM.map((group, gi) => (

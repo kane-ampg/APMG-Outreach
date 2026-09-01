@@ -1,0 +1,518 @@
+/* ===========================================================================
+ * CUSTOMER PORTAL — the APMG Painting visual world
+ * ===========================================================================
+ *
+ * Imported by app/portal/layout.tsx and by the "Our Services" dashboard tab, so
+ * both hosts of ServicesPortal get it. Every rule is scoped to `.portal-world`,
+ * the class the portal's root column carries — the internal console around it is
+ * dark-first and is untouched by everything here.
+ *
+ * WHY THIS FILE EXISTS. The 2026-08-24 port brought the painting site's PALETTE
+ * across (ink / paper / brand in tailwind.config.ts) and stopped there. But most
+ * of what makes apmg-painting.vercel.app look like itself lives in its CSS
+ * layer, not its colour scale — square corners, the display face's real weight,
+ * the scroll reveal, and the process rail. Copying the class names without these
+ * rules produced a page with the right colours and the wrong character.
+ *
+ * The reference sets the first two GLOBALLY: a `borderRadius` override that
+ * zeroes every step, and a `.font-display { font-weight: 600 }` rule. This
+ * project cannot do either — the console depends on Tailwind's default radii and
+ * on its own heading face — so they are scoped here instead.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Corners: square, deliberately.
+ * ---------------------------------------------------------------------------
+ *
+ * The reference zeroes every step of `borderRadius` in its Tailwind config —
+ * one decision in one place, quoted at length in that file. A painting
+ * contractor's work is masking tape, straight edges and cut lines; soft corners
+ * read as generic SaaS and fight a palette that is at its best when it is
+ * structural: hard rules, flat slabs, no softening.
+ *
+ * Done as a scoped reset rather than by deleting the `rounded-*` utilities one
+ * by one, because three of the portal's blocks are SHARED components that also
+ * render inside the dark console — GoogleReviewsPanel, TeamSection and
+ * ServiceInquiryModal — and carry semantic tokens with their own radii. Editing
+ * those files would square them in the console too. This squares them only
+ * where they are the portal.
+ *
+ * `!important` is load-bearing: nearly every target is a Tailwind utility of
+ * equal specificity, and this has to win without a specificity arms race.
+ *
+ * Genuine circles are exempt. `full: '9999px'` survives the reference's override
+ * untouched — the two places using it there are real circles, not softened
+ * rectangles — and the same is true here of the social chips, the avatars and
+ * the chat launcher. The exemption is expressed as a selector because CSS cannot
+ * ask "was this value 9999px".
+ */
+/*
+ * The chat is the documented exception, and the reference names it as such: the
+ * page is the contractor's work — tape lines and flat slabs — while the chat is
+ * a conversation floating over it, and every convention a visitor has for that
+ * surface, from every messaging app they own, is round. Square there does not
+ * read as disciplined, it reads as unfinished.
+ *
+ * It is exempted by EXCLUSION rather than by winning a later rule, so the chat's
+ * own Tailwind radii are never overridden in the first place and it keeps
+ * exactly the rounding it was authored with.
+ *
+ * The first attempt was a second, more specific rule setting `border-radius:
+ * revert-layer`. That does not restore the utility — from unlayered author
+ * styles `revert-layer` rolls back past the whole author origin, so it resolved
+ * to the UA default of 0 and squared the panel, the bubbles and the input just as
+ * thoroughly as the reset it was meant to undo.
+ */
+.portal-world
+  [class*="rounded"]:not([class*="rounded-full"]):not([data-portal-chat]):not(
+    [data-portal-chat] *
+  ) {
+  border-radius: 0 !important;
+}
+
+/* ---------------------------------------------------------------------------
+ * The display face
+ * ---------------------------------------------------------------------------
+ *
+ * Fraunces is subset to 600 and 700 in app/layout.tsx — the only two weights
+ * this surface sets. Without this rule every `font-display` heading inherits
+ * 400, which is not in the subset, so the browser either falls through to
+ * Georgia or synthesises a weight. The headline is the loudest element on the
+ * page and therefore the one that shows it. The reference carries the identical
+ * rule for the identical reason.
+ */
+.portal-world .font-display {
+  font-weight: 600;
+}
+
+.portal-world .font-display.font-bold {
+  font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------------
+ * The fold
+ * ---------------------------------------------------------------------------
+ *
+ * The floor under the hero at every width. The one-viewport CEILING is not here:
+ * it is `lg:h-[calc(100dvh-4rem-1px)]` in ServicesPortal, applied only on the
+ * customer host, and the reason is worth recording because the first version
+ * looked right and was not.
+ *
+ * That version put `height: calc(100% - 4rem - 1px)` on this class. A percentage
+ * height resolves against the containing block, which here is the
+ * `.portal-world` div — and that div is auto-height, sized by its own content.
+ * A percentage against an indefinite height computes to `auto`, so the rule did
+ * nothing at all: the fold fell back to the 34rem min-height below and came in
+ * about 230px short of the screen on a 900px viewport. It failed silently, which
+ * is the only reason it survived a look at the page.
+ *
+ * `dvh` is what actually measures the fold, and it can only be applied on the
+ * standalone host: there <main> is `h-dvh`, so one dynamic viewport height IS
+ * the scroll container. Inside the dashboard the same component is a panel in a
+ * shell with its own chrome, where a viewport unit would size the hero to the
+ * browser window rather than to the panel — so the internal tab keeps these
+ * minimums and sizes to its content.
+ */
+.portal-hero-fold {
+  min-height: 30rem;
+}
+
+@media (min-width: 640px) {
+  .portal-hero-fold {
+    min-height: 34rem;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Scroll reveal
+ * ---------------------------------------------------------------------------
+ *
+ * Every section rises 24px and fades in as it enters the viewport — a block at a
+ * time rather than element by element, which on a page this long reads as
+ * fidgety by the third screen.
+ *
+ * NO STYLESHEET EVER HIDES ANYTHING. The hidden start state needs BOTH
+ * `data-reveal` (written in the markup) and `data-reveal-armed` (written only by
+ * the observer in components/apmg/portal/reveal.tsx, and only after it has
+ * confirmed the element is below the fold). So a failed bundle, a missing
+ * IntersectionObserver, or the frames before hydration all render the page
+ * complete. That is the one rule this must not get wrong: on a surface whose
+ * whole job is converting a cold visitor who arrived from an email, a stylesheet
+ * that sets `opacity: 0` and waits for JS is a way to lose the page.
+ *
+ * The reference does the same thing with GSAP ScrollTrigger. This uses an
+ * IntersectionObserver and CSS instead, for two reasons: GSAP is not a dependency
+ * of this project, and ScrollTrigger would need its `scroller` pointed at <main>
+ * because the portal is not the document scroller.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .portal-world [data-reveal][data-reveal-armed="out"] {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+
+  .portal-world [data-reveal][data-reveal-armed="in"] {
+    opacity: 1;
+    transform: none;
+    /* 0.6s on a decelerating curve — the reference's `power2.out` tween, as its
+       CSS equivalent. */
+    transition:
+      opacity 600ms cubic-bezier(0.16, 1, 0.3, 1),
+      transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * The process rail
+ * ---------------------------------------------------------------------------
+ *
+ * "What happens after you enquire" is the one section on the portal where the
+ * ORDER is the content, so it is drawn rather than tiled: the stages stand on a
+ * single rule, and a red line runs the length of it — from the first stage to
+ * handover, lighting each stage's glyph as it passes, then clearing off the far
+ * end and going again.
+ *
+ * It is deliberately the same gesture as the seam under the hero — the cut line
+ * every job begins with. Repeating the mark is the point, because it means the
+ * same thing in both places.
+ *
+ * ## Why it loops on wall-clock time rather than on scroll
+ *
+ * Tying the line to the scrollbar leaves a reader who stops to actually read the
+ * stages with a line frozen halfway through, and a reader who flicks past gets
+ * the entire sequence in three frames. Neither of those is the sequence. On a
+ * timer it plays at its own speed for anyone who looks at it, and the order —
+ * the only thing this section is trying to say — is legible however the page is
+ * scrolled.
+ *
+ * `InView` pauses the whole loop whenever the rail is off screen, so it costs
+ * nothing for the rest of the page and a reader always meets it at the start of
+ * a cycle. The pause is keyed off `data-inview` being *false*; absent means
+ * running, so a failed bundle, a missing IntersectionObserver, or the frames
+ * before hydration all leave the animation alone rather than freezing it at
+ * nothing-drawn.
+ *
+ * ## What never depends on any of this
+ *
+ * The rule's default state is FULLY DRAWN, and the glyphs' default state is the
+ * same muted grey as the numerals. A reader who asked for less motion, an engine
+ * that ignores the keyframes, a script that never loads — all get a finished red
+ * rule and a legible set of stages. The motion is the enhancement; the completed
+ * line is the baseline.
+ *
+ * That is also why the animation lives inside `prefers-reduced-motion:
+ * no-preference` rather than relying on a global reduce override: such an
+ * override clamps duration and iteration count, which here would land the line
+ * on its last keyframe — retracted to nothing — and leave it there.
+ */
+.portal-world .process-rail {
+  /*
+   * One cycle: the line draws across the rail, holds, retracts off the far end,
+   * then rests before going again. Slow on purpose. This is a five-step process
+   * beside body copy, not a loading spinner — anything under about five seconds
+   * reads as agitation in the corner of the eye while someone is trying to read
+   * the stage they are on.
+   */
+  --rail-cycle: 7s;
+  /* Set per instance in ProcessSteps; the fallback keeps this file standalone. */
+  --rail-count: 5;
+}
+
+.portal-world .process-rail__step {
+  /*
+   * When the head of the line arrives at this stage. The draw occupies the first
+   * 60% of the cycle and covers the full width, so a stage sitting at fraction
+   * i/(n-1) along the rail is reached at 60% x that fraction. `max()` keeps a
+   * one-step rail from dividing by zero.
+   */
+  --rail-delay: calc(var(--rail-cycle) * 0.6 * var(--rail-index) / max(var(--rail-count) - 1, 1));
+}
+
+.portal-world .process-rail__progress {
+  transform: scaleY(1);
+  transform-origin: top center;
+}
+
+@media (min-width: 1024px) {
+  .portal-world .process-rail__progress {
+    transform: scaleX(1);
+    transform-origin: left center;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .portal-world .process-rail__progress {
+    /*
+     * Linear, and deliberately so. The stage stagger below places each glyph's
+     * flare at the moment the head of the line reaches its column, which is
+     * arithmetic done against a constant speed — ease the draw and the highlight
+     * drifts away from the line that is supposed to be causing it.
+     */
+    animation: apmg-rail-run-y var(--rail-cycle) linear infinite;
+  }
+
+  .portal-world .process-rail__marker {
+    animation: apmg-rail-marker var(--rail-cycle) ease-out infinite;
+    animation-delay: var(--rail-delay);
+  }
+
+  .portal-world .process-rail__glyph {
+    animation: apmg-rail-glyph var(--rail-cycle) ease-out infinite;
+    animation-delay: var(--rail-delay);
+  }
+
+  @media (min-width: 1024px) {
+    .portal-world .process-rail__progress {
+      animation-name: apmg-rail-run-x;
+    }
+  }
+
+  /*
+   * Off screen: frozen where it stands, not reset. Blunt on purpose — the line,
+   * the markers and every moving part inside every glyph have to stop on the
+   * same frame, and nothing inside this rail animates that should not.
+   */
+  .portal-world [data-inview="false"] .process-rail,
+  .portal-world [data-inview="false"] .process-rail * {
+    animation-play-state: paused;
+  }
+}
+
+/*
+ * The line's run. It grows from the start of the rail, then leaves from the far
+ * end rather than collapsing back the way it came — a process does not
+ * un-happen. The origin flips at 60%, while the line is at full length and the
+ * swap is therefore invisible; `transform-origin` is not interpolated, so it has
+ * to change at a keyframe where nothing is moving.
+ *
+ * The last stretch is empty on purpose. Without it the line restarts the instant
+ * it finishes and the section never stops moving.
+ */
+@keyframes apmg-rail-run-y {
+  0% {
+    transform: scaleY(0);
+    transform-origin: top center;
+  }
+  60% {
+    transform: scaleY(1);
+    transform-origin: top center;
+  }
+  68% {
+    transform: scaleY(1);
+    transform-origin: bottom center;
+  }
+  88%,
+  100% {
+    transform: scaleY(0);
+    transform-origin: bottom center;
+  }
+}
+
+@keyframes apmg-rail-run-x {
+  0% {
+    transform: scaleX(0);
+    transform-origin: left center;
+  }
+  60% {
+    transform: scaleX(1);
+    transform-origin: left center;
+  }
+  68% {
+    transform: scaleX(1);
+    transform-origin: right center;
+  }
+  88%,
+  100% {
+    transform: scaleX(0);
+    transform-origin: right center;
+  }
+}
+
+/*
+ * A stage being reached. Colour only — the numeral and the glyph go red together
+ * as the head of the line arrives at their column, then decay back to grey
+ * behind it.
+ *
+ * The flare is over in 3% of the cycle (about 200ms) because the delay above
+ * aims at the ARRIVAL, not at the peak: a slower ramp puts the red where the
+ * line was a quarter-column ago. The decay is long by comparison — around two
+ * stage-widths — so at any moment two or three stages are lit at different
+ * strengths and the highlight reads as one thing travelling rather than as five
+ * things blinking in turn.
+ *
+ * Literal hex rather than `theme()`: this file is plain CSS outside Tailwind's
+ * pipeline. The two values are ink.muted and brand.600 from tailwind.config.ts.
+ */
+@keyframes apmg-rail-marker {
+  0%,
+  100% {
+    color: #6b7075;
+  }
+  3%,
+  26% {
+    color: #c8102e;
+  }
+  42% {
+    color: #6b7075;
+  }
+}
+
+/*
+ * The glyph's own nudge, on the same delay. Only the glyph moves: lifting the
+ * numeral too would take it off the rule it is standing on, and that
+ * relationship is the whole reason the rail is drawn this way.
+ */
+@keyframes apmg-rail-glyph {
+  0%,
+  100% {
+    transform: none;
+  }
+  3% {
+    transform: translateY(-3px) scale(1.12);
+  }
+  15% {
+    transform: none;
+  }
+}
+
+/*
+ * The parts inside a glyph.
+ *
+ * Each stage acts itself out as the line reaches it: the message writes, the pin
+ * drops, the quote is set down, the roller runs, the key turns. They all start
+ * from `--rail-delay`, so a glyph performs at the moment the red line arrives
+ * underneath it, and they run about two and a half seconds — long enough to be
+ * watched rather than noticed.
+ *
+ * ## Every one of them ends where it started
+ *
+ * This is the rule that makes the whole thing loopable. A draw-on that finishes
+ * DRAWN has to snap back to EMPTY at the loop boundary, and because each stage
+ * is delayed by a different amount that snap would land at a different point in
+ * every column. So nothing here finishes anywhere: the transforms all return to
+ * identity, and the writing sweeps by a whole dash period — `1 1` on a path
+ * normalised to `pathLength: 1`, moved two units, which is two full periods back
+ * to the identical pattern. The stroke is eaten off one end and laid back on
+ * from that same end, and the keyframe it lands on is pixel-for-pixel the
+ * keyframe it left.
+ *
+ * It is also why the resting state needs no declaration of its own: at rest the
+ * offset is 0 and every path is simply, completely drawn.
+ */
+.portal-world .process-rail__glyph .glyph-write {
+  stroke-dasharray: 1 1;
+  stroke-dashoffset: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .portal-world .process-rail__glyph .glyph-write {
+    animation: apmg-glyph-write var(--rail-cycle) cubic-bezier(0.5, 0, 0.5, 1) infinite;
+    /* `--glyph-beat` is set per part, for a second line that follows the first
+       rather than racing it. */
+    animation-delay: calc(var(--rail-delay) + var(--glyph-beat, 0s));
+  }
+
+  .portal-world .process-rail__glyph .glyph-drop {
+    animation: apmg-glyph-drop var(--rail-cycle) cubic-bezier(0.33, 1, 0.68, 1) infinite;
+    animation-delay: var(--rail-delay);
+  }
+
+  .portal-world .process-rail__glyph .glyph-roll {
+    animation: apmg-glyph-roll var(--rail-cycle) cubic-bezier(0.45, 0, 0.55, 1) infinite;
+    animation-delay: var(--rail-delay);
+  }
+
+  .portal-world .process-rail__glyph .glyph-turn {
+    /* The centre of the key's bow: it turns the way a key in a lock does, around
+       its handle, not around the corner of the box. */
+    transform-origin: 17px 7px;
+    animation: apmg-glyph-turn var(--rail-cycle) cubic-bezier(0.65, 0, 0.35, 1) infinite;
+    animation-delay: var(--rail-delay);
+  }
+}
+
+/*
+ * Writing. `-2` is one whole dash period further on: the stroke is eaten away
+ * from its start, comes back on from that same start, and lands on a pattern
+ * identical to the one it left — so the hold from 40% to 100% is visually the
+ * same frame as 0%, and the loop has no seam.
+ *
+ * The midpoint at 16% rather than half way is what makes it read as writing
+ * rather than as a wiper. Clearing takes 0.6s; setting the stroke back down
+ * takes nearly 1.7s, and it is the slow half that the eye follows.
+ */
+@keyframes apmg-glyph-write {
+  0%,
+  7% {
+    stroke-dashoffset: 0;
+  }
+  16% {
+    stroke-dashoffset: -1;
+  }
+  40%,
+  100% {
+    stroke-dashoffset: -2;
+  }
+}
+
+/*
+ * The pin lifts, drops, and settles with one small bounce. Four pixels of lift,
+ * not six: the viewBox clips, and the head of the pin is already within a pixel
+ * of the top of it.
+ */
+@keyframes apmg-glyph-drop {
+  0%,
+  6% {
+    transform: translateY(0);
+  }
+  15% {
+    transform: translateY(-4px);
+  }
+  25% {
+    transform: translateY(0);
+  }
+  29% {
+    transform: translateY(-1.5px);
+  }
+  34%,
+  100% {
+    transform: translateY(0);
+  }
+}
+
+/*
+ * One pass of the roller: a short pull back, then a long push forward. Timed
+ * against `apmg-glyph-write` on the band above it — the roller is fully drawn
+ * back at 16%, the moment the band is at its emptiest, and the two then travel
+ * forward together so the paint appears BEHIND the sleeve rather than in front
+ * of it.
+ */
+@keyframes apmg-glyph-roll {
+  0%,
+  7% {
+    transform: translateX(0);
+  }
+  16% {
+    transform: translateX(-3.5px);
+  }
+  40%,
+  100% {
+    transform: translateX(0);
+  }
+}
+
+/* The key turning, held at the end of its throw before it comes back. */
+@keyframes apmg-glyph-turn {
+  0%,
+  7% {
+    transform: rotate(0deg);
+  }
+  19%,
+  31% {
+    transform: rotate(-24deg);
+  }
+  44%,
+  100% {
+    transform: rotate(0deg);
+  }
+}

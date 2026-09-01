@@ -1,6 +1,8 @@
 import Link from "next/link";
-import type { ComponentProps, ReactNode } from "react";
+import type { ComponentProps, CSSProperties, ReactNode } from "react";
 import { cn } from "@/lib/cn";
+import { InView } from "./reveal";
+import { ProcessIcon, type ProcessIconName } from "./process-icons";
 
 /**
  * Customer-portal design kit.
@@ -55,14 +57,23 @@ export function PortalSection({
   children,
   className,
   tone = "paper",
+  reveal = true,
   ...rest
 }: {
   children: ReactNode;
   className?: string;
   tone?: "paper" | "sunken" | "ink" | "brand";
+  /**
+   * Opts the section into the scroll reveal (components/apmg/portal/reveal.tsx).
+   * On by default because every section below the fold should get it; set false
+   * for anything that can sit in the first viewport, where there is nothing to
+   * scroll to and the movement would just be noise.
+   */
+  reveal?: boolean;
 } & Omit<ComponentProps<"section">, "className">) {
   return (
     <section
+      data-reveal={reveal ? "" : undefined}
       className={cn(
         "py-14 sm:py-20",
         tone === "paper" && "bg-white text-ink",
@@ -245,6 +256,7 @@ export function ContentBlock({
   tone = "paper",
   id,
   lede,
+  width = "default",
 }: {
   eyebrow?: string;
   heading: string;
@@ -252,10 +264,16 @@ export function ContentBlock({
   tone?: "paper" | "sunken";
   id?: string;
   lede?: string;
+  /**
+   * `wide` for sections carrying a grid of photographs. Prose wants a narrow
+   * measure; a photographic grid wants the page. Sharing one width made the
+   * images the smaller of the two things it should have favoured.
+   */
+  width?: "default" | "wide";
 }) {
   return (
     <PortalSection tone={tone} id={id}>
-      <Container>
+      <Container width={width}>
         {eyebrow && <Eyebrow>{eyebrow}</Eyebrow>}
         <SectionHeading className={lede ? "mb-3" : "mb-6"}>{heading}</SectionHeading>
         {lede && <p className="mb-8 max-w-prose text-ink-soft">{lede}</p>}
@@ -266,63 +284,198 @@ export function ContentBlock({
 }
 
 /**
- * A black band of plain figures.
+ * The four figures, as a band on an ink ground.
+ *
+ * MOVED INTO THE FOOTER, following the reference. It used to be its own black
+ * slab directly under the hero, which meant the page's first move after the
+ * headline was to stop and recite statistics — before the visitor had been told
+ * what the eight trades even are. In the footer it runs under every scroll depth
+ * and reads as the standing evidence it is, and the services grid gets the slot
+ * straight after the fold that it should always have had.
+ *
+ * Bare markup, no section wrapper: the footer owns the ink ground and the rules
+ * above and below this band.
  *
  * Every value must be substantiated (knowledgebase/business.md) — this band is
  * the most quotable thing on the page, so an unbacked "500+ jobs" style claim
- * cannot be allowed to live here. Each figure carries a label precise enough to
- * defend on its own.
+ * cannot be allowed to live here. Each figure carries a detail line precise
+ * enough to defend on its own.
  */
-export function FactStrip({
+export function FactsBand({
   facts,
 }: {
   facts: readonly { figure: string; label: string; detail: string }[];
 }) {
   return (
-    <PortalSection tone="ink" className="border-t-4 border-brand-600 py-12 sm:py-14">
-      <Container width="wide">
-        <dl className="grid gap-8 sm:grid-cols-2 lg:grid-cols-4">
-          {facts.map((fact) => (
-            <div key={fact.label}>
-              <dt className={cn(microLabel, "text-white/60")}>{fact.label}</dt>
-              <dd className="mt-2">
-                <span className="font-display text-3xl font-semibold leading-none tracking-tight text-brand-400">
-                  {fact.figure}
-                </span>
-                <span className="mt-2 block text-sm leading-relaxed text-white/70">
-                  {fact.detail}
-                </span>
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </Container>
-    </PortalSection>
+    <dl className="grid gap-8 border-b border-white/15 py-12 sm:grid-cols-2 lg:grid-cols-4">
+      {facts.map((fact) => (
+        <div key={fact.label}>
+          <dt className={cn(microLabel, "text-white/60")}>{fact.label}</dt>
+          <dd className="mt-2">
+            <span className="font-display text-3xl font-semibold leading-none tracking-tight text-brand-400">
+              {fact.figure}
+            </span>
+            <span className="mt-2 block text-sm leading-relaxed text-white/70">
+              {fact.detail}
+            </span>
+          </dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
+/**
+ * The fold's bottom edge: three figures and a scroll cue.
+ *
+ * Translucent, so the photograph continues behind it rather than being cut off
+ * by a solid bar, and it carries a white hairline along its top — the seam
+ * between the fold and the rest of the page, and the same mark the process rail
+ * draws further down.
+ *
+ * The figures are set at display size against a micro-label, not as a row of
+ * ticked sentences. Five ticked claims at 13px is a paragraph wearing a list's
+ * clothes: nothing in it is scannable, and the fold's most valuable strip ends
+ * up being the least read thing on it. Three figures can be taken in at a
+ * glance, and each one is stated at length further down the page.
+ */
+export function HeroProof({
+  proof,
+  scrollTo,
+}: {
+  proof: readonly { figure: string; label: string }[];
+  scrollTo: { label: string; href: string };
+}) {
+  return (
+    <div className="relative z-10 bg-ink/70 backdrop-blur-sm">
+      <div aria-hidden className="absolute inset-x-0 top-0 h-px bg-white/15" />
+      <Container width="wide">
+        <div className="flex flex-wrap items-center justify-between gap-x-8 gap-y-3 py-3.5 sm:py-5">
+          {/* Stacked into three columns on phones, back onto one baseline from
+              sm — a wrapping figure/label pair costs the fold more height than
+              it can spare. */}
+          <ul className="grid w-full grid-cols-3 gap-x-4 sm:flex sm:w-auto sm:flex-wrap sm:items-baseline sm:gap-x-7 sm:gap-y-2">
+            {proof.map((item) => (
+              <li key={item.label} className="flex flex-col sm:flex-row sm:items-baseline sm:gap-2">
+                <span className="font-display text-base tracking-tight sm:text-lg">
+                  {item.figure}
+                </span>
+                <span className={cn(microLabel, "text-[0.625rem] text-white/70 sm:text-xs")}>
+                  {item.label}
+                </span>
+              </li>
+            ))}
+          </ul>
+
+          <a
+            href={scrollTo.href}
+            className="group hidden items-center gap-2 rounded text-sm font-semibold text-white/70 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 lg:inline-flex"
+          >
+            {scrollTo.label}
+            <span
+              aria-hidden
+              className="transition-transform duration-300 ease-out group-hover:translate-y-1 motion-reduce:transition-none motion-reduce:group-hover:translate-y-0"
+            >
+              &#8595;
+            </span>
+          </a>
+        </div>
+      </Container>
+    </div>
+  );
+}
+
+/**
+ * The process rail.
+ *
+ * The one section on the portal where the ORDER is the content, so it is drawn
+ * rather than tiled: the stages stand on a single rule, and a red line runs the
+ * length of it, lighting each stage's glyph as it passes. It was a grid of six
+ * numbered cards, which said "here are five things" — a rail says "here are five
+ * things, in this order", which is the only thing a visitor is reading this
+ * section to find out.
+ *
+ * Timing, pausing and the fallback behaviour all live in `.process-rail` in
+ * app/portal/portal-world.css, which is also where the reasoning is written
+ * down. The short version: it loops on wall-clock time rather than on scroll,
+ * `InView` freezes it while off screen, and every resting state is FULLY DRAWN —
+ * reduced motion or a bundle that never arrives leaves a finished red rule and a
+ * legible set of stages.
+ */
 export function ProcessSteps({
   steps,
-  stepLabel = "Step",
+  stepLabel = "Stage",
 }: {
-  steps: readonly { step: string; body: string }[];
+  steps: readonly { step: string; body: string; icon?: ProcessIconName }[];
   stepLabel?: string;
 }) {
   return (
-    <ol className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-      {steps.map((item, index) => (
-        <Card as="li" key={item.step} className="gap-2">
-          {/* Numbered because the sequence IS the information — these five
-              stages happen in this order, and a visitor is reading to find out
-              what happens after they enquire. */}
-          <span className={cn(microLabel, "text-brand-600")}>
-            {stepLabel} {index + 1}
-          </span>
-          <h3 className="font-display text-lg tracking-tight">{item.step}</h3>
-          <p className="text-sm text-ink-soft">{item.body}</p>
-        </Card>
-      ))}
-    </ol>
+    <InView>
+      <ol
+        className="process-rail relative lg:flex lg:gap-10"
+        // The stage count drives the glyph stagger: each one lights when the
+        // line reaches its column, so the offsets have to know how many columns
+        // there are rather than assume five.
+        style={{ "--rail-count": steps.length } as CSSProperties}
+      >
+        {/*
+         * The rule, and the red line that draws along it. Inset by a few pixels
+         * on the vertical run so it starts at the first numeral rather than at
+         * the container's corner, and pinned to the numerals' baseline from `lg`.
+         */}
+        <span
+          aria-hidden
+          className="absolute left-0 top-1 h-[calc(100%-0.5rem)] w-px bg-paper-edge lg:top-16 lg:h-px lg:w-full"
+        />
+        <span
+          aria-hidden
+          className="process-rail__progress absolute left-0 top-1 h-[calc(100%-0.5rem)] w-0.5 bg-brand-500 lg:top-[3.9375rem] lg:h-0.5 lg:w-full"
+        />
+
+        {steps.map((item, index) => (
+          <li
+            key={item.step}
+            className="process-rail__step relative pb-9 pl-7 last:pb-0 lg:flex-1 lg:pb-0 lg:pl-0"
+            style={{ "--rail-index": index } as CSSProperties}
+          >
+            {/*
+             * The ordinal and the stage glyph, on one baseline, standing on the
+             * rule. The ordinal is at display size and quiet enough that the
+             * headings still lead the section — on a rail the numbers are how a
+             * reader works out where they are in the run. The glyph is what
+             * makes five columns of near-identical text tell themselves apart at
+             * a glance, and it is the thing the red line lights on its way past.
+             */}
+            <span
+              aria-hidden
+              className="process-rail__marker flex items-end gap-2.5 text-ink-muted lg:h-16"
+            >
+              <span className="font-display text-4xl leading-none lg:text-5xl">
+                {index + 1}
+              </span>
+              <ProcessIcon
+                name={item.icon}
+                className="process-rail__glyph mb-0.5 h-6 w-6 shrink-0 lg:mb-1.5 lg:h-8 lg:w-8"
+              />
+            </span>
+            {/* The ordinal above is decorative (it is inside an aria-hidden
+                span), so the stage's position in the run is carried here for
+                assistive tech instead. */}
+            <span className="sr-only">
+              {stepLabel} {index + 1}
+            </span>
+
+            {/* Two lines' worth of room on the rail, so a stage whose name wraps
+                does not push its body a line below its neighbours'. Across five
+                columns that misalignment is the first thing the eye finds. */}
+            <h3 className="mt-3 font-display text-lg tracking-tight lg:mt-6 lg:min-h-[3.5rem]">
+              {item.step}
+            </h3>
+            <p className="mt-2 text-sm text-ink-soft">{item.body}</p>
+          </li>
+        ))}
+      </ol>
+    </InView>
   );
 }
 
