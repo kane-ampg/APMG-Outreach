@@ -123,6 +123,26 @@ export interface AnonymousPortalActivity {
   topServices: Array<{ service: string; opens: number }>;
 }
 
+/** One anonymous visitor whose portal events carry a traffic source (the
+ *  apmg_src cookie — ?utm_source=facebook on the promoted portal link, or a
+ *  recognised social Referer), grouped into the same trail shape as an
+ *  attributed lead. There is no lead identity to pin the visit to — the
+ *  visitorId is the client's random localStorage id — but the trail itself
+ *  ("came from Facebook, opened Plumbing, enquired") is exactly what the
+ *  Telemetry table exists to show. Untagged visitors stay in the aggregate
+ *  AnonymousPortalActivity block. */
+export interface SourcedVisitorActivity {
+  visitorId: string;
+  /** canonical source slug ("facebook", "tiktok", …) — lib/portal/source.ts */
+  source: string;
+  firstSeen: string;
+  lastSeen: string;
+  /** chronological ASC; capped to the MOST RECENT 50 events */
+  events: LeadActivityEvent[];
+  /** emailClicks / chatPrompts are structurally 0 — both are attributed-only */
+  counts: LeadActivityCounts;
+}
+
 /** One recorded opt-out (an `email_suppression` row) — the people the send
  *  route will never mail again. Keyed by address, because that's what the
  *  Spam Act opt-out attaches to; `leadId`/`business` are context the
@@ -150,6 +170,9 @@ export interface LeadActivityResponse {
   needsMigration?: boolean;
   error?: string;
   leads: LeadActivity[];
+  /** source-tagged anonymous trails (the social-promotion loop), lastSeen
+   *  DESC, capped — see MAX_VISITORS in the route */
+  visitors: SourcedVisitorActivity[];
   anonymous: AnonymousPortalActivity;
   /** newest-first, capped — see MAX_UNSUBSCRIBES in the route */
   unsubscribes: UnsubscribedPerson[];

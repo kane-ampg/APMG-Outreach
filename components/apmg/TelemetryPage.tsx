@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Facebook,
   Inbox,
   LayoutGrid,
   MailX,
@@ -26,8 +27,11 @@ import {
   type AnonymousActivity,
   type LeadActivity,
   type LeadActivityEvent,
+  type SourcedVisitorActivity,
   type UnsubscribedPerson,
 } from "@/lib/data/leadActivity";
+import { sourceLabel } from "@/lib/data/enquiries";
+import { OUTREACH_SOURCE } from "@/lib/portal/source";
 import { EventTrail, TimelineLine, fmtStamp } from "./LeadTrail";
 import { leadScore, scoreTier } from "@/lib/data/leadScore";
 import {
@@ -61,7 +65,9 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  * The heart of the page is the lead-activity list: a real six-column table
  * (Lead · ID · Score · Sector · Events · Last seen) under a shared column
  * head, one row per attributed lead (someone who opened a tracked outreach
- * email). The Events column carries the compact horizontal trail (icon chips,
+ * email) — plus one row per SOURCE-TAGGED anonymous visitor (someone who
+ * arrived through the promoted ?utm_source= link: facebook, tiktok, …), which
+ * is what the Channel filter slices between. The Events column carries the compact horizontal trail (icon chips,
  * chronological left → right) plus its count, and every row expands to a
  * full timeline in plain English ("Clicked the email link" →
  * "Viewed Painting Services" → "Sent an enquiry — Painting Services").
@@ -124,6 +130,22 @@ function activeEventCount(lead: LeadActivity): number {
 /** Sentinel for the "all sectors" chip (no `category` filter applied). */
 const ALL_SECTORS = "__all__";
 
+/** Sentinel for the "all channels" chip (no channel filter applied). */
+const ALL_CHANNELS = "__all__";
+
+/** Channels always offered, even before their first row: outreach email is
+ *  what every attributed lead came through, and Facebook is the promoted
+ *  social link. Any OTHER tagged source (tiktok, instagram, …) grows a chip
+ *  the moment a visitor actually arrives through it. */
+const BASE_CHANNELS = [OUTREACH_SOURCE, "facebook"];
+
+/** One row of the activity table: an attributed outreach lead, or an
+ *  anonymous visitor who arrived through a tagged social link. Visitor rows
+ *  reuse the LeadActivity shape (the row renderer, score and sorts all read
+ *  it) plus the channel they came from; they have no lead behind them, so the
+ *  per-row delete is withheld (the Anonymous panel's Clear covers them). */
+type ActivityRow = LeadActivity & { channel: string; deletable: boolean };
+
 /* ───────────────────────────  main-table tabs  ─────────────────────────── */
 
 /** The two audiences the main table shows: everyone who engaged, and everyone
@@ -145,9 +167,15 @@ type LoadState =
       mode: "live" | "demo";
       needsMigration: boolean;
       leads: LeadActivity[];
+      /** source-tagged anonymous trails — the social-promotion loop's rows */
+      visitors: SourcedVisitorActivity[];
       anonymous: AnonymousActivity;
       totals: ActivityTotals;
       unsubscribes: UnsubscribedPerson[];
+      /** The facebook bucket of the summary's bySource breakdown — the KPI for
+       *  the promoted portal link (?utm_source=facebook). All-zero until the
+       *  first tagged visit. */
+      facebook: SourceBucket;
       /** exact count — the KPI never shows only what fitted in the page cap */
       unsubscribesTotal: number;
       /** false = the opt-out list couldn't be read at all (its migration is
@@ -160,12 +188,11 @@ type LoadState =
 const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
-/** Rebuild one lead field-by-field so a partial/odd payload can never leave an
- *  undefined array or non-string ts behind (the trail `.map`s would throw). */
-function toLead(v: unknown): LeadActivity | null {
-  const o = (v ?? {}) as Partial<LeadActivity>;
-  if (typeof o.leadId !== "string" || !o.leadId) return null;
-  const events: LeadActivityEvent[] = (Array.isArray(o.events) ? o.events : [])
+/** Rebuild a trail event-by-event so a partial/odd payload can never leave an
+ *  undefined array or non-string ts behind (the trail `.map`s would throw).
+ *  Shared by the lead and visitor normalisers. */
+function toEvents(v: unknown): LeadActivityEvent[] {
+  return (Array.isArray(v) ? v : [])
     .filter((e): e is LeadActivityEvent => {
       const ev = (e ?? {}) as Partial<LeadActivityEvent>;
       return typeof ev.event === "string" && typeof ev.ts === "string";
@@ -176,7 +203,25 @@ function toLead(v: unknown): LeadActivity | null {
       destination: str(e.destination),
       ts: e.ts,
     }));
-  const c = (o.counts ?? {}) as Partial<LeadActivity["counts"]>;
+}
+
+/** Rebuild the funnel tallies field-by-field (absent/odd values → 0). */
+function toCounts(v: unknown): LeadActivity["counts"] {
+  const c = (v ?? {}) as Partial<LeadActivity["counts"]>;
+  return {
+    emailClicks: num(c.emailClicks),
+    portalViews: num(c.portalViews),
+    serviceOpens: num(c.serviceOpens),
+    chatPrompts: num(c.chatPrompts),
+    inquiries: num(c.inquiries),
+  };
+}
+
+/** Rebuild one lead field-by-field — same defensive contract as toEvents. */
+function toLead(v: unknown): LeadActivity | null {
+  const o = (v ?? {}) as Partial<LeadActivity>;
+  if (typeof o.leadId !== "string" || !o.leadId) return null;
+  const events = toEvents(o.events);
   return {
     leadId: o.leadId,
     business: str(o.business),
@@ -185,13 +230,25 @@ function toLead(v: unknown): LeadActivity | null {
     firstSeen: str(o.firstSeen) ?? events[0]?.ts ?? "",
     lastSeen: str(o.lastSeen) ?? events[events.length - 1]?.ts ?? "",
     events,
-    counts: {
-      emailClicks: num(c.emailClicks),
-      portalViews: num(c.portalViews),
-      serviceOpens: num(c.serviceOpens),
-      chatPrompts: num(c.chatPrompts),
-      inquiries: num(c.inquiries),
-    },
+    counts: toCounts(o.counts),
+  };
+}
+
+/** Rebuild one source-tagged visitor. The id and source are the row's whole
+ *  point (the channel filter keys off the source), so a row missing either is
+ *  dropped rather than rendered as an unattributable blank. */
+function toVisitor(v: unknown): SourcedVisitorActivity | null {
+  const o = (v ?? {}) as Partial<SourcedVisitorActivity>;
+  if (typeof o.visitorId !== "string" || !o.visitorId) return null;
+  if (typeof o.source !== "string" || !o.source) return null;
+  const events = toEvents(o.events);
+  return {
+    visitorId: o.visitorId,
+    source: o.source,
+    firstSeen: str(o.firstSeen) ?? events[0]?.ts ?? "",
+    lastSeen: str(o.lastSeen) ?? events[events.length - 1]?.ts ?? "",
+    events,
+    counts: toCounts(o.counts),
   };
 }
 
@@ -210,6 +267,27 @@ function toUnsubscribed(v: unknown): UnsubscribedPerson | null {
     reason: str(o.reason) ?? "unsubscribe",
     createdAt: o.createdAt,
   };
+}
+
+/** One traffic channel's slice of the summary's bySource breakdown. */
+interface SourceBucket {
+  visitors: number;
+  views: number;
+  inquiries: number;
+}
+
+const EMPTY_SOURCE: SourceBucket = { visitors: 0, views: 0, inquiries: 0 };
+
+/** Pull one channel's bucket out of the summary payload's bySource array —
+ *  zeros (not an error) when that channel hasn't sent anyone yet. */
+function toSourceBucket(v: unknown, source: string): SourceBucket {
+  for (const row of Array.isArray(v) ? v : []) {
+    const o = (row ?? {}) as { source?: unknown } & Partial<SourceBucket>;
+    if (o.source === source) {
+      return { visitors: num(o.visitors), views: num(o.views), inquiries: num(o.inquiries) };
+    }
+  }
+  return EMPTY_SOURCE;
 }
 
 function toAnonymous(v: unknown): AnonymousActivity {
@@ -330,23 +408,18 @@ function StatCard({ stat }: { stat: TelemetryStat }) {
 }
 
 /** The fused KPI panel's grid — one definition, shared by the live row and its
- *  skeleton so they can't drift apart. Five gauges: two columns on a phone,
- *  three once the sidebar is beside them, five across only from xl, where a
- *  column is still wide enough for a 40px count-up readout. */
+ *  skeleton so they can't drift apart. Six gauges: two columns on a phone,
+ *  three once the sidebar is beside them, six across only from xl, where a
+ *  column is still wide enough for a 40px count-up readout. Six divides evenly
+ *  at every step, so the fused panel never needs a filler cell. */
 const KPI_GRID =
-  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-3 xl:grid-cols-5";
-
-/** Five cards divide into neither two nor three columns, and the panel is fused
- *  by a 1px border-coloured gap — so the empty cell at the end of the last row
- *  would render as a slab of border. This card-coloured filler closes it, and
- *  disappears at xl where five columns come out even. */
-const KPI_FILLER = <div className="bg-card xl:hidden" aria-hidden />;
+  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-3 xl:grid-cols-6";
 
 /** Skeleton mirroring the fused KPI panel while both endpoints are in flight. */
 function KpiPanelSkeleton() {
   return (
     <div className={KPI_GRID}>
-      {Array.from({ length: 5 }).map((_, i) => (
+      {Array.from({ length: 6 }).map((_, i) => (
         <div key={i} className="flex h-full flex-col bg-card p-5" aria-busy>
           <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
           <div className="mt-3 h-[34px] w-3/4 animate-pulse rounded bg-muted sm:h-[40px]" />
@@ -356,7 +429,6 @@ function KpiPanelSkeleton() {
           </div>
         </div>
       ))}
-      {KPI_FILLER}
     </div>
   );
 }
@@ -522,6 +594,7 @@ const LeadRow = memo(function LeadRow({
   lead,
   open,
   unseen,
+  deletable,
   onToggle,
   deletePhase,
   deleteError,
@@ -534,6 +607,10 @@ const LeadRow = memo(function LeadRow({
   /** New (unacknowledged) customer events on this lead — drives the blinking
    *  red dot. Cleared by toggling the row (that's the acknowledgement). */
   unseen: number;
+  /** False for source-tagged visitor rows — there is no lead behind them to
+   *  DELETE by id (the Anonymous panel's Clear is what removes them), so the
+   *  trash gives way to an inert spacer that keeps the columns aligned. */
+  deletable: boolean;
   onToggle: (leadId: string) => void;
   deletePhase: DeletePhase;
   deleteError: string | null;
@@ -680,20 +757,24 @@ const LeadRow = memo(function LeadRow({
 
         {/* per-row delete: quiet trash that only turns destructive on hover;
             the actual delete sits behind the confirm strip below. */}
-        <button
-          type="button"
-          onClick={() => (deletePhase ? onDeleteCancel() : onDeleteRequest(lead.leadId))}
-          disabled={deletePhase === "busy"}
-          aria-label={`Delete ${name}'s click activity`}
-          data-track="telemetry_lead_delete"
-          data-track-lead={lead.leadId}
-          className={cn(
-            "flex shrink-0 items-center justify-center border-l border-border/70 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50",
-            ROW_ACTION_W,
-          )}
-        >
-          <Trash2 className="h-3.5 w-3.5" aria-hidden />
-        </button>
+        {deletable ? (
+          <button
+            type="button"
+            onClick={() => (deletePhase ? onDeleteCancel() : onDeleteRequest(lead.leadId))}
+            disabled={deletePhase === "busy"}
+            aria-label={`Delete ${name}'s click activity`}
+            data-track="telemetry_lead_delete"
+            data-track-lead={lead.leadId}
+            className={cn(
+              "flex shrink-0 items-center justify-center border-l border-border/70 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50",
+              ROW_ACTION_W,
+            )}
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        ) : (
+          <div className={cn("shrink-0 border-l border-border/70", ROW_ACTION_W)} aria-hidden />
+        )}
       </div>
 
       {/* inline destructive confirm (StoredLeads grammar) — a stray click on
@@ -947,7 +1028,8 @@ function AnonymousPanel({
         <div className="flex flex-wrap items-center gap-2 border-t border-destructive/40 bg-destructive/[0.04] px-4 py-2">
           <Trash2 className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
           <span className="text-[12px] text-foreground">
-            Permanently delete all anonymous portal activity? Enquiries are kept.
+            Permanently delete all anonymous portal activity, tagged social visitors included?
+            Enquiries are kept.
           </span>
           {clearError && (
             <span role="alert" className="font-mono text-[10.5px] text-destructive">
@@ -999,8 +1081,8 @@ function AnonymousPanel({
         </div>
 
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-          Portal visitors who didn&rsquo;t arrive via a tracked outreach email — real interest,
-          but with no lead identity to pin the clicks to.
+          Portal visitors who didn&rsquo;t arrive via a tracked outreach email or a tagged social
+          link — real interest, but with no identity to pin the clicks to.
         </p>
 
         {anonymous.topServices.length > 0 ? (
@@ -1077,6 +1159,7 @@ interface ActivityPayload {
   mode?: string;
   needsMigration?: boolean;
   leads?: unknown;
+  visitors?: unknown;
   anonymous?: unknown;
   unsubscribes?: unknown;
   unsubscribesTotal?: unknown;
@@ -1087,6 +1170,7 @@ interface SummaryPayload {
   mode?: string;
   needsMigration?: boolean;
   totals?: Record<string, unknown>;
+  bySource?: unknown;
   error?: string;
 }
 
@@ -1103,6 +1187,9 @@ export function TelemetryPage() {
   const [sort, setSort] = useState<SortKey>("recent");
   /** Sector narrowing (a lead `category`, or ALL_SECTORS for no filter). */
   const [sector, setSector] = useState<string>(ALL_SECTORS);
+  /** Channel narrowing — which door the visitor came through (outreach email
+   *  / facebook / …, or ALL_CHANNELS for no filter). */
+  const [channel, setChannel] = useState<string>(ALL_CHANNELS);
   /** Per-lead NEW (unacknowledged) event counts — the blinking row dots. */
   const unseenByLead = useLeadActivityUnseenByLead();
   /** Total unseen customer events — drives the nav badge; here it gates (and
@@ -1165,9 +1252,11 @@ export function TelemetryPage() {
           mode: "demo",
           needsMigration: act?.needsMigration === true || sum?.needsMigration === true,
           leads: [],
+          visitors: [],
           anonymous: { visitors: 0, events: 0, topServices: [] },
           totals: { attributionClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0 },
           unsubscribes: [],
+          facebook: EMPTY_SOURCE,
           unsubscribesTotal: 0,
           // No database, so the opt-out list is unknown rather than empty.
           unsubscribesAvailable: false,
@@ -1201,6 +1290,9 @@ export function TelemetryPage() {
       const leads = (Array.isArray(act.leads) ? act.leads : [])
         .map(toLead)
         .filter((l): l is LeadActivity => l !== null);
+      const visitors = (Array.isArray(act.visitors) ? act.visitors : [])
+        .map(toVisitor)
+        .filter((v): v is SourcedVisitorActivity => v !== null);
       const unsubscribes = (Array.isArray(act.unsubscribes) ? act.unsubscribes : [])
         .map(toUnsubscribed)
         .filter((u): u is UnsubscribedPerson => u !== null);
@@ -1212,6 +1304,7 @@ export function TelemetryPage() {
         mode: "live",
         needsMigration: false,
         leads,
+        visitors,
         anonymous: toAnonymous(act.anonymous),
         totals: {
           attributionClicks: num(sum.totals.attributionClicks),
@@ -1220,6 +1313,7 @@ export function TelemetryPage() {
           inquiries: num(sum.totals.inquiries),
         },
         unsubscribes,
+        facebook: toSourceBucket(sum.bySource, "facebook"),
         // The exact total can exceed what the route sends; never let the KPI
         // read lower than the rows the table is actually showing either.
         unsubscribesTotal: Math.max(num(act.unsubscribesTotal), unsubscribes.length),
@@ -1349,9 +1443,11 @@ export function TelemetryPage() {
       });
       const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
       if (!res.ok || !data?.ok) return data?.error ?? `Clear failed (${res.status}).`;
+      // The server purge covers every lead_id-null portal row, so the tagged
+      // visitor trails fall with the aggregate block — drop both locally.
       setLoad((prev) =>
         prev.status === "ready"
-          ? { ...prev, anonymous: { visitors: 0, events: 0, topServices: [] } }
+          ? { ...prev, anonymous: { visitors: 0, events: 0, topServices: [] }, visitors: [] }
           : prev,
       );
       fetchAll({ silent: true });
@@ -1363,12 +1459,49 @@ export function TelemetryPage() {
 
   const ready = load.status === "ready" ? load : null;
   const leads = ready?.leads ?? [];
+  const visitors = ready?.visitors ?? [];
   /** Newest-first already (the route orders it) — the opt-out tab shows the
    *  list as recorded, with no re-ranking to choose between. */
   const unsubscribes = ready?.unsubscribes ?? [];
   demoRef.current = ready?.mode === "demo";
 
-  // Funnel gauges: engaged leads → clicks → browsing → conversions.
+  // The table's row set: every attributed lead (they all arrived through the
+  // outreach email channel) plus every source-tagged visitor trail. Visitor
+  // rows borrow the LeadActivity shape — the display name says the channel,
+  // and the localStorage visitorId stands in where the lead uuid would be.
+  const rows = useMemo<ActivityRow[]>(
+    () => [
+      ...leads.map((l) => ({ ...l, channel: OUTREACH_SOURCE, deletable: true })),
+      ...visitors.map((v) => ({
+        leadId: v.visitorId,
+        business: `${sourceLabel(v.source)} visitor`,
+        category: null,
+        campaign: null,
+        firstSeen: v.firstSeen,
+        lastSeen: v.lastSeen,
+        events: v.events,
+        counts: v.counts,
+        channel: v.source,
+        deletable: false,
+      })),
+    ],
+    [leads, visitors],
+  );
+
+  // Channel chips: the two promoted channels always show (a filter the
+  // operator was promised shouldn't appear only after its first click), and
+  // any other tagged source present in the data grows its own chip.
+  const channels = useMemo(() => {
+    const set = new Set<string>(BASE_CHANNELS);
+    for (const v of visitors) set.add(v.source);
+    return [...set];
+  }, [visitors]);
+
+  const activeChannel =
+    channel !== ALL_CHANNELS && channels.includes(channel) ? channel : ALL_CHANNELS;
+
+  // Funnel gauges: engaged leads → clicks → browsing → conversions, then the
+  // two channel/outcome dials (Facebook promotion traffic, opt-outs).
   const stats = useMemo<TelemetryStat[]>(() => {
     if (!ready) return [];
     const t = ready.totals;
@@ -1416,6 +1549,23 @@ export function TelemetryPage() {
         },
       },
       {
+        id: "facebook",
+        label: "Facebook",
+        // Engagements through the promoted link: portal visits stamped
+        // source=facebook (?utm_source= on the post's URL, or a facebook.com
+        // Referer). Views, not uniques — same unit as the Email clicks gauge.
+        value: ready.facebook.views,
+        icon: Facebook,
+        caption:
+          ready.facebook.visitors === 1
+            ? "portal visits · 1 visitor"
+            : `portal visits · ${formatInt(ready.facebook.visitors)} visitors`,
+        ratio: {
+          value: ratio(ready.facebook.inquiries, ready.facebook.views),
+          label: "became enquiries",
+        },
+      },
+      {
         id: "unsubscribed",
         label: "Unsubscribed",
         // Zero and "we couldn't read the list" must not look the same on a
@@ -1437,9 +1587,8 @@ export function TelemetryPage() {
   }, [ready, leads]);
 
   const totalEvents = useMemo(
-    () =>
-      leads.reduce((sum, l) => sum + l.events.filter((e) => !isHiddenEvent(e.event)).length, 0),
-    [leads],
+    () => rows.reduce((sum, r) => sum + r.events.filter((e) => !isHiddenEvent(e.event)).length, 0),
+    [rows],
   );
 
   // The sectors present in the current data — the sector-filter chips are
@@ -1457,16 +1606,19 @@ export function TelemetryPage() {
   // list on an empty filter — fall back to "all" when the pick disappears.
   const activeSector = sector !== ALL_SECTORS && sectors.includes(sector) ? sector : ALL_SECTORS;
 
-  // Filter (by sector) then rank (by the interest control). Time order is the
-  // stable tie-breaker under every sort — uniform ISO-8601 UTC stamps make the
-  // string compare a correct time order, and the live API already sorts
-  // lastSeen-desc, but the demo preset (and payload drift) shouldn't be trusted
-  // to, so "recent" re-sorts explicitly too.
-  const sortedLeads = useMemo(() => {
-    const byRecency = (a: LeadActivity, b: LeadActivity) =>
+  // Filter (by channel, then sector) then rank (by the interest control).
+  // Time order is the stable tie-breaker under every sort — uniform ISO-8601
+  // UTC stamps make the string compare a correct time order, and the live API
+  // already sorts lastSeen-desc, but the demo preset (and payload drift)
+  // shouldn't be trusted to, so "recent" re-sorts explicitly too.
+  const sortedRows = useMemo(() => {
+    const byRecency = (a: ActivityRow, b: ActivityRow) =>
       a.lastSeen < b.lastSeen ? 1 : a.lastSeen > b.lastSeen ? -1 : 0;
-    const filtered =
-      activeSector === ALL_SECTORS ? leads : leads.filter((l) => l.category === activeSector);
+    let filtered =
+      activeChannel === ALL_CHANNELS ? rows : rows.filter((r) => r.channel === activeChannel);
+    if (activeSector !== ALL_SECTORS) {
+      filtered = filtered.filter((r) => r.category === activeSector);
+    }
     const ranked = [...filtered];
     if (sort === "engaged") {
       ranked.sort((a, b) => activeEventCount(b) - activeEventCount(a) || byRecency(a, b));
@@ -1479,33 +1631,33 @@ export function TelemetryPage() {
       ranked.sort(byRecency);
     }
     return ranked;
-  }, [leads, activeSector, sort]);
+  }, [rows, activeChannel, activeSector, sort]);
   // One pager serves both tabs, so the row count it works off is the ACTIVE
   // tab's — and `page` is re-clamped against it, which is what stops a switch
   // from page 3 of the trails to a two-page opt-out list showing nothing.
-  const rowCount = tab === "activity" ? sortedLeads.length : unsubscribes.length;
+  const rowCount = tab === "activity" ? sortedRows.length : unsubscribes.length;
   const pageCount = Math.max(1, Math.ceil(rowCount / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
-  const pagedLeads = useMemo(
-    () => sortedLeads.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
-    [sortedLeads, safePage],
+  const pagedRows = useMemo(
+    () => sortedRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
+    [sortedRows, safePage],
   );
   const pagedUnsubscribes = useMemo(
     () => unsubscribes.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
     [unsubscribes, safePage],
   );
 
-  // Changing the tab, sort or sector re-frames the list — jump back to its
-  // first page so the top of the new ranking is what's on screen.
+  // Changing the tab, sort, channel or sector re-frames the list — jump back
+  // to its first page so the top of the new ranking is what's on screen.
   useEffect(() => {
     setPage(0);
-  }, [tab, sort, activeSector]);
+  }, [tab, sort, activeChannel, activeSector]);
 
-  // "Last signal" is the freshest lead overall, independent of the current
+  // "Last signal" is the freshest trail overall, independent of the current
   // ranking/filter, so it stays a true clock even under "Hottest" or a sector.
   const lastSignal = useMemo(
-    () => leads.reduce<string | null>((max, l) => (!max || l.lastSeen > max ? l.lastSeen : max), null),
-    [leads],
+    () => rows.reduce<string | null>((max, r) => (!max || r.lastSeen > max ? r.lastSeen : max), null),
+    [rows],
   );
 
   return (
@@ -1521,7 +1673,7 @@ export function TelemetryPage() {
               Telemetry
             </h1>
             <p className="mt-1 text-xs text-muted-foreground">
-              Every attributed lead&rsquo;s click trail, from the outreach email to the enquiry.
+              Every click trail — from the outreach email or a tagged social link to the enquiry.
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -1657,7 +1809,6 @@ export function TelemetryPage() {
                 {stats.map((stat) => (
                   <StatCard key={stat.id} stat={stat} />
                 ))}
-                {KPI_FILLER}
               </div>
             ) : (
               <KpiPanelSkeleton />
@@ -1677,7 +1828,7 @@ export function TelemetryPage() {
                   tab={tab}
                   onTab={setTab}
                   counts={{
-                    activity: ready ? leads.length : null,
+                    activity: ready ? rows.length : null,
                     // The exact total, not the page cap — and nothing at all
                     // when the opt-out list couldn't be read.
                     unsubscribed: ready?.unsubscribesAvailable ? ready.unsubscribesTotal : null,
@@ -1690,9 +1841,9 @@ export function TelemetryPage() {
                           ? ready.unsubscribesAvailable
                             ? `${formatInt(ready.unsubscribesTotal)} opted out`
                             : "list unavailable"
-                          : activeSector === ALL_SECTORS
-                            ? `${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"} · ${formatInt(totalEvents)} events`
-                            : `${formatInt(sortedLeads.length)} of ${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"}`}
+                          : activeSector === ALL_SECTORS && activeChannel === ALL_CHANNELS
+                            ? `${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"} · ${formatInt(totalEvents)} events`
+                            : `${formatInt(sortedRows.length)} of ${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"}`}
                     </span>
                   }
                 />
@@ -1704,12 +1855,40 @@ export function TelemetryPage() {
                 >
                   {tab === "activity" ? (
                     <>
-                      {/* interest controls: rank by engagement + narrow by sector, so
-                          the operator can steer the list to where the interest is.
-                          Sort is a segmented control (few, fixed options); Sector is a
-                          dropdown (open-ended — grows with the sectors in the data). */}
-                      {ready && leads.length > 0 && (
+                      {/* interest controls: narrow by channel (which door they
+                          came through), rank by engagement, narrow by sector.
+                          Channel and Sort are segmented controls (few, fixed
+                          options); Sector is a dropdown (open-ended — grows
+                          with the sectors in the data). */}
+                      {ready && rows.length > 0 && (
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border px-4 py-2.5">
+                          <div
+                            className="flex flex-wrap items-center gap-1.5"
+                            role="group"
+                            aria-label="Filter activity by channel"
+                          >
+                            <span className="mr-0.5 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+                              Channel
+                            </span>
+                            {[ALL_CHANNELS, ...channels].map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                data-track="telemetry_channel"
+                                data-track-channel={c}
+                                onClick={() => setChannel(c)}
+                                aria-pressed={activeChannel === c}
+                                className={cn(
+                                  "rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
+                                  activeChannel === c
+                                    ? "border-primary/40 bg-primary/10 text-foreground"
+                                    : "border-border bg-background text-muted-foreground hover:text-foreground",
+                                )}
+                              >
+                                {c === ALL_CHANNELS ? "All" : sourceLabel(c)}
+                              </button>
+                            ))}
+                          </div>
                           <div
                             className="flex flex-wrap items-center gap-1.5"
                             role="group"
@@ -1738,10 +1917,14 @@ export function TelemetryPage() {
                             ))}
                           </div>
                           {sectors.length > 1 && (
-                            <div className="flex items-center gap-1.5">
+                            /* Fused label + select wrapper: the tiny-caps label
+                               sits inside the control as a prefix cell (the
+                               app's fused-panel grammar), so the pair reads as
+                               ONE instrument — and the focus ring wraps both. */
+                            <div className="flex items-stretch overflow-hidden rounded-md border border-border bg-background transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-primary/40">
                               <label
                                 htmlFor="telemetry-sector"
-                                className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground"
+                                className="flex items-center border-r border-border bg-muted/40 px-2 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground"
                               >
                                 Sector
                               </label>
@@ -1755,7 +1938,7 @@ export function TelemetryPage() {
                                   onChange={(e) => setSector(e.target.value)}
                                   data-track="telemetry_sector"
                                   aria-label="Filter lead activity by sector"
-                                  className="h-7 max-w-[13rem] cursor-pointer appearance-none truncate rounded-md border border-border bg-background py-0 pl-2.5 pr-7 text-[11px] font-medium text-foreground outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring"
+                                  className="h-7 max-w-[13rem] cursor-pointer appearance-none truncate bg-transparent py-0 pl-2.5 pr-7 text-[11px] font-medium text-foreground outline-none"
                                 >
                                   <option value={ALL_SECTORS}>All sectors</option>
                                   {sectors.map((s) => (
@@ -1775,26 +1958,31 @@ export function TelemetryPage() {
                       )}
                       {!ready ? (
                         <LeadListSkeleton />
-                      ) : leads.length === 0 ? (
+                      ) : rows.length === 0 ? (
                         <PanelEmpty
                           icon={MousePointerClick}
-                          hint="No attributed clicks yet — trails appear the moment a lead opens a tracked outreach email."
+                          hint="No activity yet — trails appear the moment a lead opens a tracked outreach email or a visitor arrives through a tagged social link."
                         />
-                      ) : sortedLeads.length === 0 ? (
+                      ) : sortedRows.length === 0 ? (
                         <PanelEmpty
                           icon={MousePointerClick}
-                          hint="No leads in this sector — clear the filter to see every attributed trail."
+                          hint={
+                            activeChannel === ALL_CHANNELS
+                              ? "No trails in this sector — clear the filter to see every trail."
+                              : `No ${sourceLabel(activeChannel)} activity yet — trails land here the moment someone real comes through that channel.`
+                          }
                         />
                       ) : (
                         <>
                           <LeadTableHead />
                           <ul>
-                            {pagedLeads.map((lead) => (
+                            {pagedRows.map((lead) => (
                               <LeadRow
                                 key={lead.leadId}
                                 lead={lead}
                                 open={expanded.has(lead.leadId)}
                                 unseen={unseenByLead.get(lead.leadId) ?? 0}
+                                deletable={lead.deletable}
                                 onToggle={toggleLead}
                                 deletePhase={
                                   deleteFlow?.id === lead.leadId
@@ -1864,7 +2052,9 @@ export function TelemetryPage() {
                   anonymous={ready.anonymous}
                   canClear={
                     ready.mode === "live" &&
-                    (ready.anonymous.visitors > 0 || ready.anonymous.events > 0)
+                    (ready.anonymous.visitors > 0 ||
+                      ready.anonymous.events > 0 ||
+                      ready.visitors.length > 0)
                   }
                   onClear={clearAnonymous}
                 />

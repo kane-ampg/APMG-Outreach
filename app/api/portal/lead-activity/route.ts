@@ -7,6 +7,7 @@ import {
   type LeadActivity,
   type LeadActivityCounts,
   type LeadActivityEvent,
+  type SourcedVisitorActivity,
   type UnsubscribedPerson,
 } from "@/lib/portal/server";
 
@@ -14,8 +15,10 @@ import {
 // Telemetry tab: for every ATTRIBUTED lead (someone who clicked the tracked
 // outreach link, so their portal_events rows carry lead_id) the chronological
 // trail of what they did — email click → PDF download → portal view → service
-// opens → enquiry — plus one aggregate block for anonymous portal visitors and
-// the recorded opt-out list (who unsubscribed, and when).
+// opens → enquiry — plus per-visitor trails for SOURCE-TAGGED anonymous
+// visitors (came via the promoted ?utm_source= link: facebook, tiktok, …),
+// one aggregate block for the remaining anonymous portal visitors, and the
+// recorded opt-out list (who unsubscribed, and when).
 // Grouped here in the route (three bounded PostgREST GETs + the leads lookups)
 // rather than in SQL, the same trade-off as /api/portal/summary — at portal
 // traffic volumes that's plenty, and it keeps every read in this repo a plain
@@ -36,6 +39,7 @@ export const runtime = "nodejs";
 const EVENTS_LIMIT = 2000;
 /** Response caps: the tab is a review surface, not an export. */
 const MAX_LEADS = 100;
+const MAX_VISITORS = 50;
 const MAX_EVENTS_PER_LEAD = 50;
 const TOP_SERVICES_LIMIT = 6;
 /** Opt-out rows returned. The KPI count comes from count=exact, so the cap
@@ -74,9 +78,13 @@ const ATTRIBUTED_QUERY =
 const ANON_SELECT = "select=event,props,view,visitor_id,created_at";
 /** Standard PostgREST boolean group — ANDed with the sibling query-string
  *  filters. The identical predicate is re-applied in-route (belt & braces,
- *  and it's what the 400 fallback below relies on). */
+ *  and it's what the 400 fallback below relies on). portal_inquiry_submit is
+ *  fetched ONLY for the sourced-visitor trails: the canonical portal_inquiry
+ *  row is server-emitted without a visitor_id, so the client dup is the one
+ *  record that ties an anonymous enquiry to its visitor — the aggregate
+ *  rollup below still excludes it, exactly as before. */
 const ANON_OR_FILTER =
-  "or=(view.eq.portal,event.in.(portal_view,portal_service_open,portal_inquiry,legal_ack,portal_consent_accept))";
+  "or=(view.eq.portal,event.in.(portal_view,portal_service_open,portal_inquiry,legal_ack,portal_consent_accept,portal_inquiry_submit))";
 const ANON_QUERY =
   `portal_events?${ANON_SELECT}&lead_id=is.null&${ANON_OR_FILTER}` +
   `&order=created_at.desc&limit=${EVENTS_LIMIT}`;
@@ -136,6 +144,7 @@ type LeadBucket = {
  *  always gets the full shape (never mutated, so sharing it is safe). */
 const EMPTY = {
   leads: [] as LeadActivity[],
+  visitors: [] as SourcedVisitorActivity[],
   anonymous: { visitors: 0, events: 0, topServices: [] } as AnonymousPortalActivity,
   unsubscribes: [] as UnsubscribedPerson[],
   unsubscribesTotal: 0,
@@ -419,6 +428,94 @@ export async function GET(req: Request): Promise<Response> {
     };
   });
 
+  // ── sourced visitor trails (the social-promotion loop) ───────────────────
+  // Anonymous rows whose props carry a traffic source (the apmg_src cookie —
+  // ?utm_source=facebook on the promoted portal link, or a recognised social
+  // Referer) are grouped per visitor_id into the same trail shape as an
+  // attributed lead: there is no lead identity to pin the visit to, but "came
+  // from Facebook, browsed Plumbing, enquired" is exactly what the Telemetry
+  // table exists to show. Rows arrive newest-first, so the same accumulator
+  // tricks as byLead apply — and the first non-null source seen is the LATEST
+  // one, matching the apmg_src cookie's last-touch-wins semantics.
+  type VisitorBucket = {
+    source: string | null;
+    firstSeen: string;
+    lastSeen: string;
+    newestFirst: LeadActivityEvent[];
+    counts: LeadActivityCounts;
+    /** client-dup enquiries — the stand-in count when no canonical row ties
+     *  to this visitor (see the ANON_OR_FILTER note) */
+    dupInquiries: number;
+  };
+  const byVisitor = new Map<string, VisitorBucket>();
+  for (const row of anonRows) {
+    if (!row || typeof row.event !== "string" || typeof row.created_at !== "string") continue;
+    if (typeof row.visitor_id !== "string" || !row.visitor_id) continue;
+    const isDup = row.event === INQUIRY_DUP_EVENT;
+    if (row.view !== "portal" && !ANON_PORTAL_EVENT_NAMES.has(row.event) && !isDup) continue;
+
+    let bucket = byVisitor.get(row.visitor_id);
+    if (!bucket) {
+      bucket = {
+        source: null,
+        firstSeen: row.created_at,
+        lastSeen: row.created_at,
+        newestFirst: [],
+        counts: { emailClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0, chatPrompts: 0 },
+        dupInquiries: 0,
+      };
+      byVisitor.set(row.visitor_id, bucket);
+    }
+    bucket.firstSeen = row.created_at; // desc order ⇒ the last row seen is the oldest
+    if (bucket.source === null) bucket.source = propStr(row.props, "source");
+
+    if (row.event === "portal_view") bucket.counts.portalViews += 1;
+    else if (row.event === "portal_service_open") bucket.counts.serviceOpens += 1;
+    else if (row.event === "portal_inquiry") bucket.counts.inquiries += 1;
+    else if (isDup) bucket.dupInquiries += 1;
+
+    if (bucket.newestFirst.length < MAX_EVENTS_PER_LEAD) {
+      bucket.newestFirst.push({
+        event: row.event,
+        service: propStr(row.props, "service"),
+        destination: propStr(row.props, "destination"),
+        version: propStr(row.props, "consent_version") ?? propStr(row.props, "version"),
+        ts: row.created_at,
+      });
+    }
+  }
+
+  // Only tagged visitors get a trail row — the rest stay in the aggregate
+  // block below, so the table never fills with unattributable direct traffic.
+  const sourcedVisitorIds = new Set(
+    [...byVisitor.entries()].filter(([, b]) => b.source !== null).map(([id]) => id),
+  );
+  const visitors: SourcedVisitorActivity[] = [...byVisitor.entries()]
+    .filter(([, b]) => b.source !== null)
+    .sort((a, b) => (a[1].lastSeen < b[1].lastSeen ? 1 : a[1].lastSeen > b[1].lastSeen ? -1 : 0))
+    .slice(0, MAX_VISITORS)
+    .map(([visitorId, bucket]) => {
+      // The canonical portal_inquiry row can't reach an anonymous trail (it is
+      // server-emitted with no visitor_id), so the client dup stands in for it
+      // — counted, and RENAMED in the timeline so the UI's dup-hiding (built
+      // for attributed trails, where both rows appear) doesn't erase the
+      // visitor's one enquiry record. If a canonical row ever does carry the
+      // visitor_id, it wins and the dups drop out, exactly like a lead trail.
+      const useDup = bucket.counts.inquiries === 0 && bucket.dupInquiries > 0;
+      if (useDup) bucket.counts.inquiries = bucket.dupInquiries;
+      const events = bucket.newestFirst
+        .filter((e) => e.event !== INQUIRY_DUP_EVENT || useDup)
+        .map((e) => (e.event === INQUIRY_DUP_EVENT ? { ...e, event: "portal_inquiry" } : e));
+      return {
+        visitorId,
+        source: bucket.source as string,
+        firstSeen: bucket.firstSeen,
+        lastSeen: bucket.lastSeen,
+        events: events.reverse(), // → chronological ASC for the timeline
+        counts: bucket.counts,
+      };
+    });
+
   // ── anonymous portal visitors ─────────────────────────────────────────────
   // Same predicate as the DB or= filter, re-applied so the 400 fallback path
   // (and anything a future filter drift lets through) can't leak internal
@@ -433,6 +530,9 @@ export async function GET(req: Request): Promise<Response> {
     // it, but a view-tagged variant would double-count enquiries — keep the
     // exclusion explicit rather than incidental.
     if (row.event === INQUIRY_DUP_EVENT) continue;
+    // Tagged visitors have their own trail rows above — counting them here
+    // too would show the same person twice on one page.
+    if (typeof row.visitor_id === "string" && sourcedVisitorIds.has(row.visitor_id)) continue;
 
     anonEvents += 1;
     if (typeof row.visitor_id === "string" && row.visitor_id) visitorIds.add(row.visitor_id);
@@ -477,6 +577,7 @@ export async function GET(req: Request): Promise<Response> {
     ok: true,
     mode: "live",
     leads,
+    visitors,
     anonymous,
     unsubscribes,
     unsubscribesTotal,

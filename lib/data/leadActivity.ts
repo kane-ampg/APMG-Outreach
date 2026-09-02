@@ -57,6 +57,23 @@ export interface LeadActivity {
   };
 }
 
+/** One anonymous visitor whose portal events carry a traffic source (the
+ *  apmg_src cookie — a ?utm_source=facebook tagged link or a social Referer),
+ *  grouped into the same trail shape as an attributed lead. No lead identity
+ *  exists (visitorId is the client's random localStorage id), so these rows
+ *  show the channel's engagement, never who the person is. */
+export interface SourcedVisitorActivity {
+  visitorId: string;
+  /** canonical source slug ("facebook", "tiktok", …) — lib/portal/source.ts */
+  source: string;
+  firstSeen: string;
+  lastSeen: string;
+  /** chronological ASC, capped to the most recent 50 by the route */
+  events: LeadActivityEvent[];
+  /** emailClicks / chatPrompts are structurally 0 — both are attributed-only */
+  counts: LeadActivity["counts"];
+}
+
 /** The aggregate card for portal visitors with no attribution cookie. */
 export interface AnonymousActivity {
   visitors: number;
@@ -88,6 +105,8 @@ export interface LeadActivityResponse {
   needsMigration?: boolean;
   /** sorted lastSeen DESC, capped at 100 */
   leads: LeadActivity[];
+  /** source-tagged anonymous trails, sorted lastSeen DESC, capped at 50 */
+  visitors: SourcedVisitorActivity[];
   anonymous: AnonymousActivity;
   /** sorted createdAt DESC, capped at 100 */
   unsubscribes: UnsubscribedPerson[];
