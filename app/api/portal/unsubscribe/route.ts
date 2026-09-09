@@ -1,6 +1,7 @@
 import { isUuid, supabaseTarget } from "@/lib/pipeline/server";
 import {
   isBotRequest,
+  isKnownCampaign,
   isKnownRecipient,
   lookupLead,
   recordUnsubscribe,
@@ -152,6 +153,31 @@ export async function GET(req: Request): Promise<Response> {
     return successPage(email, portalHref);
   }
 
+  /*
+   * THE MANGLED-URL TELL, and the one that actually holds. The rewrite check
+   * above only fires when the local part decodes cleanly to a lead we hold,
+   * and the gateway's transform drifts a letter off ROT13
+   * (`cevtugba.cf@education.vic.gov.au` → `prighton.ps`, not `brighton.ps`),
+   * so it missed 129 rows recorded between 2026-08-26 and 2026-09-03.
+   *
+   * The campaign tag survives where the address does not: we mint it, we write
+   * it into the link, and a real mail client hands it back unchanged. All 129
+   * carried `bhgefbdu-5359`, a tag that has never sent an email.
+   *
+   * BOTH CONDITIONS ARE REQUIRED, and the pairing is the whole safety
+   * argument: the tag is foreign AND the address is on no lead of ours. A real
+   * person opting out from an old or unlogged campaign still has an address we
+   * hold, so `known` is true and their request is recorded. Skipping needs the
+   * link to be unrecognisable in both halves at once, which is a thing only a
+   * rewrite produces.
+   */
+  if (!known && !(await isKnownCampaign(target.base, target.key, campaign))) {
+    console.warn(
+      `[unsubscribe] SKIPPED (mangled link — unknown campaign, unverifiable address): ${email} lead=${leadId || "-"} campaign=${campaign || "-"}`,
+    );
+    return successPage(email, portalHref);
+  }
+
   if (!known) {
     console.warn(
       `[unsubscribe] address not held on any lead, recording anyway: ${email} lead=${leadId || "-"} campaign=${campaign || "-"}`,
@@ -240,6 +266,28 @@ export async function POST(req: Request): Promise<Response> {
   if (rewrittenAs) {
     console.warn(`[unsubscribe] one-click carried a rewritten address: ${email} → ${rewrittenAs}`);
     email = rewrittenAs;
+  }
+
+  /*
+   * A POST IS STILL NOT PROOF OF A PERSON. The note above holds for the bot
+   * FILTER — a provider's one-click POST carries a non-browser user-agent and
+   * must never be judged on it. But a gateway that replays a mangled URL can
+   * replay the method too, and the rows that landed after 2026-08-26 prove
+   * something walked past the GET guard.
+   *
+   * So this applies the one test that reads the LINK rather than the caller:
+   * an unknown campaign tag next to an address held on no lead (see the GET
+   * branch for the full argument). A genuine one-click from Gmail carries our
+   * own tag and a real recipient, and sails through.
+   */
+  if (
+    !(await isKnownRecipient(target.base, target.key, email, leadId)) &&
+    !(await isKnownCampaign(target.base, target.key, campaign))
+  ) {
+    console.warn(
+      `[unsubscribe] one-click SKIPPED (mangled link — unknown campaign, unverifiable address): ${email} lead=${leadId || "-"} campaign=${campaign || "-"}`,
+    );
+    return ok();
   }
 
   const result = await recordUnsubscribe(target.base, target.key, email, { leadId, campaign });

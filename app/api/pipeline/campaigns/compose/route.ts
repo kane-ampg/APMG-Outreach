@@ -9,11 +9,13 @@ import {
   type ComposeDraft,
   type ComposeLeadInput,
 } from "@/lib/pipeline/campaign";
-import { isUuid, sameOrigin } from "@/lib/pipeline/server";
+import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import { serviceBySlug, type ServiceTemplate } from "@/lib/pipeline/services";
 import { buildComposeKb, loadPlaybooks } from "@/lib/pipeline/sectorStore";
+import { readLeadHistories } from "@/lib/pipeline/leadHistory";
 import { draftEmail } from "@/lib/ai/composeEmail";
 import { COMPOSE_ANGLES } from "@/lib/ai/composePrompt";
+import { buildFollowUpPrompt, FOLLOW_UP_ANGLES, type LeadHistory } from "@/lib/ai/followUpPrompt";
 import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeStore";
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
@@ -54,6 +56,8 @@ interface ComposeResult {
   results?: ComposeDraft[];
   /** how many leads Claude actually drafted (the rest are template fallbacks). */
   drafted?: number;
+  /** how many of the drafts were written as follow-ups (leads already emailed). */
+  followUps?: number;
   /** retained for the client contract; always 0 now that we no longer scrape. */
   saved?: number;
   error?: string;
@@ -89,14 +93,16 @@ async function draftForLead(
   promptCfg: ComposePromptConfig,
   angle: string,
   service: ServiceTemplate | null,
+  history: LeadHistory | null,
 ): Promise<{ draft: ComposeDraft; ai: boolean }> {
-  const base = demoDraft(lead, service);
+  const base = demoDraft(lead, service, history !== null);
   const drafted = await draftEmail(
     { business: lead.name, category: lead.category, website: lead.website },
     kb,
     promptCfg,
     angle,
     service ? serviceFocusPrompt(service) : undefined,
+    buildFollowUpPrompt(history) || undefined,
   );
   if (!drafted) return { draft: base, ai: false };
   const subject = drafted.subject.slice(0, MAX_SUBJECT);
@@ -159,10 +165,33 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, mode: "noop", error: "No valid stored leads to compose for." }, 400);
   }
 
+  // Which of these leads have we already emailed, and what did they go on to
+  // look at? One batched read of the `email_sent` ledger + the journey trail
+  // (lib/pipeline/leadHistory). A lead in this map is drafted as a FOLLOW-UP —
+  // it opens by acknowledging the earlier email and, where the trail says so,
+  // leads with the services they came back to. Leads absent from it (and every
+  // lead, if the read fails or Supabase is unset) compose cold, exactly as
+  // before.
+  const sb = supabaseTarget();
+  const histories =
+    sb.state === "ok"
+      ? await readLeadHistories(sb.base, sb.key, leads.map((l) => l.id), "compose")
+      : new Map<string, LeadHistory>();
+  const historyFor = (id: string): LeadHistory | null => histories.get(id) ?? null;
+  const followUps = leads.reduce((n, l) => n + (histories.has(l.id) ? 1 : 0), 0);
+
   // No API key → deterministic template for every lead (demo mode). Still fully
-  // reviewable and sendable; just not AI-written.
+  // reviewable and sendable; just not AI-written. Previously-emailed leads still
+  // get the follow-up template rather than a repeat introduction.
   if (!process.env.ANTHROPIC_API_KEY) {
-    return json({ ok: true, mode: "demo", campaign, results: leads.map((l) => demoDraft(l, service)), saved: 0 });
+    return json({
+      ok: true,
+      mode: "demo",
+      campaign,
+      results: leads.map((l) => demoDraft(l, service, historyFor(l.id) !== null)),
+      followUps,
+      saved: 0,
+    });
   }
 
   // Ground each draft in the sector KB for its Category (general company file +
@@ -227,12 +256,13 @@ export async function POST(req: Request): Promise<Response> {
       const i = cursor++;
       if (i >= leads.length) return;
       const lead = leads[i];
+      const history = historyFor(lead.id);
       // Out of wall-clock budget — template-fill the rest instantly so the
       // response beats the platform kill instead of 504ing the whole batch.
       // Checked before the gate so a backed-up gate queue drains to templates
       // rather than pushing the function past the deadline.
       if (SOFT_DEADLINE_MS - (Date.now() - startedAt) <= 0) {
-        results[i] = demoDraft(lead, service);
+        results[i] = demoDraft(lead, service, history !== null);
         continue;
       }
       // Pace this call under the RPM ceiling before spending any budget on it.
@@ -240,18 +270,22 @@ export async function POST(req: Request): Promise<Response> {
       // Re-check the deadline: the gate may have made us wait.
       const remaining = SOFT_DEADLINE_MS - (Date.now() - startedAt);
       if (remaining <= 0) {
-        results[i] = demoDraft(lead, service);
+        results[i] = demoDraft(lead, service, history !== null);
         continue;
       }
       // Rotate the writing angle per lead so same-sector emails in one batch
       // don't converge on a single shape (each draft is an independent call).
-      const angle = COMPOSE_ANGLES[i % COMPOSE_ANGLES.length];
+      // Follow-ups rotate their OWN set: a second email built on the same six
+      // cold-intro angles as the first is the one thing it must not read like.
+      const angle = history
+        ? FOLLOW_UP_ANGLES[i % FOLLOW_UP_ANGLES.length]
+        : COMPOSE_ANGLES[i % COMPOSE_ANGLES.length];
       // Cap the draft at the remaining budget too: one call grinding through
       // 429 backoffs must not carry the function past the deadline.
       const { draft, ai } = await withDeadline(
-        draftForLead(lead, await kbFor(lead.category), promptCfg, angle, service),
+        draftForLead(lead, await kbFor(lead.category), promptCfg, angle, service, history),
         remaining,
-        { draft: demoDraft(lead, service), ai: false },
+        { draft: demoDraft(lead, service, history !== null), ai: false },
       );
       results[i] = draft;
       if (ai) drafted += 1;
@@ -268,7 +302,19 @@ export async function POST(req: Request): Promise<Response> {
   // Key set but every draft fell back to the template (bad key, outage, all
   // refusals) → report demo, so the UI flags "demo drafts" instead of passing
   // identical template copy off as per-lead AI writing.
-  return json({ ok: true, mode: drafted > 0 ? "live" : "demo", campaign, results, drafted, saved: 0 });
+  if (followUps > 0) {
+    console.info(`[compose] ${followUps} of ${leads.length} leads drafted as follow-ups (already emailed).`);
+  }
+
+  return json({
+    ok: true,
+    mode: drafted > 0 ? "live" : "demo",
+    campaign,
+    results,
+    drafted,
+    followUps,
+    saved: 0,
+  });
 }
 
 /** Race `work` against a wall-clock budget, resolving with `fallback` when the

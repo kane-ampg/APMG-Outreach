@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { parseLeadsCsv, type ParsedCsv } from "@/lib/pipeline/csv";
+import { LEAD_SOURCES, SOURCE_LABEL } from "@/lib/pipeline/source";
 import { useLeadStats, type LeadStatsState } from "@/lib/data/useLeadStats";
 import { formatInt } from "@/lib/format";
 import { useRbac } from "@/lib/rbac/RbacProvider";
@@ -24,6 +25,7 @@ import { Reveal } from "./Reveal";
 import { SignalLed } from "./SignalLed";
 import { LeadsTableView } from "./pipeline/LeadsTable";
 import { SendCampaigns } from "./pipeline/SendCampaigns";
+import { SourceComparison } from "./pipeline/SourceComparison";
 import { MigrationCard, StoredLeadsPanel } from "./pipeline/StoredLeads";
 import { UnsubscribedList } from "./pipeline/UnsubscribedList";
 import { StepRail, type FlowStep, type StepStatus } from "./pipeline/StepRail";
@@ -626,6 +628,11 @@ function PipelineLeads() {
         <PipelineStats state={statsState} />
       </Reveal>
 
+      {/* Google vs Bing lead quality — loads on demand, off the polling path */}
+      <Reveal delay={0.045} className="mb-3">
+        <SourceComparison refreshSignal={refreshSignal} />
+      </Reveal>
+
       {/* the n8n-style step rail — nodes are clickable to switch the view */}
       <Reveal delay={0.06} className="mb-3">
         <StepRail steps={steps} selected={selected} onSelect={setSelected} />
@@ -1044,10 +1051,62 @@ function ParsedView({
         </span>
       </div>
       <LeadsTableView rows={parsed.rows} emptyHint="No rows parsed from this file." />
-      {parsed.skipped > 0 && (
+      <ImportNotes parsed={parsed} />
+    </div>
+  );
+}
+
+/**
+ * What the parse decided, stated plainly: which scraper the file came from,
+ * what was dropped and why, and — the one that decides whether this import is
+ * sendable at all — whether any row carries an email address.
+ */
+function ImportNotes({ parsed }: { parsed: ParsedCsv }) {
+  const present = LEAD_SOURCES.filter((s) => parsed.sources[s] > 0);
+  const count = parsed.rows.length;
+  const noEmails = count > 0 && parsed.withEmail === 0;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {present.map((s) => (
+          <span
+            key={s}
+            className="rounded-md border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground"
+          >
+            {SOURCE_LABEL[s]} · {parsed.sources[s].toLocaleString("en-US")}
+          </span>
+        ))}
+        <span className="rounded-md border border-border bg-muted/40 px-2 py-0.5 font-mono text-[10.5px] uppercase tracking-[0.12em] text-muted-foreground">
+          With email · {parsed.withEmail.toLocaleString("en-US")}
+        </span>
+      </div>
+
+      {(parsed.duplicates > 0 || parsed.skipped > 0) && (
         <p className="font-mono text-[10.5px] text-muted-foreground">
-          {parsed.skipped.toLocaleString("en-US")} row
-          {parsed.skipped === 1 ? "" : "s"} skipped (no business name).
+          {parsed.duplicates > 0 && (
+            <>
+              {parsed.duplicates.toLocaleString("en-US")} duplicate listing
+              {parsed.duplicates === 1 ? "" : "s"} dropped (the same business repeated in this file)
+              {parsed.skipped > 0 ? " · " : "."}
+            </>
+          )}
+          {parsed.skipped > 0 && (
+            <>
+              {parsed.skipped.toLocaleString("en-US")} row
+              {parsed.skipped === 1 ? "" : "s"} skipped (no business name).
+            </>
+          )}
+        </p>
+      )}
+
+      {noEmails && (
+        <p className="flex items-start gap-1.5 font-mono text-[10.5px] text-muted-foreground">
+          <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-destructive" aria-hidden />
+          <span>
+            No email addresses in this file — a maps export carries none. These leads are storable
+            and callable, but not sendable until enrichment finds an address for them.
+          </span>
         </p>
       )}
     </div>

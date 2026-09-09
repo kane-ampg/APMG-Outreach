@@ -56,19 +56,27 @@ export async function draftEmail(
   config?: ComposePromptConfig,
   angle?: string,
   serviceFocus?: string,
+  followUp?: string,
 ): Promise<DraftedEmail | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const knowledge = kb.trim();
   const cfg = config ?? (await loadComposePrompt());
-  // Per-lead writing angle (rotated by the compose route) and the campaign's
-  // service focus (Step 2 template picker) — appended to the user message, NOT
-  // the system prefix, so the cacheable KB block stays stable (and the saved
-  // compose_prompt DB override keeps working) while same-sector emails still
-  // come out varied / service-led.
+  // Per-lead writing angle (rotated by the compose route), the campaign's
+  // service focus (Step 2 template picker), and — for a lead we have already
+  // emailed — the follow-up block (lib/ai/followUpPrompt) — appended to the
+  // user message, NOT the system prefix, so the cacheable KB block stays stable
+  // (and the saved compose_prompt DB override keeps working) while same-sector
+  // emails still come out varied / service-led.
+  //
+  // The follow-up block goes LAST: it is the instruction most likely to
+  // conflict with the generic ones above it ("open by addressing the
+  // recipient's business" vs "open by acknowledging your earlier email"), and
+  // the later instruction is the one that should win.
   const leadMessage =
     renderLeadPrompt(cfg.leadPromptTemplate, facts) +
     (serviceFocus ? `\n${serviceFocus}` : "") +
-    (angle ? `\nAngle to lead with (for variety across this batch): ${angle}` : "");
+    (angle ? `\nAngle to lead with (for variety across this batch): ${angle}` : "") +
+    (followUp ? `\n\n${followUp}` : "");
 
   // Bound a single hung/slow draft (the compose route runs a small worker pool
   // under a fixed maxDuration); on timeout we degrade to the template.

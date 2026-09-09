@@ -172,7 +172,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   const [draftMode, setDraftMode] = useState<DraftMode>("template");
   const [composePhase, setComposePhase] = useState<ComposePhase>("idle");
   const [composeError, setComposeError] = useState<string | null>(null);
-  const [composeInfo, setComposeInfo] = useState<{ mode: "live" | "demo"; saved: number; drafted: number } | null>(null);
+  const [composeInfo, setComposeInfo] = useState<{ mode: "live" | "demo"; saved: number; drafted: number; followUps: number } | null>(null);
   const [drafts, setDrafts] = useState<ComposeDraft[]>([]);
   // draft ids approved for the send (review one by one, or select all at once)
   const [approved, setApproved] = useState<Set<string>>(new Set());
@@ -249,6 +249,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     done: Map<string, ComposeDraft>;
     drafted: number;
     saved: number;
+    followUps: number;
     anyLive: boolean;
   } | null>(null);
   useEffect(() => {
@@ -773,6 +774,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     const done = prior?.done ?? new Map<string, ComposeDraft>();
     let drafted = prior?.drafted ?? 0;
     let saved = prior?.saved ?? 0;
+    let followUps = prior?.followUps ?? 0;
     let anyLive = prior?.anyLive ?? false;
     setComposeDone(done.size);
 
@@ -787,6 +789,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       mode?: "live" | "demo";
       results?: ComposeDraft[];
       drafted?: number;
+      followUps?: number;
       saved?: number;
       error?: string;
     };
@@ -827,7 +830,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       const data = out?.data;
       if (!out || !data?.ok || !Array.isArray(data.results)) {
         // park the finished drafts so Try again resumes instead of restarting
-        composePartialRef.current = { key, done, drafted, saved, anyLive };
+        composePartialRef.current = { key, done, drafted, saved, followUps, anyLive };
         const detail = !out
           ? "Network error reaching the composer."
           : data?.error ?? `The composer responded ${out.status}.`;
@@ -841,6 +844,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       }
       for (const d of data.results) done.set(d.id, d);
       drafted += data.drafted ?? 0;
+      followUps += data.followUps ?? 0;
       saved += data.saved ?? 0;
       if ((data.mode ?? "demo") === "live") anyLive = true;
       setComposeDone(done.size);
@@ -859,7 +863,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     // everything sendable starts approved — deselect while reviewing
     setApproved(new Set(results.filter(draftSendable).map((d) => d.id)));
     setDraftIdx(0);
-    setComposeInfo({ mode: anyLive ? "live" : "demo", saved, drafted });
+    setComposeInfo({ mode: anyLive ? "live" : "demo", saved, drafted, followUps });
     // record the composed audience so an audience change invalidates these drafts
     composedIdsRef.current = new Set(batch.map((r) => r.id!));
     setComposePhase("ready");
@@ -2253,7 +2257,7 @@ function DraftsReviewPanel({
   drafts: ComposeDraft[];
   approved: Set<string>;
   index: number;
-  info: { mode: "live" | "demo"; saved: number; drafted: number } | null;
+  info: { mode: "live" | "demo"; saved: number; drafted: number; followUps: number } | null;
   serviceName: string | null;
   batchLabel: string | null;
   campaignTag: string;
@@ -2283,7 +2287,7 @@ function DraftsReviewPanel({
         <PhaseHeader
           icon={Sparkles}
           title="Review AI drafts"
-          meta={`${batchLabel ? `${batchLabel} · ` : ""}${serviceName ? `${serviceName} · ` : ""}${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : info && info.drafted < drafts.length ? ` · ${info.drafted.toLocaleString("en-US")} AI-written` : ""}`}
+          meta={`${batchLabel ? `${batchLabel} · ` : ""}${serviceName ? `${serviceName} · ` : ""}${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : info && info.drafted < drafts.length ? ` · ${info.drafted.toLocaleString("en-US")} AI-written` : ""}${info?.followUps ? ` · ${info.followUps.toLocaleString("en-US")} follow-up${info.followUps === 1 ? "" : "s"}` : ""}`}
         />
         <div className="flex items-center gap-2">
           <button

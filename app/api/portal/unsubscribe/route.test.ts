@@ -5,6 +5,7 @@ vi.mock("server-only", () => ({}));
 const recordUnsubscribe = vi.fn();
 const isKnownRecipient = vi.fn();
 const rewrittenRecipient = vi.fn();
+const isKnownCampaign = vi.fn();
 
 vi.mock("@/lib/portal/server", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/portal/server")>();
@@ -14,6 +15,7 @@ vi.mock("@/lib/portal/server", async (importOriginal) => {
     isKnownRecipient: (...a: unknown[]) => isKnownRecipient(...a),
     recordUnsubscribe: (...a: unknown[]) => recordUnsubscribe(...a),
     rewrittenRecipient: (...a: unknown[]) => rewrittenRecipient(...a),
+    isKnownCampaign: (...a: unknown[]) => isKnownCampaign(...a),
   };
 });
 
@@ -43,6 +45,8 @@ beforeEach(() => {
   isKnownRecipient.mockReset().mockResolvedValue(true);
   // Ordinary opt-outs are not rewrites; the tests that care say otherwise.
   rewrittenRecipient.mockReset().mockResolvedValue(null);
+  // Ordinary opt-outs carry a tag that has sent mail.
+  isKnownCampaign.mockReset().mockResolvedValue(true);
 });
 
 describe("GET /api/portal/unsubscribe — scanner detonation", () => {
@@ -98,6 +102,7 @@ describe("POST — RFC 8058 one-click unsubscribe", () => {
   beforeEach(() => {
     recordUnsubscribe.mockResolvedValue("ok");
     isKnownRecipient.mockResolvedValue(true);
+    isKnownCampaign.mockResolvedValue(true);
   });
 
   it("records the opt-out from the address in the URL", async () => {
@@ -213,5 +218,98 @@ describe("POST /api/portal/unsubscribe — rewritten one-click", () => {
     expect(res.status).toBe(200);
     expect(recordUnsubscribe).toHaveBeenCalledOnce();
     expect(recordUnsubscribe.mock.calls[0][2]).toBe(REAL);
+  });
+});
+
+/* ── mangled links: the campaign tag ─────────────────────────────────────────
+   The ROT13 check above only fires when the local part decodes to a lead we
+   hold, and the gateway's transform drifts a letter off ROT13
+   (`cevtugba.cf@education.vic.gov.au` decodes to `prighton.ps`, not the real
+   `brighton.ps`). 129 fake opt-outs landed through that gap between
+   2026-08-26 and 2026-09-03, every one under `bhgefbdu-5359` — a campaign tag
+   that has never sent an email. The tag is the half of the URL that stays
+   recognisable, so it is what we judge. */
+
+const MANGLED = "cybdxchea.uf@education.vic.gov.au"; // a real 2026-09-03 row
+const FAKE_TAG = "bhgefbdu-5359";
+
+function link(email: string, tag: string, ua = BROWSER_UA): Request {
+  return new Request(
+    `https://customer.apmgservices.com.au/api/portal/unsubscribe?e=${encodeURIComponent(email)}&lead=${LEAD}&c=${tag}`,
+    { headers: { "user-agent": ua } },
+  );
+}
+
+describe("GET /api/portal/unsubscribe — mangled campaign tag", () => {
+  it("records nothing when the tag never sent mail AND the address is on no lead", async () => {
+    isKnownRecipient.mockResolvedValue(false);
+    rewrittenRecipient.mockResolvedValue(null); // the drifted decode matches nothing
+    isKnownCampaign.mockResolvedValue(false);
+
+    const res = await GET(link(MANGLED, FAKE_TAG));
+
+    expect(res.status).toBe(200);
+    expect(recordUnsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("RECORDS when the tag is unknown but the address is one we hold", async () => {
+    // A person opting out from an old or unlogged campaign. Both halves of the
+    // link must be unrecognisable before a write is skipped.
+    isKnownRecipient.mockResolvedValue(true);
+    isKnownCampaign.mockResolvedValue(false);
+
+    await GET(link("coburg@pelicanchildcare.com.au", "outreach-2025"));
+
+    expect(recordUnsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("RECORDS when the address is unverifiable but the tag really sent mail", async () => {
+    isKnownRecipient.mockResolvedValue(false);
+    rewrittenRecipient.mockResolvedValue(null);
+    isKnownCampaign.mockResolvedValue(true);
+
+    await GET(link("someone@newbusiness.com.au", "outreach-2026"));
+
+    expect(recordUnsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it("shows the skipped caller the identical page", async () => {
+    isKnownCampaign.mockResolvedValue(true);
+    const recorded = await (await GET(link(MANGLED, "outreach-2026"))).text();
+    isKnownRecipient.mockResolvedValue(false);
+    isKnownCampaign.mockResolvedValue(false);
+    const skipped = await (await GET(link(MANGLED, FAKE_TAG))).text();
+    expect(skipped).toBe(recorded);
+  });
+});
+
+describe("POST /api/portal/unsubscribe — mangled one-click", () => {
+  function oneClick(query: string): Request {
+    return new Request(`http://local/api/portal/unsubscribe${query}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: "List-Unsubscribe=One-Click",
+    });
+  }
+
+  it("records nothing when a gateway replays a mangled URL as a POST", async () => {
+    isKnownRecipient.mockResolvedValue(false);
+    rewrittenRecipient.mockResolvedValue(null);
+    isKnownCampaign.mockResolvedValue(false);
+
+    const res = await POST(oneClick(`?e=${encodeURIComponent(MANGLED)}&c=${FAKE_TAG}`));
+
+    expect(res.status).toBe(200);
+    expect(recordUnsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("still records a genuine Gmail one-click", async () => {
+    isKnownRecipient.mockResolvedValue(true);
+    isKnownCampaign.mockResolvedValue(true);
+
+    const res = await POST(oneClick(`?e=linda%404iac.com.au&lead=${LEAD}&c=outreach-2026`));
+
+    expect(res.status).toBe(200);
+    expect(recordUnsubscribe).toHaveBeenCalledOnce();
   });
 });

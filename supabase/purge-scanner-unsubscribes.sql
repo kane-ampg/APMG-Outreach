@@ -21,6 +21,42 @@
 -- landed. Run it AFTER that code is deployed, or the rows come straight back.
 --
 --   Supabase dashboard -> SQL Editor -> New query -> paste -> Run.
+--
+-- ═══ IT HAPPENED AGAIN. 2026-08-26 → 2026-09-03: 129 MORE ROWS. ═══════════
+--
+-- Same tag, `bhgefbdu-5359`, every row landing AFTER the fix above. Two holes:
+--
+--   1. isBotRequest reads the User-Agent, and this gateway presents a browser
+--      string. The ROT13 tell (rewrittenRecipient) was meant to catch that,
+--      but the transform is only NEARLY ROT13 — `cevtugba.cf` decodes to
+--      `prighton.ps`, one letter off the real `brighton.ps` — so the decoded
+--      address matched no lead and the check passed. It fired on 1 of 130.
+--   2. The one-click POST path applied no link test at all, on the reasoning
+--      that "a POST is never speculative".
+--
+-- Blast radius, which is the part that matters: fetchSuppressedDomains rolls an
+-- opt-out up to its DOMAIN, and the domain in a rewritten row is real. Junk
+-- rows on education.vic.gov.au, edumail.vic.gov.au and eq.edu.au had therefore
+-- muted EVERY VIC and QLD state school. 89 organisations in total.
+--
+-- FIXED IN CODE 2026-09-08, three ways:
+--   * isKnownCampaign (lib/portal/server.ts) — the campaign tag is a value WE
+--     mint and a real mail client returns unchanged, so a tag with no
+--     `email_sent` ledger row behind it means the URL was mangled in transit.
+--     `outreach-2026` is the only tag that has ever sent mail. Both the GET and
+--     the POST path now skip the write when the tag is foreign AND the address
+--     is held on no lead. Both halves are required: a person opting out from an
+--     old campaign still has an address we hold.
+--   * fetchSuppressedDomains now widens to a domain only for a row whose
+--     address is held on a lead. Exact-address suppression is untouched and
+--     stays unconditional — that is the Spam Act promise.
+--   * The whole-of-government school domains are in SHARED_MAIL_DOMAINS, so no
+--     single request can ever mute a state's schools again.
+--
+-- RUN 2026-09-08: deleted 129 rows, left 7 (5 real opt-outs, 1 bounce, 1 test
+-- probe). The section-2 and section-4 expectations below are the ORIGINAL
+-- 2026-08-26 numbers; read them as "3 rows plus whatever has legitimately
+-- arrived since".
 
 -- ── 1. REVIEW FIRST. Run this on its own and read the output. ───────────────
 -- Everything about to be deleted. Expect ~41 rows, every local part obviously
@@ -58,7 +94,7 @@ delete from public.email_suppression
    and campaign is not null
    and campaign not in ('outreach-2026', 'outreach', 'warmup-manual', 'warmup-followup');
 
--- ── 4. CONFIRM. Should leave 3 rows. ───────────────────────────────────────
+-- ── 4. CONFIRM. Only genuine rows left (3 as at 2026-08-26; 7 at 2026-09-08).
 select count(*) as remaining,
        count(*) filter (where reason = 'unsubscribe')   as real_optouts,
        count(*) filter (where reason like 'bounce%')    as bounces

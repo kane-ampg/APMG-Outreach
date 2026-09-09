@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Eye, Inbox, RefreshCw, Send } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { bestEmail } from "@/lib/pipeline/campaign";
+import { leadSource, SOURCE_LABEL } from "@/lib/pipeline/source";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -51,6 +52,26 @@ function Dash() {
 
 function prettyUrl(url: string): string {
   return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
+
+/** Which scraper this lead came from, read off its maps URL — see
+ *  lib/pipeline/source.ts for why it is derived rather than stored. */
+function SourceBadge({ url }: { url?: string | null }) {
+  const source = leadSource(url);
+  if (source === "unknown") return <Dash />;
+  return (
+    <span
+      title={`Scraped from ${SOURCE_LABEL[source]} Maps`}
+      className={cn(
+        "inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[11px] font-semibold ring-1 ring-inset",
+        source === "google"
+          ? "bg-primary/10 text-primary ring-primary/20"
+          : "bg-muted text-muted-foreground ring-border",
+      )}
+    >
+      {SOURCE_LABEL[source]}
+    </span>
+  );
 }
 
 /** Presentational table for a set of leads. Pass `selection` for a checkbox
@@ -139,6 +160,7 @@ export function LeadsTableView({
               </TableHead>
             )}
             <TableHead className="text-[12px]">Business</TableHead>
+            <TableHead className="text-[12px]">Source</TableHead>
             <TableHead className="text-[12px]">Website</TableHead>
             <TableHead className="text-[12px]">Phone</TableHead>
             <TableHead className="text-[12px]">Email</TableHead>
@@ -204,6 +226,9 @@ export function LeadsTableView({
                       {r.address}
                     </div>
                   )}
+                </TableCell>
+                <TableCell>
+                  <SourceBadge url={r.bing_maps_url} />
                 </TableCell>
                 <TableCell className="max-w-[220px]">
                   {r.website ? (

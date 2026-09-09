@@ -594,6 +594,59 @@ export async function rewrittenRecipient(
   return (await isKnownRecipient(base, key, decoded)) ? decoded : null;
 }
 
+/**
+ * Has this campaign tag ever actually sent an email?
+ *
+ * THE STRONGEST TELL WE HAVE, and the only one that survived. A campaign tag
+ * is a value WE mint and write into the link ourselves; a recipient's mail
+ * client returns it byte for byte. So a tag with no `email_sent` ledger row
+ * behind it cannot have come from a message we sent — the URL was mangled in
+ * transit.
+ *
+ * WHY NOT JUST rewrittenRecipient. That reads a rotated local part, and the
+ * gateway's transform is only NEARLY ROT13: `cevtugba.cf@education.vic.gov.au`
+ * decodes to `prighton.ps`, one letter off the real `brighton.ps`, so the
+ * decode matches no lead and the check misses. 129 fake opt-outs landed
+ * between 2026-08-26 and 2026-09-03 through exactly that gap — every one of
+ * them under the tag `bhgefbdu-5359`, which has never sent an email. The tag
+ * is intact enough to recognise as foreign even when the address is not
+ * recoverable at all.
+ *
+ * Fails OPEN (true) on an empty tag, a lookup error, or a missing table: a
+ * broken query must never make a real opt-out look forged. The caller pairs
+ * this with an unverifiable address before it skips a write.
+ */
+export async function isKnownCampaign(
+  base: string,
+  key: string,
+  campaign: string | null | undefined,
+): Promise<boolean> {
+  const tag = (campaign || "").trim();
+  if (!tag) return true; // no tag to judge — this says nothing either way
+  if (tag.length > MAX_CAMPAIGN_LEN || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(tag)) {
+    return false; // not a shape safeCampaignTag can ever have produced
+  }
+  try {
+    const res = await fetch(
+      `${base}/rest/v1/portal_events?select=campaign&event=eq.${SENT_EVENT}&campaign=eq.${encodeURIComponent(tag)}&limit=1`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: "no-store" },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      if (!isMissingPortalTable(res.status, detail)) {
+        console.error(`[portal] campaign ledger lookup ${res.status}:`, detail.slice(0, 300));
+      }
+      return true; // fail open
+    }
+    const rows = await res.json().catch(() => null);
+    if (!Array.isArray(rows)) return true;
+    return rows.length > 0;
+  } catch (e) {
+    console.error("[portal] campaign ledger lookup failed:", e);
+    return true; // fail open
+  }
+}
+
 /** Record an opt-out (idempotent upsert on lower(email)). Returns "ok",
  *  "needs_migration" when the table is absent, or "error" on anything else —
  *  the endpoint still shows the customer a success page regardless, but a
@@ -690,6 +743,25 @@ const SHARED_MAIL_DOMAINS = new Set([
   "tpg.com.au", "internode.on.net", "westnet.com.au", "dodo.com.au",
   "adam.com.au", "exemail.com.au", "ozemail.com.au", "netspace.net.au",
   "aussiebroadband.com.au", "spin.net.au", "hotkey.net.au",
+  /*
+   * WHOLE-OF-GOVERNMENT SCHOOL DOMAINS. Every state school in a jurisdiction
+   * shares one mail domain — `thomastown.meadows.ps@education.vic.gov.au` and
+   * `eltham.ps@education.vic.gov.au` are different schools, different people,
+   * hundreds of kilometres apart. Rolling an opt-out up to the domain here
+   * would mute EVERY state school in the state off one request, which is
+   * exactly what happened on 2026-09-03: one junk row on education.vic.gov.au
+   * silently removed every VIC school from the sendable list, and one on
+   * eq.edu.au did the same to Queensland.
+   *
+   * These are no more an "organisation" than gmail.com. Exact-address
+   * suppression is unaffected — only the domain rollup is.
+   */
+  "education.vic.gov.au", "edumail.vic.gov.au", "schools.vic.edu.au",
+  "eq.edu.au", "qed.qld.gov.au",
+  "education.nsw.gov.au", "det.nsw.edu.au", "schools.nsw.gov.au",
+  "sa.edu.au", "schools.sa.edu.au",
+  "education.tas.edu.au", "education.wa.edu.au", "ed.act.edu.au",
+  "education.nt.gov.au", "ntschools.net",
 ]);
 
 /** Only ever `[a-z0-9.-]`, so the value is safe to splice into a PostgREST
@@ -745,14 +817,47 @@ export async function fetchSuppressedDomains(
       return new Map();
     }
     const rows = (await res.json().catch(() => [])) as Array<{ email?: unknown }>;
-    const out = new Map<string, string>();
+    const candidates: Array<{ address: string; domain: string }> = [];
     for (const r of rows) {
       if (typeof r.email !== "string") continue;
       const address = r.email.trim().toLowerCase();
       const domain = organisationDomain(address);
       // ilike is a suffix match, so re-check the domain is one we asked about —
       // never let "@notjennyselc.com.au" answer for "@jennyselc.com.au".
-      if (domain && domains.includes(domain) && !out.has(domain)) out.set(domain, address);
+      if (domain && domains.includes(domain)) candidates.push({ address, domain });
+    }
+    if (candidates.length === 0) return new Map();
+
+    /*
+     * ONLY A VERIFIABLE ADDRESS MUTES AN ORGANISATION. Exact-address
+     * suppression (fetchSuppressedEmails) honours every row unconditionally —
+     * that is the Spam Act promise and it stays absolute. Widening one row to
+     * an entire organisation is a different act, and it needs the row to name
+     * an address we actually hold.
+     *
+     * WHY. A rewritten row carries a mangled local part on a REAL domain, so
+     * the rollup keyed on the domain and nothing else. 129 of them muted 89
+     * organisations — including every VIC and QLD state school — off requests
+     * no person ever made. A junk address is held on no lead, so this test
+     * drops it while leaving every genuine opt-out's rollup intact.
+     *
+     * Cost is one lookup per matched domain (usually zero, occasionally a
+     * handful), and a lookup failure returns false there — which only ever
+     * narrows the rollup, never blocks a send.
+     */
+    const verified = await Promise.all(
+      candidates.map((c) => isKnownRecipient(base, key, c.address).catch(() => false)),
+    );
+    const out = new Map<string, string>();
+    for (let i = 0; i < candidates.length; i++) {
+      const { address, domain } = candidates[i];
+      if (!verified[i]) {
+        console.warn(
+          `[portal] domain rollup ignored an unverifiable suppression row: ${address} (would have muted all of ${domain})`,
+        );
+        continue;
+      }
+      if (!out.has(domain)) out.set(domain, address);
     }
     return out;
   } catch (e) {

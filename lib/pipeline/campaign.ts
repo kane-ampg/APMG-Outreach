@@ -370,21 +370,63 @@ export function ctaLabel(category: string | null): string {
  *  the review UI is always exercisable. When a service template is selected
  *  (Step 2 Compose), the fallback is that service's shared template instead of
  *  the generic multi-trade copy, so a Claude miss still pitches the right
- *  service. */
-export function demoDraft(lead: ComposeLeadInput, service?: ServiceTemplate | null): ComposeDraft {
+ *  service.
+ *
+ *  `followUp` marks a lead the `email_sent` ledger says we have already mailed.
+ *  It matters most HERE, on the fallback path: without it, a Claude miss on a
+ *  previously-emailed lead would post the cold introduction to them a second
+ *  time, opening "APMG Services is a Melbourne-based..." to someone who was
+ *  told exactly that a fortnight ago. The follow-up copy is deliberately plain
+ *  and short — the AI draft is where the tailoring lives; this is the safety
+ *  net that has to be merely correct. */
+export function demoDraft(
+  lead: ComposeLeadInput,
+  service?: ServiceTemplate | null,
+  followUp = false,
+): ComposeDraft {
   const emails = (lead.emails ?? []).map((e) => e.trim().toLowerCase()).filter(isEmail).slice(0, MAX_DRAFT_EMAILS);
   const category = (lead.category ?? "").trim() || null;
   const trade = sectorPhrase(category);
   const business = escapeHtml(lead.name.trim() || "there");
+  const base = {
+    id: lead.id,
+    business: lead.name,
+    category,
+    url: lead.website ?? null,
+    emails,
+    email_source: (emails.length ? "csv" : "none") as ComposeDraft["email_source"],
+    best_email: bestEmail(emails),
+  };
+
+  if (followUp) {
+    // No elapsed-time claim ("last week", "a few days ago"): the template has
+    // no way to know the gap, and a wrong one is a lie the recipient can check.
+    // A service-led campaign keeps its service here — the follow-up FRAMING is
+    // what changes, not what the campaign is pitching.
+    const pitch = service
+      ? `<p>I got in touch a little while back about looking after your site, so I thought I&rsquo;d follow up with something specific. ` +
+        `APMG Services handles ${escapeHtml(service.name.replace(/\s*Services$/i, "").toLowerCase())} for ${escapeHtml(trade)} sites like yours, ` +
+        `with one licensed local team and minimal disruption to the people who use the place every day.</p>`
+      : `<p>I got in touch a little while back about looking after your site, so I thought I&rsquo;d follow up briefly. ` +
+        `APMG Services handles painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe with one licensed local team, ` +
+        `which means ${escapeHtml(trade)} sites like yours have a single number to call instead of chasing separate contractors.</p>`;
+    const html =
+      `<p>Hi ${business},</p>` +
+      pitch +
+      `<p>If it&rsquo;s useful, we&rsquo;re happy to come out, take a look and put a quote together, no obligation. ` +
+      `Who&rsquo;s the best person to speak to about maintenance at your site?</p>` +
+      `<p><a href="{{link}}">${escapeHtml(ctaLabel(category))}</a></p>` +
+      `<p>The APMG Services team</p>`;
+    return {
+      ...base,
+      subject: `Following up: ${lead.name}`.slice(0, 120),
+      html,
+    };
+  }
+
   if (service) {
     return {
-      id: lead.id,
-      business: lead.name,
-      category,
-      url: lead.website ?? null,
-      emails,
-      email_source: emails.length ? "csv" : "none",
-      best_email: bestEmail(emails),
+      ...base,
       subject: service.subject.slice(0, 120),
       html: service.html.split("{{business}}").join(business),
     };
@@ -397,13 +439,7 @@ export function demoDraft(lead: ComposeLeadInput, service?: ServiceTemplate | nu
     `<p><a href="{{link}}">${escapeHtml(ctaLabel(category))}</a></p>` +
     `<p>The APMG Services team</p>`;
   return {
-    id: lead.id,
-    business: lead.name,
-    category,
-    url: lead.website ?? null,
-    emails,
-    email_source: emails.length ? "csv" : "none",
-    best_email: bestEmail(emails),
+    ...base,
     subject: `${lead.name}, your property maintenance, sorted`.slice(0, 120),
     html,
   };
