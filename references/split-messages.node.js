@@ -50,6 +50,13 @@ const SIG = {
   phone: "1300 97 97 40",
   email: "outreach@apmgmaintenance.com.au",
   websiteLabel: "www.apmgservices.com.au",
+  // Alongside BRAND.website (the tracked portal domain, used for unsubscribe/
+  // CTA links elsewhere) — commercialpaintersau.com.au is the painters-brand
+  // site, added to the signature as a second link, not a replacement.
+  commercialPaintersUrl: "https://www.commercialpaintersau.com.au/",
+  commercialPaintersLabel: "www.commercialpaintersau.com.au",
+  facebookUrl: "https://www.facebook.com/APMGCommercialPainters",
+  facebookLabel: "Facebook",
 };
 
 // Hosts that USED to serve the customer portal. Any customer-facing link that
@@ -112,7 +119,15 @@ function dropTeamSignoff(text) {
 }
 
 function signatureText() {
-  return [SIG.name, SIG.title, SIG.phone, SIG.email, SIG.websiteLabel].join("\n");
+  return [
+    SIG.name,
+    SIG.title,
+    SIG.phone,
+    SIG.email,
+    SIG.websiteLabel,
+    SIG.commercialPaintersLabel,
+    SIG.facebookUrl.replace(/^https?:\/\//, ""),
+  ].join("\n");
 }
 
 // Sender identity + the functional opt-out. Spam Act 2003 — this is a legal
@@ -179,7 +194,9 @@ function signatureHtml() {
     escapeHtml(SIG.title) + "<br>" +
     escapeHtml(SIG.phone) + "<br>" +
     '<a href="mailto:' + SIG.email + '">' + escapeHtml(SIG.email) + "</a><br>" +
-    '<a href="' + BRAND.website + '">' + escapeHtml(SIG.websiteLabel) + "</a>" +
+    '<a href="' + BRAND.website + '">' + escapeHtml(SIG.websiteLabel) + "</a><br>" +
+    '<a href="' + SIG.commercialPaintersUrl + '">' + escapeHtml(SIG.commercialPaintersLabel) + "</a><br>" +
+    '<a href="' + SIG.facebookUrl + '">' + escapeHtml(SIG.facebookLabel) + "</a>" +
     "</p>"
   );
 }
