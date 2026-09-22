@@ -94,37 +94,102 @@
 }
 
 /* ---------------------------------------------------------------------------
- * The fold
+ * The viewport lock
  * ---------------------------------------------------------------------------
  *
- * The floor under the hero at every width. The one-viewport CEILING is not here:
- * it is `lg:h-[calc(100dvh-4rem-1px)]` in ServicesPortal, applied only on the
- * customer host, and the reason is worth recording because the first version
- * looked right and was not.
+ * `.portal-hero-fold` USED TO LIVE HERE, and its removal is worth recording.
+ * It sized a full-screen hero on a page that scrolled: a min-height floor here,
+ * with the ceiling (`lg:h-[calc(100dvh-4rem-1px)]`) applied in the component on
+ * the customer host only. The 2026-09-22 rebuild made every portal page exactly
+ * one viewport, which means there is no fold to size — the hero is a strip at
+ * the top of a screen the grid fills the rest of, and nothing measures itself
+ * against the viewport any more.
  *
- * That version put `height: calc(100% - 4rem - 1px)` on this class. A percentage
- * height resolves against the containing block, which here is the
- * `.portal-world` div — and that div is auto-height, sized by its own content.
- * A percentage against an indefinite height computes to `auto`, so the rule did
- * nothing at all: the fold fell back to the 34rem min-height below and came in
- * about 230px short of the screen on a 900px viewport. It failed silently, which
- * is the only reason it survived a look at the page.
+ * The lock is now structural rather than arithmetic, and is entirely in
+ * PortalShell: a flex column `h-dvh` tall, header and footer strip at their
+ * natural heights, and one `min-h-0 flex-1` row between them that takes what is
+ * left. No `calc()` anywhere, so no number here has to be kept in step with a
+ * header height in a component — which is exactly how the old version failed
+ * silently (a percentage height against an auto-height parent resolves to
+ * `auto`, so the rule did nothing and the fold came in ~230px short).
  *
- * `dvh` is what actually measures the fold, and it can only be applied on the
- * standalone host: there <main> is `h-dvh`, so one dynamic viewport height IS
- * the scroll container. Inside the dashboard the same component is a panel in a
- * shell with its own chrome, where a viewport unit would size the hero to the
- * browser window rather than to the panel — so the internal tab keeps these
- * minimums and sizes to its content.
+ * What remains below is the one utility Tailwind does not ship that the lock
+ * needs.
  */
-.portal-hero-fold {
-  min-height: 30rem;
+
+/* Never let a clip/visible pair leak out of the viewport lock.
+ *
+ * GoogleReviewsPanel is shared with the internal console and wraps its grid in
+ * `overflow-x-clip`, leaving the vertical axis `visible`. That pair is legal
+ * CSS and it is poison for a locked layout: an element clipped on one axis and
+ * visible on the other does not establish a scroll container, and its overflow
+ * escapes every ancestor scroll container WITHOUT contributing scrollable
+ * overflow to them. The symptom is a container that swears it does not
+ * overflow — `<main>` reported scrollHeight 669 against clientHeight 669 —
+ * while one of its descendants was measurably sticking out to 1232px. Nothing
+ * could scroll to those reviews and nothing reported them as hidden.
+ *
+ * `overflow-x: hidden` looks like a cosmetic change from `clip` and is not: a
+ * `hidden`/`visible` pair is NOT legal, so the used value of the visible axis
+ * becomes `auto`, the element finally becomes a scroll container, and its
+ * content is contained and counted. The panel looks identical either way —
+ * `clip` was there to stop a horizontal bleed, which `hidden` also does.
+ *
+ * Scoped to `.portal-world` so the console's own copy of the panel keeps the
+ * `clip` it was authored with. */
+.portal-world [class~="overflow-x-clip"] {
+  overflow-x: hidden;
 }
 
-@media (min-width: 640px) {
-  .portal-hero-fold {
-    min-height: 34rem;
+/* The document itself must not scroll on a locked page.
+ *
+ * The shell is already `h-dvh` with `overflow: hidden`, every one of its rows
+ * is measured, and no element's box extends past the viewport — and the
+ * document STILL scrolled 450px on /portal/reviews, in the production build as
+ * well as in dev. The reviews panel is shared with the internal console and
+ * carries `overflow-x: clip` with the vertical axis left visible; a clip/visible
+ * pair does not establish a scroll container, and Chromium propagates the
+ * resulting scrollable overflow all the way to the viewport even though every
+ * ancestor in between clips it visually. Forcing `overflow-y: hidden` on those
+ * ancestors from script did not reclaim the 450px, which is what ruled out
+ * fixing this at the element and sent it here.
+ *
+ * So the viewport is closed directly. This is the one rule that cannot be
+ * defeated by a descendant's overflow, whatever the mechanism.
+ *
+ * SCOPE, and why it is `:has()` rather than a class on <html>. Only the five
+ * locked pages carry `.portal-lock` — /portal/terms and /portal/privacy render
+ * outside PortalShell and must stay scrollable, since their whole job is to be
+ * read end to end. Setting a class on <html> would mean reaching out of the
+ * React tree into a document the root layout owns, and remembering to take it
+ * off again on every exit path. `:has()` asks the question declaratively and
+ * unsets itself the moment the element is gone.
+ *
+ * DEGRADATION: a browser without `:has()` simply keeps today's behaviour — the
+ * page scrolls a little on one of five pages. Nothing breaks, and every
+ * browser this portal is opened in has supported it since 2023.
+ *
+ * `lg` only: below it the portal scrolls on purpose. */
+@media (min-width: 1024px) {
+  html:has(.portal-lock),
+  html:has(.portal-lock) body {
+    overflow: hidden;
   }
+}
+
+/* The nav scrolls sideways on phones rather than collapsing behind a menu
+ * button. A visible scrollbar under five short words is louder than the words,
+ * but hiding it must not disable the scroll — the overflow has to stay
+ * swipeable on the narrowest phones, which is why this hides the bar rather
+ * than setting `overflow: hidden`. */
+.portal-world .scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.portal-world .scrollbar-none::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 /* ---------------------------------------------------------------------------

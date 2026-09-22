@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
  * components/motion/. That site drives its reveal with GSAP ScrollTrigger; this
  * project has no GSAP, and ScrollTrigger would need its `scroller` pointed at
  * the portal's <main> because /portal is not the document scroller (see
- * PortalStandalone). An IntersectionObserver plus the CSS in
+ * PortalShell). An IntersectionObserver plus the CSS in
  * app/portal/portal-world.css produces the same movement with neither problem.
  */
 

@@ -161,8 +161,14 @@ export function GoogleReviewsPanel({
                 <Stars rating={GOOGLE_RATING} />
               </div>
               <p className="mt-0.5 text-[11px] text-muted-foreground">
-                From {GOOGLE_REVIEW_COUNT} reviews on Google — hosted where we
-                can&rsquo;t edit a word of them.
+                {/* `{" "}` is not redundant. The space after the expression is
+                    the first character of a text child that wraps to the next
+                    source line, and JSX trims a line's leading whitespace — so
+                    this rendered as "From 22reviews on Google" on both the
+                    console and the portal. An explicit space survives the
+                    transform whatever the formatter does to the line breaks. */}
+                From {GOOGLE_REVIEW_COUNT}{" "}
+                reviews on Google — hosted where we can&rsquo;t edit a word of them.
               </p>
             </div>
           </div>

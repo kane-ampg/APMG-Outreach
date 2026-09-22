@@ -1,15 +1,19 @@
 import type { MetadataRoute } from "next";
 import { headers } from "next/headers";
 import { isCustomerHost, PORTAL_ORIGIN } from "@/lib/hosts";
+import { PORTAL_PAGES } from "@/components/apmg/portal/PortalNav";
 
 /**
- * sitemap.xml — the portal's three public pages, and nothing else.
+ * sitemap.xml — the portal's public pages, and nothing else.
  *
- * Hand-listed rather than generated: the customer host serves exactly these
- * three routes (proxy.ts redirects everything else to /portal), so a crawler
- * has nothing to discover that isn't here. Every URL uses PORTAL_ORIGIN, not
- * the requested host, so the Vercel project URL and preview deploys never
- * advertise themselves as the canonical home.
+ * The content pages are read from PORTAL_PAGES, the same list the navigation
+ * renders from, so a page added to the portal cannot be added to the nav and
+ * quietly left out of the sitemap. The two legal pages are hand-listed below
+ * because they are deliberately NOT in the nav — they are footer modals with
+ * shareable URLs, not destinations.
+ *
+ * Every URL uses PORTAL_ORIGIN, not the requested host, so the Vercel project
+ * URL and preview deploys never advertise themselves as the canonical home.
  *
  * The admin host returns an empty sitemap to match its blanket robots.txt.
  */
@@ -18,7 +22,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   if (!isCustomerHost(host)) return [];
 
   return [
-    { url: `${PORTAL_ORIGIN}/portal`, changeFrequency: "monthly", priority: 1 },
+    // The landing page outranks its own sub-pages: it is what outreach links
+    // land on and the only one carrying the full services list.
+    ...PORTAL_PAGES.map((page) => ({
+      url: `${PORTAL_ORIGIN}${page.href}`,
+      changeFrequency: "monthly" as const,
+      priority: page.href === "/portal" ? 1 : 0.7,
+    })),
     { url: `${PORTAL_ORIGIN}/portal/privacy`, changeFrequency: "yearly", priority: 0.2 },
     { url: `${PORTAL_ORIGIN}/portal/terms`, changeFrequency: "yearly", priority: 0.2 },
   ];
