@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { COMPANY } from "@/lib/legal/company";
-import { Eyebrow, SectionHeading } from "../kit";
+import { Eyebrow, SectionHeading, portalFrame } from "../kit";
 import { useEnquiry } from "../PortalShell";
 import { GENERAL_SERVICE } from "../data";
 
@@ -53,26 +53,44 @@ export function PageBlock({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full max-w-7xl flex-col px-5 py-8 sm:px-8 sm:py-10 short:py-6",
-        fill && "lg:h-full lg:py-6",
+        portalFrame,
+        "flex flex-col py-8 sm:py-10 short:py-6",
+        fill && "lg:h-full lg:py-6 tall:lg:py-8 short:lg:py-5",
       )}
     >
-      <div className="shrink-0">
-        <Eyebrow className="mb-2">{eyebrow}</Eyebrow>
-        <SectionHeading as="h1" className="text-3xl sm:text-4xl">
-          {heading}
-        </SectionHeading>
-        {lede && <p className="mt-2.5 max-w-prose text-ink-soft">{lede}</p>}
+      {/* The header, split. Heading on the left, the lede answering it on the
+          right and sitting on the heading's baseline — an editorial spread
+          rather than a stack, which reads as designed at this width and costs
+          the page one line of height instead of three. */}
+      <div className="grid shrink-0 gap-x-16 gap-y-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)] lg:items-end">
+        <div>
+          <Eyebrow className="mb-2.5 flex items-center gap-2.5">
+            <span aria-hidden className="h-px w-6 bg-brand-600" />
+            {eyebrow}
+          </Eyebrow>
+          <SectionHeading as="h1" className="text-[2rem] leading-[1.05] sm:text-[2.6rem] short:text-[2rem]">
+            {heading}
+          </SectionHeading>
+        </div>
+        {lede && (
+          <p className="max-w-prose text-[0.95rem] leading-relaxed text-ink-soft lg:pb-1.5">{lede}</p>
+        )}
       </div>
 
       <div
         className={cn(
-          "mt-7 sm:mt-8 short:mt-5 lg:mt-6",
+          "mt-7 sm:mt-8 short:mt-5 lg:mt-6 tall:lg:mt-8",
           fill && "lg:flex lg:min-h-0 lg:flex-1 lg:flex-col",
           // `overflow-y-auto` only where it was asked for: an inner scroller
           // that appears by accident on a one-viewport page is worse than
           // content that was trimmed to fit on purpose.
           scrollContent && fill && "lg:overflow-y-auto",
+          // The inner scroller's bottom edge fades rather than slicing a row of
+          // cards in half, so it reads as "more below" instead of as a clip.
+          // The padding lets the last row scroll clear of the fade.
+          scrollContent &&
+            fill &&
+            "lg:pb-10 lg:[mask-image:linear-gradient(to_bottom,#000_calc(100%-3rem),transparent)]",
         )}
       >
         {/*
@@ -96,15 +114,15 @@ export function PageBlock({
       </div>
 
       {cta && (
-        <div className="mt-6 flex shrink-0 flex-wrap items-center gap-x-5 gap-y-3 border-t border-paper-edge pt-5 short:mt-4 short:pt-4">
-          <p className="text-sm text-ink-soft">{cta}</p>
-          <div className="flex flex-wrap items-center gap-3">
+        <div className="mt-6 flex shrink-0 flex-wrap items-center justify-between gap-x-5 gap-y-3 rounded-lg bg-white px-5 py-4 shadow-[0_1px_2px_rgba(15,17,19,0.05),0_6px_20px_-10px_rgba(15,17,19,0.2)] ring-1 ring-paper-edge/80 short:mt-4 short:py-3">
+          <p className="font-display text-base tracking-tight text-ink">{cta}</p>
+          <div className="flex flex-wrap items-center gap-4">
             <button
               type="button"
               onClick={() => openEnquiry(GENERAL_SERVICE)}
               data-track={openEvent}
               data-track-service="general"
-              className="inline-flex items-center gap-2 rounded-md bg-brand-700 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2"
+              className="order-last inline-flex items-center gap-2 rounded-md bg-brand-700 px-4 py-2.5 text-sm font-semibold text-white shadow-[0_1px_2px_rgba(165,12,37,0.25),0_4px_12px_-4px_rgba(165,12,37,0.45)] transition-colors hover:bg-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 focus-visible:ring-offset-2"
             >
               Send an enquiry
               <ArrowRight aria-hidden className="h-4 w-4" />

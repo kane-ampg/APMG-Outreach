@@ -7,13 +7,15 @@ import {
   useEffect,
   useMemo,
   useState,
+  type ComponentProps,
   type ReactNode,
 } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useClickTelemetry } from "@/lib/telemetry";
 import { COMPANY } from "@/lib/legal/company";
-import { PortalButton } from "./kit";
+import { cn } from "@/lib/cn";
+import { PortalButton, portalFrame } from "./kit";
 import { PortalNav } from "./PortalNav";
 import { PortalStrip } from "./PortalStrip";
 import { GENERAL_SERVICE, type Service } from "./data";
@@ -148,7 +150,7 @@ export function PortalShell({ children }: { children: ReactNode }) {
       {/* `portal-world` is the scope every rule in portal-world.css hangs off.
           Without it this renders as a palette-only port: right colours, wrong
           character. */}
-      <div className="portal-world portal-lock flex h-dvh max-h-dvh flex-col overflow-hidden bg-white text-ink">
+      <div className="portal-world portal-ground portal-lock flex h-dvh max-h-dvh flex-col overflow-hidden text-ink">
         <PortalHeader />
 
         {/* SC 1.3.1: the page's ONE landmark, and the row that absorbs the
@@ -162,7 +164,7 @@ export function PortalShell({ children }: { children: ReactNode }) {
           {children}
         </main>
 
-        <PortalStrip />
+        <PortalStrip standalone />
       </div>
 
       <PortalChat />
@@ -176,39 +178,61 @@ export function PortalShell({ children }: { children: ReactNode }) {
 /**
  * The white bar: mark, navigation, phone, quote.
  *
- * Not sticky any more, and it no longer needs to be — it is a flex row of a
- * viewport-height column, so it is permanently on screen rather than scrolling
- * with the page and being pinned back. That also means the translucency and
- * backdrop blur it used to need over the scrolling hero photograph are gone:
- * nothing passes underneath it now, so it is simply white.
+ * Not sticky, and it does not need to be — it is a flex row of a
+ * viewport-height column, so it is permanently on screen.
+ *
+ * Exported for the dashboard's "Our Services" preview, which renders this exact
+ * bar with the nav in controlled mode (`nav`), so the two hosts cannot drift.
+ *
+ * On phones the nav drops to its own full-width row under the mark: squeezed
+ * between the logo and the quote button it had room for two and a half of its
+ * five words.
  */
-function PortalHeader() {
+export function PortalHeader({ nav }: { nav?: ComponentProps<typeof PortalNav> }) {
   const { open, openEvent } = useEnquiry();
+  const mark = (
+    <Image
+      src="/images/brand/apmg-logo-ink.webp"
+      alt="APMG Services"
+      width={378}
+      height={285}
+      priority
+      className="h-10 w-auto sm:h-14 sm:py-2 short:h-11"
+    />
+  );
 
   return (
-    <header className="z-30 shrink-0 border-b border-paper-edge bg-white">
-      <div className="mx-auto flex w-full max-w-7xl items-center gap-3 px-5 sm:gap-4 sm:px-8">
-        <Link
-          href="/portal"
-          className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
-        >
-          <Image
-            src="/images/brand/apmg-logo-ink.webp"
-            alt="APMG Services"
-            width={378}
-            height={285}
-            priority
-            className="h-12 w-auto py-2 sm:h-14 short:h-11"
-          />
-        </Link>
+    <header className="z-30 shrink-0 border-b border-paper-edge/80 bg-white/95">
+      <div className={cn(portalFrame, "flex flex-wrap items-center gap-x-4 gap-y-2 py-2 sm:flex-nowrap sm:py-0")}>
+        {/* In the dashboard preview the mark goes home within the preview; a
+            real link to /portal there would leave the dashboard. */}
+        {nav?.onSelect ? (
+          <button
+            type="button"
+            onClick={() => nav.onSelect?.("/portal")}
+            className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+          >
+            {mark}
+          </button>
+        ) : (
+          <Link
+            href="/portal"
+            className="shrink-0 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600"
+          >
+            {mark}
+          </Link>
+        )}
 
-        <PortalNav className="min-w-0 flex-1" />
+        <PortalNav
+          {...nav}
+          className="order-last flex w-full min-w-0 justify-center sm:order-none sm:flex-1"
+        />
 
-        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-1 sm:ml-0 sm:gap-2">
           <a
             href={COMPANY.phoneHref}
             data-track="portal_phone_click"
-            className="hidden rounded-md px-3 py-2 text-sm font-semibold text-brand-700 hover:bg-paper-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 lg:inline-block"
+            className="hidden rounded-md px-3 py-2 text-sm font-semibold text-ink-soft transition-colors hover:text-brand-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-600 lg:inline-block"
           >
             <span className="sr-only">Call </span>
             {COMPANY.phone}
@@ -218,7 +242,7 @@ function PortalHeader() {
             onClick={() => open(GENERAL_SERVICE)}
             data-track={openEvent}
             data-track-service="general"
-            className="px-3 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm"
+            className="px-3.5 py-2 text-xs shadow-[0_1px_2px_rgba(165,12,37,0.25),0_4px_12px_-4px_rgba(165,12,37,0.45)] sm:px-4 sm:py-2.5 sm:text-sm"
           >
             Get a quote
           </PortalButton>

@@ -10,7 +10,7 @@ differentiators → proof points → brand-voice phrases → contact → guardra
 | File | Sector | Use for leads whose Category is… |
 |---|---|---|
 | `business.md` | **General** (always included) | — company-wide: who APMG is, all services, "what APMG is NOT" |
-| `aged-care.md` | Aged Care & Health | aged care, nursing home, retirement/aged living, health |
+| `aged-care.md` | Aged Care, and Health & Hospitals (shared) | aged care, nursing home, retirement/aged living; health, hospital, medical centre |
 | `early-childhood.md` | Early Childhood / Early Learning | childcare, early learning, kindergarten, daycare |
 | `education.md` | Education / Schools | school, college, education |
 

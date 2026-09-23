@@ -75,6 +75,65 @@
 }
 
 /* ---------------------------------------------------------------------------
+ * The ground
+ * ---------------------------------------------------------------------------
+ *
+ * The portal is a framed column (see `portalFrame` in kit.tsx), so the page
+ * behind it needs to read as a surface rather than as leftover white. A warm
+ * paper, a touch off the kit's neutral sunken grey, with one soft light pooled
+ * behind the header — enough that white cards and panels lift off it, not so
+ * much that it becomes a colour of its own.
+ *
+ * Literal values for the same reason as the rail below: this file sits outside
+ * Tailwind's pipeline.
+ */
+.portal-world.portal-ground,
+.portal-world .portal-ground {
+  background-color: #f6f5f2;
+  background-image:
+    radial-gradient(ellipse 90% 55% at 50% -10%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 70%),
+    linear-gradient(180deg, #f8f7f5 0%, #f3f2ee 100%);
+}
+
+/* ---------------------------------------------------------------------------
+ * Light tokens, pinned
+ * ---------------------------------------------------------------------------
+ *
+ * The review and team blocks are SHARED with the internal console, and they
+ * paint through its semantic tokens (bg-card, text-foreground, ring-foreground).
+ * On the customer host <html> is light, so those resolve light. Inside the
+ * dashboard's "Our Services" preview <html> carries `.dark`, and the same blocks
+ * came out as graphite cards in the middle of a white page — the preview no
+ * longer looked like the thing it previews.
+ *
+ * So the portal scope re-declares the light values under `.dark`. Custom
+ * properties inherit, so this one block flips every shared component inside
+ * the portal and nothing outside it. The values mirror `:root` in
+ * app/globals.css; keep them in step if that palette moves.
+ */
+.dark .portal-world {
+  --background: 40 30% 97%;
+  --foreground: 240 6% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 6% 10%;
+  --muted: 40 16% 93%;
+  --muted-foreground: 240 4% 40%;
+  --secondary: 40 16% 93%;
+  --secondary-foreground: 240 6% 10%;
+  --accent: 6 86% 96%;
+  --accent-foreground: 4 76% 40%;
+  --primary: 4 76% 46%;
+  --primary-foreground: 0 0% 100%;
+  --primary-solid: 4 76% 46%;
+  --destructive: 4 76% 46%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 36 12% 86%;
+  --input: 36 8% 52%;
+  --ring: 4 80% 50%;
+  color-scheme: light;
+}
+
+/* ---------------------------------------------------------------------------
  * The display face
  * ---------------------------------------------------------------------------
  *

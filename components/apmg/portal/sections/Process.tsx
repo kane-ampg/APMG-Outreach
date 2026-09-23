@@ -23,7 +23,12 @@ export function ProcessSection({ fill = false }: { fill?: boolean }) {
       lede="The same five stages whether it's one dripping tap or a maintenance programme across a campus."
       cta="That first step costs you nothing."
     >
-      <ProcessSteps steps={PROCESS} />
+      {/* On a white sheet: the rail is the page's one drawn object, and set on
+          the paper ground it floated. The sheet gives the rule a surface to be
+          drawn on. */}
+      <div className="rounded-lg bg-white px-5 py-7 shadow-[0_1px_2px_rgba(15,17,19,0.05),0_10px_30px_-14px_rgba(15,17,19,0.22)] ring-1 ring-paper-edge/80 sm:px-8 lg:px-10 lg:py-9 short:lg:py-6">
+        <ProcessSteps steps={PROCESS} />
+      </div>
     </PageBlock>
   );
 }

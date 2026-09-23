@@ -148,6 +148,10 @@ const config: Config = {
         // offer in one viewport, and a 1366x768 laptop gives it less room than
         // a phone. `short:` is where the fold tightens instead of overflowing.
         short: { raw: "(max-height: 760px)" },
+        // The other end: a desktop with height to spare (1080p and up), where
+        // the portal can afford looser leading and its secondary lines. 960, not
+        // 900: a 1440x900 laptop has no spare height once the grid is filled.
+        tall: { raw: "(min-height: 960px)" },
         // Short AND narrow — a small phone. Declared after `short` so it wins
         // where both match.
         tight: { raw: "(max-height: 760px) and (max-width: 639px)" },

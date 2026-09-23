@@ -1,7 +1,9 @@
 "use client";
 
 import { Globe, Mail, Phone } from "lucide-react";
+import { cn } from "@/lib/cn";
 import { COMPANY } from "@/lib/legal/company";
+import { portalFrame } from "./kit";
 import { LegalLink } from "../LegalDocModal";
 import { SocialLinks } from "../SocialLinks";
 import { WhatsAppIcon } from "../WhatsAppIcon";
@@ -41,12 +43,18 @@ import { PortalUnsubscribe } from "../PortalUnsubscribe";
  * unsubscribe link. A legal opt-out is the last thing on the page that may be
  * covered by furniture.
  */
-export function PortalStrip() {
+export function PortalStrip({
+  /** Customer host only. The dashboard preview renders this same strip, and an
+   *  opt-out there would unsubscribe nobody — PortalFooter drew the same line. */
+  standalone = false,
+}: {
+  standalone?: boolean;
+}) {
   const year = new Date().getFullYear();
 
   return (
     <footer className="shrink-0 border-t-2 border-brand-600 bg-ink text-white">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-2 px-5 py-2.5 pr-16 text-xs sm:px-8 sm:pr-16 lg:flex-row lg:items-center lg:justify-between lg:gap-6 lg:py-2 lg:pr-20">
+      <div className={cn(portalFrame, "flex flex-col gap-2 py-2.5 pr-16 text-xs sm:pr-16 lg:flex-row lg:items-center lg:justify-between lg:gap-6 lg:py-2.5 xl:pr-8")}>
         {/* Identity. The ABN is the cheapest verifiable fact on the page. */}
         <p className="shrink-0 text-white/60">
           © {year} {COMPANY.tradingName}
@@ -111,7 +119,7 @@ export function PortalStrip() {
           <LegalLink doc="privacy" className="rounded text-white/60 transition-colors hover:text-white">
             Privacy
           </LegalLink>
-          <PortalUnsubscribe />
+          {standalone && <PortalUnsubscribe />}
         </div>
       </div>
     </footer>

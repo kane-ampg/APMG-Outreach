@@ -1,16 +1,19 @@
 import type { MetadataRoute } from "next";
 import { headers } from "next/headers";
 import { isCustomerHost, PORTAL_ORIGIN } from "@/lib/hosts";
-import { PORTAL_PAGES } from "@/components/apmg/portal/PortalNav";
+import { PORTAL_PAGES } from "@/components/apmg/portal/pages";
 
 /**
  * sitemap.xml — the portal's public pages, and nothing else.
  *
  * The content pages are read from PORTAL_PAGES, the same list the navigation
  * renders from, so a page added to the portal cannot be added to the nav and
- * quietly left out of the sitemap. The two legal pages are hand-listed below
- * because they are deliberately NOT in the nav — they are footer modals with
- * shareable URLs, not destinations.
+ * quietly left out of the sitemap. That list lives in its own plain module
+ * rather than in PortalNav: PortalNav is a client component, and importing a
+ * value across that boundary hands server code a proxy instead of the array
+ * (see components/apmg/portal/pages.ts). The two legal pages are hand-listed
+ * below because they are deliberately NOT in the nav — they are footer modals
+ * with shareable URLs, not destinations.
  *
  * Every URL uses PORTAL_ORIGIN, not the requested host, so the Vercel project
  * URL and preview deploys never advertise themselves as the canonical home.

@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { kbFileName } from "@/lib/pipeline/sectors";
 import { Button } from "@/components/ui/button";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
@@ -505,7 +506,7 @@ function PlaybookCard({
             <FileCheck2 className={cn("h-4 w-4 shrink-0", uploaded ? "text-primary" : "text-muted-foreground")} aria-hidden />
           )}
           <span className="min-w-0 flex-1 truncate text-[11.5px] text-foreground">
-            {uploaded ? kb.fileName : kb.source === "repo" ? `${playbook.slug}.md (built-in)` : "No knowledge base"}
+            {uploaded ? kb.fileName : kb.source === "repo" ? `${kbFileName(playbook.slug)} (built-in)` : "No knowledge base"}
           </span>
           <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground/70">
             {kb.present ? `${(kb.chars / 1000).toFixed(1)}k chars` : "missing"}

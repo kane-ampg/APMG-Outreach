@@ -29,6 +29,17 @@ import { ProcessIcon, type ProcessIconName } from "./process-icons";
 /* Layout primitives                                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The portal's one measure: header, every page and the footer strip all sit in
+ * this column, so their left and right edges line up down the whole screen.
+ *
+ * 72rem, not the full window. The services grid used to run edge to edge, which
+ * on a 1920px monitor stretched a trade photograph to nearly a metre of screen
+ * and left the header and hero hanging in a narrower column above it — two
+ * widths on one screen, and neither of them chosen.
+ */
+export const portalFrame = "mx-auto w-full max-w-[72rem] px-4 sm:px-8";
+
 export function Container({
   children,
   className,

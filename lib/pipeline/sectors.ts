@@ -45,19 +45,28 @@ export interface SectorPlaybook {
   pdf: SectorPdf | null;
 }
 
-export const SECTOR_SLUGS = ["aged-care", "early-childhood", "education"] as const;
+export const SECTOR_SLUGS = ["aged-care", "healthcare", "early-childhood", "education"] as const;
 
-/** Seed config — the three APMG sectors with sensible category keywords. Stored
+/** Seed config — the APMG sectors with sensible category keywords. Stored
  *  overrides (name/categories/pdf) win; see mergePlaybooks. */
 export const DEFAULT_PLAYBOOKS: readonly SectorPlaybook[] = [
   {
     slug: "aged-care",
-    name: "Aged Care & Health",
+    name: "Aged Care",
     categories: [
       "aged care", "aged-care", "nursing home", "retirement", "aged living",
-      "retirement village", "health", "healthcare", "hospital", "medical centre",
-      "disability", "ndis",
+      "retirement village", "disability", "ndis",
     ],
+    kb: null,
+    pdf: null,
+  },
+  {
+    // Split out of Aged Care so hospitals and clinics stop receiving the aged
+    // care portfolio PDF. Shares the aged-care KB (see REPO_KB_FILE) because
+    // that brochure is APMG's "Aged Care & Health" portfolio.
+    slug: "healthcare",
+    name: "Health & Hospitals",
+    categories: ["health", "healthcare", "hospital", "medical centre"],
     kb: null,
     pdf: null,
   },
@@ -89,10 +98,13 @@ export function isSectorSlug(v: unknown): v is string {
   return typeof v === "string" && SLUG_RE.test(v);
 }
 
+/** Sectors whose built-in KB is another sector's file rather than <slug>.md. */
+const REPO_KB_FILE: Readonly<Record<string, string>> = { healthcare: "aged-care" };
+
 /** The KB markdown path (repo-relative) for a sector — the source of truth for
  *  the doc that grounds email copy (components/knowledgebase/<slug>.md). */
 export function kbFileName(slug: string): string {
-  return `${slug}.md`;
+  return `${REPO_KB_FILE[slug] ?? slug}.md`;
 }
 
 /**

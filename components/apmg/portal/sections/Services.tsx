@@ -6,7 +6,7 @@ import { ArrowRight } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { track } from "@/lib/telemetry";
 import { COMPANY } from "@/lib/legal/company";
-import { PortalButton } from "../kit";
+import { PortalButton, portalFrame } from "../kit";
 import { useEnquiry } from "../PortalShell";
 import { GENERAL_SERVICE, SERVICES, PARAGRAPH_BREAK, type Service } from "../data";
 import heroBg from "@/app/apmgbg.jpg";
@@ -110,75 +110,83 @@ export function ServicesSection({
   const rest = SERVICES.filter((_, i) => i !== featuredIndex);
 
   return (
-    <div className={cn("flex flex-col", fill && "lg:h-full")}>
-      {/* ── Hero strip ────────────────────────────────────────────────
-          A quarter of the screen rather than all of it. The full-bleed fold
-          this replaces was one viewport on its own, which on a one-viewport
-          site would leave the eight trades — the thing the page exists to
-          answer — on page two. */}
-      <section className="relative isolate shrink-0 overflow-hidden bg-ink text-white">
+    <div
+      className={cn(
+        portalFrame,
+        "flex flex-col gap-3 py-4 sm:gap-4 sm:py-5 short:gap-3 short:py-3",
+        fill && "lg:h-full",
+      )}
+    >
+      {/* ── Hero panel ────────────────────────────────────────────────
+          A framed photograph rather than a full-bleed band. It shares the
+          grid's column, so the headline, the CTA and the eight trades all
+          start and stop on the same two edges. */}
+      <section className="relative isolate shrink-0 overflow-hidden rounded-lg bg-ink text-white shadow-[0_1px_2px_rgba(15,17,19,0.1),0_12px_32px_-12px_rgba(15,17,19,0.45)]">
         <Image
           src={heroBg}
           alt=""
           fill
           priority
           placeholder="blur"
-          sizes="100vw"
+          sizes="(min-width: 1152px) 1152px, 100vw"
           className="-z-10 object-cover object-[50%_55%]"
         />
         {/* The scrim, in two parts. Horizontal carries the type: ink at 95%
-            under the headline, thinning to 45% at the right edge, so the copy
-            sits on a value it can be measured against while the photograph
-            keeps its own contrast. Vertical darkens the bottom so the seam
-            against the grid is a seam rather than a stripe. */}
+            under the headline, thinning toward the right edge so the yard
+            photograph keeps its own contrast. Vertical darkens the foot so the
+            panel has a floor. */}
         <div
           aria-hidden
-          className="absolute inset-0 -z-10 bg-gradient-to-r from-ink/95 via-ink/80 to-ink/45 lg:via-ink/70 lg:to-ink/30"
+          className="absolute inset-0 -z-10 bg-gradient-to-r from-ink/95 via-ink/80 to-ink/40 lg:via-ink/70 lg:to-ink/25"
         />
         <div
           aria-hidden
-          className="absolute inset-0 -z-10 bg-gradient-to-b from-ink/50 via-ink/25 to-ink/65"
+          className="absolute inset-0 -z-10 bg-gradient-to-b from-ink/30 via-transparent to-ink/60"
+        />
+        {/* The cut line — the brand's red rule, drawn along the panel's foot. */}
+        <div
+          aria-hidden
+          className="absolute inset-x-0 bottom-0 h-[3px] bg-gradient-to-r from-brand-600 via-brand-600/70 to-transparent"
         />
 
-        <div className="mx-auto w-full max-w-7xl px-5 py-8 sm:px-8 lg:py-7 short:py-5">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between lg:gap-10">
-            <div className="min-w-0">
-              <h1 className="text-balance font-display text-[1.9rem] leading-[1.05] tracking-tight [text-shadow:0_2px_28px_rgba(15,17,19,0.65)] sm:text-[2.4rem] lg:text-[2.7rem] short:text-[1.75rem]">
-                Every trade, <span className="text-brand-400">one partner</span>
-              </h1>
-              <p className="mt-2.5 max-w-xl text-sm text-white/85 [text-shadow:0_1px_16px_rgba(15,17,19,0.75)] sm:text-base short:mt-2">
-                Electrical, plumbing, painting, carpentry, flooring, grounds, handyman and
-                make-safe work across Melbourne and Victoria — run by one team, from the first
-                call to the job done.
+        <div className="flex flex-col gap-5 px-5 py-7 sm:px-8 sm:py-8 lg:flex-row lg:items-end lg:justify-between lg:gap-10 lg:px-10 lg:py-6 tall:lg:py-9 short:py-5">
+          <div className="min-w-0">
+            <h1 className="text-balance font-display text-[2rem] leading-[1.02] tracking-tight [text-shadow:0_2px_28px_rgba(15,17,19,0.65)] sm:text-[2.6rem] lg:text-[2.6rem] tall:lg:text-[3rem] short:text-[2rem]">
+              Every trade, <span className="text-brand-400">one partner</span>
+            </h1>
+            <p className="mt-3 max-w-[34rem] text-sm leading-relaxed text-white/80 [text-shadow:0_1px_16px_rgba(15,17,19,0.75)] sm:text-[0.95rem] short:mt-2">
+              Electrical, plumbing, painting, carpentry, flooring, grounds, handyman and
+              make-safe work across Melbourne and Victoria — run by one team, from the first
+              call to the job done.
+            </p>
+            {/* Sector message-match — only when the visitor arrived from a
+                sector-targeted outreach link. */}
+            {sector && (
+              <p className="mt-2 max-w-[34rem] text-sm text-brand-100 [text-shadow:0_1px_16px_rgba(15,17,19,0.75)]">
+                {sectorLine(sector)}
               </p>
-              {/* Sector message-match — only when the visitor arrived from a
-                  sector-targeted outreach link. */}
-              {sector && (
-                <p className="mt-2 max-w-xl text-sm text-brand-100 [text-shadow:0_1px_16px_rgba(15,17,19,0.75)]">
-                  {sectorLine(sector)}
-                </p>
-              )}
-            </div>
+            )}
+          </div>
 
-            <div className="flex shrink-0 flex-wrap items-center gap-3">
-              <PortalButton
-                variant="accent"
-                onClick={() => openEnquiry(GENERAL_SERVICE)}
-                data-track={openEvent}
-                data-track-service="general"
-              >
-                Tell us what needs doing
-                <ArrowRight aria-hidden className="h-4 w-4" />
-              </PortalButton>
-              <a
-                href={COMPANY.phoneHref}
-                data-track="portal_phone_click"
-                className="rounded text-sm font-semibold text-white/85 underline decoration-brand-500 decoration-2 underline-offset-4 hover:text-brand-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-              >
-                <span className="sr-only">Call </span>
-                {COMPANY.phone}
-              </a>
-            </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-3">
+            <PortalButton
+              variant="accent"
+              onClick={() => openEnquiry(GENERAL_SERVICE)}
+              data-track={openEvent}
+              data-track-service="general"
+              className="shadow-[0_2px_4px_rgba(15,17,19,0.3),0_8px_24px_-6px_rgba(200,16,46,0.6)]"
+            >
+              Tell us what needs doing
+              <ArrowRight aria-hidden className="h-4 w-4" />
+            </PortalButton>
+            <a
+              href={COMPANY.phoneHref}
+              data-track="portal_phone_click"
+              className="rounded text-sm font-semibold text-white/85 underline decoration-brand-500 decoration-2 underline-offset-4 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+            >
+              <span className="sr-only">Call </span>
+              {COMPANY.phone}
+            </a>
           </div>
         </div>
       </section>
@@ -187,7 +195,7 @@ export function ServicesSection({
           `min-h-0` lets this row shrink inside the flex column; without it a
           flex child refuses to go below its content height and the last row of
           tiles would be pushed under the footer strip. */}
-      <div className={cn("p-4 sm:p-5", fill && "lg:min-h-0 lg:flex-1")}>
+      <div className={cn(fill && "lg:min-h-0 lg:flex-1")}>
         <ul
           className={cn(
             "grid gap-3 sm:grid-cols-2 lg:grid-cols-4",
@@ -211,13 +219,22 @@ export function ServicesSection({
 
           {/* The twelfth cell. */}
           <li className="min-h-0">
-            <div className="group relative flex h-full min-h-[8rem] flex-col justify-between overflow-hidden rounded-lg border-2 border-brand-600 bg-ink p-4 text-white">
-              <p className="font-display text-lg leading-tight tracking-tight">
-                Not sure which trade you need?
-              </p>
-              <p className="mt-1 hidden text-xs leading-relaxed text-white/70 sm:block">
-                A photo and a sentence is enough to start.
-              </p>
+            <div className="relative isolate flex h-full min-h-[8rem] flex-col justify-between overflow-hidden rounded-lg bg-ink p-4 text-white ring-1 ring-inset ring-white/10 sm:p-5">
+              {/* One pool of red light in the corner the button sits in — the
+                  tile reads as the place to act without shouting it. */}
+              <div
+                aria-hidden
+                className="absolute -bottom-16 -right-10 -z-10 h-48 w-48 rounded-full bg-brand-600/35 blur-3xl"
+              />
+              <div aria-hidden className="absolute inset-x-0 top-0 h-[3px] bg-brand-600" />
+              <div>
+                <p className="font-display text-lg leading-tight tracking-tight lg:text-xl">
+                  Not sure which trade you need?
+                </p>
+                <p className="mt-1.5 hidden text-xs leading-relaxed text-white/65 sm:block lg:hidden tall:lg:block">
+                  A photo and a sentence is enough to start.
+                </p>
+              </div>
               <button
                 type="button"
                 onClick={() => openEnquiry(GENERAL_SERVICE)}
@@ -275,7 +292,10 @@ function ServiceTile({
           // z-index escapes this element entirely and paints behind the
           // nearest ancestor that has one — which is the white page. The tiles
           // rendered as eight solid black rectangles until this was added.
-          "group relative isolate flex h-full min-h-[8rem] flex-col overflow-hidden rounded-lg border border-paper-edge bg-ink",
+          "group relative isolate flex h-full min-h-[8rem] flex-col overflow-hidden rounded-lg bg-ink",
+          "shadow-[0_1px_2px_rgba(15,17,19,0.08),0_4px_14px_-6px_rgba(15,17,19,0.3)] transition-[transform,box-shadow] duration-500 ease-out",
+          "hover:-translate-y-0.5 hover:shadow-[0_2px_4px_rgba(15,17,19,0.1),0_16px_32px_-12px_rgba(15,17,19,0.45)]",
+          "motion-reduce:transition-none motion-reduce:hover:translate-y-0",
           featured && "min-h-[14rem]",
         )}
       >
@@ -286,7 +306,7 @@ function ServiceTile({
             fill
             loading={featured ? "eager" : "lazy"}
             placeholder="blur"
-            sizes={featured ? "(min-width: 1024px) 50vw, 100vw" : "(min-width: 1024px) 25vw, 50vw"}
+            sizes={featured ? "(min-width: 1152px) 560px, (min-width: 1024px) 50vw, 100vw" : "(min-width: 1152px) 280px, (min-width: 1024px) 25vw, 50vw"}
             className={cn(
               "absolute inset-0 -z-10 h-full w-full object-cover transition-transform duration-700 ease-out",
               "group-hover:scale-[1.04] group-focus-within:scale-[1.04]",
@@ -299,7 +319,7 @@ function ServiceTile({
             name is. */}
         <div
           aria-hidden
-          className="absolute inset-0 -z-10 bg-gradient-to-t from-ink/95 via-ink/55 to-ink/20"
+          className="absolute inset-0 -z-10 bg-gradient-to-t from-ink/95 via-ink/50 to-ink/5"
         />
 
         <div className="mt-auto flex flex-col gap-1.5 p-3.5 text-white sm:p-4">
@@ -315,15 +335,20 @@ function ServiceTile({
           {featured && (
             <>
               <p className="max-w-prose text-sm text-white/85">{service.blurb}</p>
-              <p className="hidden max-w-prose text-sm text-white/70 lg:line-clamp-3">
+              <p className="hidden max-w-prose text-sm leading-relaxed text-white/70 lg:line-clamp-2">
                 {service.description?.split(PARAGRAPH_BREAK)[0]}
               </p>
               {service.includes && (
                 <ul className="mt-1 hidden flex-wrap gap-1.5 lg:flex">
-                  {service.includes.slice(0, 3).map((item) => (
+                  {service.includes.slice(0, 3).map((item, i) => (
                     <li
                       key={item}
-                      className="rounded bg-white/15 px-2 py-1 text-xs font-medium text-white/90 backdrop-blur-sm"
+                      // The third only where the screen is tall enough for a
+                      // second row of chips without crowding the name.
+                      className={cn(
+                        "rounded-full bg-white/10 px-2.5 py-1 text-xs font-medium text-white/90 ring-1 ring-inset ring-white/15",
+                        i === 2 && "hidden tall:block",
+                      )}
                     >
                       {item}
                     </li>

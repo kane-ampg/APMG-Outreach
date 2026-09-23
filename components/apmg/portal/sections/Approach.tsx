@@ -34,19 +34,25 @@ export function ApproachSection({ fill = false }: { fill?: boolean }) {
     >
       <div className="flex h-full flex-col gap-4">
         {/* Plain heading-and-body cards. No icons — nothing here is decorative. */}
-        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 tall:lg:gap-4">
           {APPROACH.map((item) => (
             <li
               key={item.heading}
-              className="rounded-lg border border-paper-edge bg-white p-3.5"
+              className="group relative rounded-lg bg-white p-4 shadow-[0_1px_2px_rgba(15,17,19,0.05),0_6px_18px_-10px_rgba(15,17,19,0.2)] ring-1 ring-paper-edge/80 transition-shadow duration-300 hover:shadow-[0_2px_4px_rgba(15,17,19,0.06),0_14px_28px_-14px_rgba(15,17,19,0.3)] tall:lg:p-5"
             >
-              <h2 className="font-display text-base leading-snug tracking-tight">{item.heading}</h2>
-              <p className="mt-1 text-sm leading-snug text-ink-soft">{item.body}</p>
+              {/* A short red cut along the top edge that runs out to full width
+                  on hover — the brand's rule, used as the card's one mark. */}
+              <span
+                aria-hidden
+                className="absolute left-5 right-auto top-0 h-0.5 w-8 bg-brand-600 transition-all duration-500 ease-out group-hover:left-0 group-hover:w-full motion-reduce:transition-none"
+              />
+              <h2 className="font-display text-[1.05rem] leading-snug tracking-tight">{item.heading}</h2>
+              <p className="mt-1 text-sm leading-snug text-ink-soft tall:mt-1.5 tall:leading-relaxed">{item.body}</p>
             </li>
           ))}
         </ul>
 
-        <dl className="grid gap-x-8 gap-y-4 rounded-lg bg-ink px-5 py-4 sm:grid-cols-2 lg:grid-cols-4">
+        <dl className="relative isolate grid gap-x-8 gap-y-4 overflow-hidden rounded-lg bg-ink px-5 py-5 shadow-[0_12px_32px_-14px_rgba(15,17,19,0.5)] sm:grid-cols-2 lg:grid-cols-4 lg:px-7 lg:py-4 tall:lg:py-5 before:absolute before:inset-x-0 before:top-0 before:h-[3px] before:bg-brand-600">
           {facts.map((fact) => (
             <div key={fact.label}>
               <dt className={cn(microLabel, "text-white/60")}>{fact.label}</dt>
