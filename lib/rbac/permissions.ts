@@ -13,6 +13,10 @@ export const PERMISSIONS = {
   "sources.view": "View lead sources",
   "campaigns.view": "View campaigns",
   "campaigns.send": "Send an outreach email campaign to leads",
+  // Hot-Lead Follow-Ups (Sell): an admin surface for now — reps see the result
+  // (a lead arrives in Sales after its follow-ups), not the drafting desk.
+  "followups.view": "View the hot-lead follow-up queue",
+  "followups.send": "Draft, edit and send hot-lead follow-up emails",
   "integrations.view": "View integrations",
   "integrations.manage": "Create, pause, and reconnect automations",
   "playbooks.view": "View sector playbooks",

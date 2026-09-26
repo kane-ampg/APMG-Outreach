@@ -3,7 +3,9 @@ import {
   CUSTOMER_JOURNEY_EVENTS,
   isMissingPortalTable,
   portalAdminAuthorized,
+  readAllRows,
   type AnonymousPortalActivity,
+  type RowsRead,
   type LeadActivity,
   type LeadActivityCounts,
   type LeadActivityEvent,
@@ -19,10 +21,11 @@ import {
 // visitors (came via the promoted ?utm_source= link: facebook, tiktok, …),
 // one aggregate block for the remaining anonymous portal visitors, and the
 // recorded opt-out list (who unsubscribed, and when).
-// Grouped here in the route (three bounded PostgREST GETs + the leads lookups)
-// rather than in SQL, the same trade-off as /api/portal/summary — at portal
-// traffic volumes that's plenty, and it keeps every read in this repo a plain
-// PostgREST fetch. Server-side (keeps the service role key off the browser).
+// Grouped here in the route (three PostgREST GETs + the leads lookups) rather
+// than in SQL, the same trade-off as /api/portal/summary — it keeps every read
+// in this repo a plain PostgREST fetch. The anonymous read is paged to the end
+// (readAllRows): its counts are all-time, like the Clear button that resets
+// them. Server-side (keeps the service role key off the browser).
 //
 // SECURITY — unlike /api/portal/summary (pure aggregates), this response names
 // leads: each row carries the lead's uuid, which is exactly the token /t/[id]
@@ -35,7 +38,8 @@ import {
 // Replace with real per-user auth when a session lands.
 export const runtime = "nodejs";
 
-/** Event window per query — matches /api/portal/summary. */
+/** Attributed-trail window. PostgREST's max-rows (MAX_ROWS_PER_READ, 1000)
+ *  answers this with 1000 rows — the anonymous read below is paged instead. */
 const EVENTS_LIMIT = 2000;
 /** Response caps: the tab is a review surface, not an export. */
 const MAX_LEADS = 100;
@@ -85,13 +89,13 @@ const ANON_SELECT = "select=event,props,view,visitor_id,created_at";
  *  rollup below still excludes it, exactly as before. */
 const ANON_OR_FILTER =
   "or=(view.eq.portal,event.in.(portal_view,portal_service_open,portal_inquiry,legal_ack,portal_consent_accept,portal_inquiry_submit))";
+/** Paged with readAllRows, so ascending (see there) — the grouping below wants
+ *  newest-first and reverses the rows once they're all in. */
 const ANON_QUERY =
-  `portal_events?${ANON_SELECT}&lead_id=is.null&${ANON_OR_FILTER}` +
-  `&order=created_at.desc&limit=${EVENTS_LIMIT}`;
-/** Plain window fetch for the (unexpected) case PostgREST rejects the or=
- *  group — the in-route predicate then does all the work on a wider net. */
-const ANON_FALLBACK_QUERY =
-  `portal_events?${ANON_SELECT}&lead_id=is.null&order=created_at.desc&limit=${EVENTS_LIMIT}`;
+  `portal_events?${ANON_SELECT}&lead_id=is.null&${ANON_OR_FILTER}&order=created_at.asc,id.asc`;
+/** Plain read for the (unexpected) case PostgREST rejects the or= group — the
+ *  in-route predicate then does all the work on a wider net. */
+const ANON_FALLBACK_QUERY = `portal_events?${ANON_SELECT}&lead_id=is.null&order=created_at.asc,id.asc`;
 
 type AttributedRow = {
   event: string;
@@ -177,6 +181,21 @@ function countingGet(base: string, key: string, pathAndQuery: string): Promise<R
   });
 }
 
+/** A portal-table read that failed: the migration banner when the tables are
+ *  missing, a 502 otherwise. */
+function storageFailure(status: number, detail: string): Response {
+  console.error(`[portal/lead-activity] Supabase ${status}:`, detail.slice(0, 1000));
+  if (isMissingPortalTable(status, detail)) {
+    // Migration not run yet → answer demo so the Telemetry tab shows the
+    // "run supabase/portal-telemetry.sql" banner instead of a hard error.
+    return Response.json({ ok: true, mode: "demo", needsMigration: true, ...EMPTY });
+  }
+  return Response.json(
+    { ok: false, mode: "live", ...EMPTY, error: "Couldn't read the portal tables." },
+    { status: 502 },
+  );
+}
+
 /** Exact row total from a count=exact response ("0-24/137" → 137). */
 function totalOf(res: Response): number {
   const total = Number((res.headers.get("content-range") ?? "").split("/")[1]);
@@ -252,12 +271,12 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   let attributedRes: Response;
-  let anonRes: Response;
+  let anonRead: RowsRead;
   let unsubRes: Response;
   try {
-    [attributedRes, anonRes, unsubRes] = await Promise.all([
+    [attributedRes, anonRead, unsubRes] = await Promise.all([
       restGet(target.base, target.key, ATTRIBUTED_QUERY),
-      restGet(target.base, target.key, ANON_QUERY),
+      readAllRows(target.base, target.key, ANON_QUERY),
       countingGet(target.base, target.key, UNSUBSCRIBE_QUERY),
     ]);
   } catch (e) {
@@ -270,17 +289,16 @@ export async function GET(req: Request): Promise<Response> {
 
   // Safety net for the or= group: a 400 means PostgREST rejected the filter
   // shape (version drift etc.) rather than the table being absent — refetch
-  // the plain lead_id-null window and let the in-route predicate (applied
+  // the plain lead_id-null rows and let the in-route predicate (applied
   // unconditionally below) do the filtering. Missing-table 404s are NOT 400s,
   // so they fall through to the shared migration check.
-  if (anonRes.status === 400) {
-    const detail = await anonRes.text().catch(() => "");
+  if (!anonRead.ok && anonRead.status === 400) {
     console.error(
       "[portal/lead-activity] anonymous or= filter rejected, falling back to in-route filtering:",
-      detail.slice(0, 500),
+      anonRead.detail.slice(0, 500),
     );
     try {
-      anonRes = await restGet(target.base, target.key, ANON_FALLBACK_QUERY);
+      anonRead = await readAllRows(target.base, target.key, ANON_FALLBACK_QUERY);
     } catch (e) {
       console.error("[portal/lead-activity] fallback fetch to Supabase failed:", e);
       return Response.json(
@@ -290,25 +308,15 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
-  for (const res of [attributedRes, anonRes]) {
-    if (res.ok) continue;
-    const detail = await res.text().catch(() => "");
-    console.error(`[portal/lead-activity] Supabase ${res.status}:`, detail.slice(0, 1000));
-    if (isMissingPortalTable(res.status, detail)) {
-      // Migration not run yet → answer demo so the Telemetry tab shows the
-      // "run supabase/portal-telemetry.sql" banner instead of a hard error.
-      return Response.json({ ok: true, mode: "demo", needsMigration: true, ...EMPTY });
-    }
-    return Response.json(
-      { ok: false, mode: "live", ...EMPTY, error: "Couldn't read the portal tables." },
-      { status: 502 },
-    );
+  if (!attributedRes.ok) {
+    return storageFailure(attributedRes.status, await attributedRes.text().catch(() => ""));
   }
+  if (!anonRead.ok) return storageFailure(anonRead.status, anonRead.detail);
 
   const attributedRaw = (await attributedRes.json().catch(() => [])) as AttributedRow[];
-  const anonRaw = (await anonRes.json().catch(() => [])) as AnonymousRow[];
   const attributedRows = Array.isArray(attributedRaw) ? attributedRaw : [];
-  const anonRows = Array.isArray(anonRaw) ? anonRaw : [];
+  // Newest-first, like the attributed window — the grouping below leans on it.
+  const anonRows = (anonRead.rows as AnonymousRow[]).reverse();
 
   // ── the opt-out list ──────────────────────────────────────────────────────
   // email_suppression has its OWN migration (supabase/unsubscribe.sql), so it

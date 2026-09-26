@@ -27,7 +27,7 @@ import { type LeadActivity } from "@/lib/data/leadActivity";
  * so the same trail always scores the same, and the number matches the trail
  * the operator can count by eye.
  */
-export function leadScore(lead: LeadActivity): number {
+export function leadScore(lead: Pick<LeadActivity, "counts">): number {
   const { inquiries, serviceOpens, portalViews, emailClicks } = lead.counts;
   // ramp: how far a count fills its band, saturating so extras keep adding but
   // with diminishing return (1→~0.3, 3→~0.6, 6→~0.8, big→~1).
@@ -48,6 +48,14 @@ export function leadScore(lead: LeadActivity): number {
  * enough times to climb past the middle of the 35–59 band (~4 views).
  */
 export const HOT_LEAD_MIN_SCORE = 50;
+
+/**
+ * The Follow-Ups cut-off (INCLUSIVE). One service open scores
+ * 60 + 29·(1 − e^(−1/4)) ≈ 66, so "66 or hotter" means the lead opened at
+ * least one service card. Enquirers score 90+ but are excluded from
+ * Follow-Ups separately — Sales owns them (lib/followups/eligibility).
+ */
+export const FOLLOW_UP_MIN_SCORE = 66;
 
 /** Does this lead belong on the Hot Leads tab? */
 export function isHotLead(lead: LeadActivity): boolean {

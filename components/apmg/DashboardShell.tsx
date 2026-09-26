@@ -15,6 +15,7 @@ import { ComingSoon } from "./ComingSoon";
 import { ComposerConfigPage } from "./ComposerConfigPage";
 import { LegalDocsPage } from "./LegalDocsPage";
 import { EnquiriesPage } from "./EnquiriesPage";
+import { FollowUpsPage } from "./FollowUpsPage";
 import { IntegrationsPage } from "./IntegrationsPage";
 import { MobileHeader } from "./MobileHeader";
 import { OverviewPage } from "./OverviewPage";
@@ -149,6 +150,8 @@ export function DashboardShell({ user }: { user?: SessionUser }) {
                     <HotLeadsPage />
                   ) : activeTab === "enquiries" ? (
                     <EnquiriesPage />
+                  ) : activeTab === "followups" ? (
+                    <FollowUpsPage />
                   ) : activeTab === "sales" ? (
                     <SalesPage user={user} />
                   ) : activeTab === "closed" ? (

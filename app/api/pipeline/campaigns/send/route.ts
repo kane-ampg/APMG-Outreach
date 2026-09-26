@@ -1,34 +1,13 @@
-import { matchReason, partitionByClientGuard } from "@/lib/clients/guard";
-import { clientGuardData } from "@/lib/clients/server";
 import {
   bestEmail,
   ensureLinkToken,
-  htmlToText,
   isEmail,
   MAX_RECIPIENTS,
-  renderBody,
-  renderSubject,
   safeCampaignTag,
-  trackedLink,
 } from "@/lib/pipeline/campaign";
-import {
-  campaignWebhook,
-  isUuid,
-  publicObjectUrl,
-  sameOrigin,
-  SECTOR_ASSETS_BUCKET,
-  supabaseTarget,
-  webhookAuthHeaders,
-} from "@/lib/pipeline/server";
+import { deliverCampaign, type CleanRecipient, type SendResult } from "@/lib/pipeline/deliver";
+import { publicObjectUrl, sameOrigin, SECTOR_ASSETS_BUCKET } from "@/lib/pipeline/server";
 import { serviceBySlug } from "@/lib/pipeline/services";
-import { loadPlaybooks, playbookPdfUrl } from "@/lib/pipeline/sectorStore";
-import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
-import {
-  fetchSuppressedDomains,
-  fetchSuppressedEmails,
-  insertPortalEvents,
-  organisationDomain,
-} from "@/lib/portal/server";
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Sends an outreach email campaign to a set of stored leads. Each message's CTA
@@ -58,55 +37,12 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // queue until a later send lands. The telemetry reads are allowlist-based
 // (attribution_click/portal_view/…), so these rows never pollute lead trails
 // or funnel totals.
+//
+// The delivery chain itself lives in lib/pipeline/deliver.ts.
 export const runtime = "nodejs";
-
-/** The send-ledger event name (portal_events). Keep in sync with
- *  /api/portal/report, which aggregates it per period. */
-const SENT_EVENT = "email_sent";
 
 const MAX_SUBJECT = 300;
 const MAX_HTML = 20_000;
-/** How many client matches to name in the response. Enough for the send flow to
- *  show who was dropped and why; not so many that a 500-recipient batch of
- *  clients returns a 500-row payload. */
-const MAX_REPORTED_CLIENTS = 25;
-
-type SendMode = "live" | "unconfigured" | "paused" | "noop";
-
-interface SendResult {
-  ok: boolean;
-  sent: number;
-  mode: SendMode;
-  campaign?: string;
-  error?: string;
-  /** how many recipients were dropped because they had unsubscribed */
-  suppressed?: number;
-  /** how many recipients were dropped for already being APMG clients */
-  clients?: number;
-  /** who they were, so the operator is told rather than left to notice the
-   *  count not adding up (capped — the message is a report, not a dump) */
-  clientMatches?: Array<{ business: string; email: string; client: string; reason: string }>;
-  /** how many recipients were dropped because ANOTHER address at the same
-   *  organisation has unsubscribed — the address picked was not itself on the
-   *  list, so this needs saying out loud */
-  suppressedDomains?: number;
-  /** who they were, and which colleague's opt-out covered them (capped) */
-  domainMatches?: Array<{ business: string; email: string; optedOut: string }>;
-}
-
-interface CleanRecipient {
-  id: string;
-  email: string;
-  business?: string;
-  /** the lead's website, used only by the client guard — a prospect whose site
-   *  is a client's own domain is that client under another trading name */
-  website?: string;
-  /** per-lead AI draft overrides (Compose email) — fall back to the shared template */
-  subject?: string;
-  html?: string;
-  /** the lead's CSV Category — resolved to a Sector Playbook to attach its PDF */
-  category?: string | null;
-}
 
 /** Whitelist a client recipient → {id, email, business, subject?, html?}.
  *  Accepts an explicit `email`, or derives the best contact from an `emails`
@@ -201,243 +137,23 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, sent: 0, mode: "noop", error: "No recipients with a valid email address." }, 400);
   }
 
-  // NEVER EMAIL AN EXISTING CUSTOMER. The client rule from the 2026-07-29 call
-  // is absolute, so it is enforced here rather than only warned about in the
-  // send flow's UI: the browser's copy of the guard index could be stale, and a
-  // hand-rolled POST wouldn't consult it at all. Runs before the suppression
-  // lookup because it needs no network — the folded client list is a bundled
-  // export (lib/clients/server.ts), memoised per instance.
-  //
-  // Only `blocked` matches are dropped: an exact address, a client's mail
-  // domain, a client's own website, or the same business name. Resemblance
-  // matches ("reads like Hive Strata") are a judgement call and stay in the
-  // send — the flow surfaces those for a human before this point.
-  const clientCheck = partitionByClientGuard(recipients, clientGuardData());
-  const clientMatches = clientCheck.blocked.map(({ prospect, match }) => ({
-    business: prospect.business ?? prospect.email,
-    email: prospect.email,
-    client: match.clientName,
-    reason: matchReason(match),
-  }));
-  if (clientMatches.length > 0) {
-    console.warn(
-      `[pipeline/campaigns] dropped ${clientMatches.length} recipient(s) already on the client list:`,
-      clientMatches.map((m) => `${m.email} (${m.reason})`).join("; ").slice(0, 1000),
-    );
-  }
-  // Remove them in place, the same way the suppression pass below does, so the
-  // send order the operator reviewed is otherwise preserved.
-  if (clientCheck.blocked.length > 0) {
-    const drop = new Set(clientCheck.blocked.map(({ prospect }) => prospect));
-    for (let i = recipients.length - 1; i >= 0; i--) {
-      if (drop.has(recipients[i])) recipients.splice(i, 1);
-    }
-  }
-  if (recipients.length === 0) {
-    return json(
-      {
-        ok: false,
-        sent: 0,
-        mode: "noop",
-        clients: clientMatches.length,
-        clientMatches: clientMatches.slice(0, MAX_REPORTED_CLIENTS),
-        error:
-          clientMatches.length === 1
-            ? "The only recipient is already an APMG client, so nothing was sent."
-            : "Every recipient is already an APMG client, so nothing was sent.",
-      },
-      400,
-    );
-  }
-
-  // Honour unsubscribes (Spam Act 2003): drop any recipient whose address is on
-  // the suppression list before we build/send anything. fetchSuppressedEmails
-  // fails OPEN (empty set) if the table is missing or the lookup errors, so a
-  // broken lookup never blocks a legitimate send — but that also means the
-  // opt-out list is only enforced once supabase/unsubscribe.sql has been run.
-  // We only bother when a real DB is configured (demo mode has no list).
-  let suppressedCount = 0;
-  /** recipients dropped because ANOTHER address at their organisation opted out */
-  const domainMatches: Array<{ business: string; email: string; optedOut: string }> = [];
-  const sb = supabaseTarget();
-  if (sb.state === "ok") {
-    const suppressed = await fetchSuppressedEmails(
-      sb.base,
-      sb.key,
-      recipients.map((r) => r.email),
-    );
-    if (suppressed.size > 0) {
-      const before = recipients.length;
-      for (let i = recipients.length - 1; i >= 0; i--) {
-        if (suppressed.has(recipients[i].email.toLowerCase())) recipients.splice(i, 1);
-      }
-      suppressedCount = before - recipients.length;
-    }
-
-    // An opt-out belongs to the business, not to the one string it arrived
-    // from. fetchSuppressedDomains rolls the list up to ORGANISATION domains
-    // (public providers like gmail.com excluded), so a second address at a
-    // business that already unsubscribed is dropped too. Same fail-open
-    // contract as above. Reported separately from `suppressed` because it is
-    // the surprising one: the operator picked an address that is not itself on
-    // the list.
-    const optedOutDomains = await fetchSuppressedDomains(
-      sb.base,
-      sb.key,
-      recipients.map((r) => r.email),
-    );
-    if (optedOutDomains.size > 0) {
-      for (let i = recipients.length - 1; i >= 0; i--) {
-        const domain = organisationDomain(recipients[i].email.toLowerCase());
-        const optedOut = domain ? optedOutDomains.get(domain) : undefined;
-        if (!optedOut) continue;
-        domainMatches.push({
-          business: recipients[i].business ?? recipients[i].email,
-          email: recipients[i].email,
-          optedOut,
-        });
-        recipients.splice(i, 1);
-      }
-      if (domainMatches.length > 0) {
-        domainMatches.reverse(); // restore the operator's send order
-        console.warn(
-          `[pipeline/campaigns] dropped ${domainMatches.length} recipient(s) whose organisation has unsubscribed:`,
-          domainMatches.map((m) => `${m.email} (${m.optedOut} opted out)`).join("; ").slice(0, 1000),
-        );
-      }
-    }
-  }
-  if (recipients.length === 0) {
-    return json(
-      {
-        ok: false,
-        sent: 0,
-        mode: "noop",
-        suppressed: suppressedCount,
-        clients: clientMatches.length || undefined,
-        clientMatches: clientMatches.length ? clientMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
-        suppressedDomains: domainMatches.length || undefined,
-        domainMatches: domainMatches.length ? domainMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
-        error:
-          domainMatches.length > 0 && suppressedCount === 0
-            ? "Every recipient's organisation has already unsubscribed, so nothing was sent."
-            : "Every recipient has unsubscribed.",
-      },
-      400,
-    );
-  }
-
-  // Require the shared subject/body only when some recipient lacks its own
-  // per-lead draft (in a pure AI send every recipient carries both).
-  if (!subject && recipients.some((r) => !r.subject)) {
-    return json({ ok: false, sent: 0, mode: "noop", error: "A subject line is required." }, 400);
-  }
-  if (!bodyHtml && recipients.some((r) => !r.html)) {
-    return json({ ok: false, sent: 0, mode: "noop", error: "An email body is required." }, 400);
-  }
-
-  // Build the tracked, personalized message for each recipient. A reviewed AI
-  // draft (per-recipient subject/html) wins over the shared template; both go
-  // through the same merge render, so the tracked {{link}} lands either way.
-  // NEXT_PUBLIC_TRACK_BASE pins the link host (e.g. the deployed domain);
-  // otherwise we use this request's origin.
+  // Everything from here on — client guard, opt-outs, render, webhook, ledger —
+  // is the shared delivery path (lib/pipeline/deliver.ts), so the Follow-Ups
+  // send can never apply a weaker guard than this one.
   const base = process.env.NEXT_PUBLIC_TRACK_BASE || new URL(req.url).origin;
-  // Resolve each recipient's Category to a Sector Playbook so the matching
-  // portfolio PDF is attached (Sector Playbooks tab). Unmatched categories /
-  // sectors without a PDF simply send with no attachment. n8n downloads
-  // `attachment.url` and attaches it as `attachment.filename`.
-  const playbooks = await loadPlaybooks();
   // Service template picked on Step 2 (one per send) — resolves to the public
-  // Storage URL of that service's photo, sent as the branded email's hero so
-  // the image always matches the service being pitched. Unknown slug / no
-  // Supabase → no hero field → n8n falls back to its default team photo.
+  // Storage URL of that service's photo, sent as the branded email's hero.
   const service = serviceBySlug(typeof b.service === "string" ? b.service : null);
   const heroUrl = service ? publicObjectUrl(SECTOR_ASSETS_BUCKET, service.image) : null;
-  const messages = recipients.map((r) => {
-    const sector = resolveSectorForCategory(r.category, playbooks);
-    const attachmentUrl = sector?.pdf ? playbookPdfUrl(sector) : null;
-    // Render the merged body, then flatten to plain text for the webhook — the
-    // n8n Gmail node owns formatting. The tracked CTA link survives inline as
-    // "label (url)" so a click is still attributed to /t/<lead>.
-    const html = renderBody(r.html ?? bodyHtml, { business: r.business, link: trackedLink(base, r.id, campaign) });
-    return {
-      to: r.email,
-      leadId: r.id,
-      subject: renderSubject(r.subject ?? subject, { business: r.business }),
-      text: htmlToText(html),
-      // Omitted (undefined → dropped by JSON.stringify) when no PDF applies.
-      attachment: attachmentUrl && sector?.pdf ? { url: attachmentUrl, filename: sector.pdf.name } : undefined,
-      // Omitted when no service template was picked — n8n keeps its default hero.
-      hero: heroUrl ?? undefined,
-      hero_alt: heroUrl && service ? service.imageAlt : undefined,
-    };
-  });
-
-  const target = await campaignWebhook();
-  if (target.state !== "ok") {
-    // NEVER report a send that did not happen. "paused" is called out
-    // separately from "unconfigured" because it is the dangerous one: the
-    // operator configured n8n, later switched the Integrations toggle off,
-    // and would otherwise be told the whole campaign went out.
-    const error =
-      target.state === "paused"
-        ? "The campaign automation is paused. Switch it back on under Integrations to send."
-        : "No campaign automation is configured, so nothing can be sent.";
-    console.error(`[pipeline/campaigns] refusing to send: webhook is ${target.state}.`);
-    return json({ ok: false, sent: 0, mode: target.state, campaign, error }, 503);
-  }
-
-  let res: Response;
-  try {
-    res = await fetch(target.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...webhookAuthHeaders() },
-      body: JSON.stringify({ campaign, messages }),
-      signal: AbortSignal.timeout(120_000),
-    });
-  } catch (e) {
-    console.error("[pipeline/campaigns] fetch to n8n webhook failed:", e);
-    return json({ ok: false, sent: 0, mode: "live", error: "Could not reach the campaign automation." }, 502);
-  }
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    console.error(`[pipeline/campaigns] n8n webhook ${res.status}:`, detail.slice(0, 1000));
-    return json({ ok: false, sent: 0, mode: "live", error: "The automation rejected the campaign." }, 502);
-  }
-
-  // Send ledger: one email_sent row per delivered recipient, so period reports
-  // can answer "how many emails went out this week/month". Best-effort — the
-  // campaign was already accepted by the automation, so a ledger hiccup only
-  // logs; it never turns a successful send into an error.
-  if (sb.state === "ok") {
-    await insertPortalEvents(
-      sb.base,
-      sb.key,
-      recipients.map((r) => ({
-        event: SENT_EVENT,
-        props: {},
-        lead_id: isUuid(r.id) ? r.id : null,
-        campaign,
-        category: r.category,
-      })),
-    );
-  }
-
-  // The client drops are reported on a SUCCESSFUL send too. A campaign that
-  // quietly went to 48 of the 50 leads the operator picked would look like a
-  // clean run; the count and the reasons are what make the difference visible.
-  return json({
-    ok: true,
-    sent: messages.length,
-    mode: "live",
+  const out = await deliverCampaign({
     campaign,
-    suppressed: suppressedCount,
-    clients: clientMatches.length || undefined,
-    clientMatches: clientMatches.length ? clientMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
-    suppressedDomains: domainMatches.length || undefined,
-    domainMatches: domainMatches.length ? domainMatches.slice(0, MAX_REPORTED_CLIENTS) : undefined,
+    base,
+    recipients,
+    subject,
+    bodyHtml,
+    hero: heroUrl && service ? { url: heroUrl, alt: service.imageAlt } : null,
   });
+  return json(out.result, out.status);
 }
 
 function json(result: SendResult, status = 200): Response {

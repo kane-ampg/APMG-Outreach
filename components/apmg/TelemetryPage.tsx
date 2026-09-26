@@ -31,6 +31,7 @@ import {
   type UnsubscribedPerson,
 } from "@/lib/data/leadActivity";
 import { sourceLabel } from "@/lib/data/enquiries";
+import { PORTAL_ORIGIN } from "@/lib/hosts";
 import { OUTREACH_SOURCE } from "@/lib/portal/source";
 import { EventTrail, TimelineLine, fmtStamp } from "./LeadTrail";
 import { leadScore, scoreTier } from "@/lib/data/leadScore";
@@ -1082,7 +1083,20 @@ function AnonymousPanel({
 
         <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
           Portal visitors who didn&rsquo;t arrive via a tracked outreach email or a tagged social
-          link — real interest, but with no identity to pin the clicks to.
+          link — real interest, but with no identity to pin the clicks to. Team visits count
+          here until each browser is{" "}
+          {/* The admin host's internal mark can't reach the customer host
+              (cookies are per host) — /api/portal/staff sets it there. */}
+          <a
+            href={`${PORTAL_ORIGIN}/api/portal/staff`}
+            target="_blank"
+            rel="noopener"
+            data-track="telemetry_mark_staff"
+            className="font-medium text-foreground underline decoration-primary/60 underline-offset-2 outline-none hover:decoration-primary focus-visible:shadow-[0_0_0_2px_hsl(var(--ring))]"
+          >
+            marked as staff
+          </a>
+          .
         </p>
 
         {anonymous.topServices.length > 0 ? (

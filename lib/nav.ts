@@ -7,6 +7,7 @@ import {
   HardHat,
   Inbox,
   LayoutDashboard,
+  MailPlus,
   PhoneCall,
   ScrollText,
   Settings,
@@ -27,6 +28,7 @@ export type TabId =
   | "clients"
   | "hot"
   | "enquiries"
+  | "followups"
   | "sales"
   | "closed"
   | "integrations"
@@ -79,6 +81,9 @@ export const NAV: NavSection[] = [
   {
     caption: "Sell",
     items: [
+      // Email first, then Sales: hot leads get their follow-up emails here,
+      // and arrive on Hot Leads as "Ready for Sales" once the sequence ends.
+      { id: "followups", label: "Follow-Ups", icon: MailPlus, perm: "followups.view" },
       // Sales badge is injected live by the Sidebar (real queue size from useSales)
       { id: "sales", label: "Sales", icon: PhoneCall, perm: "sales.view" },
       { id: "closed", label: "Closed deals", icon: Handshake, perm: "sales.view" },
@@ -149,6 +154,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   clients: "Master Client List",
   hot: "Hot Leads",
   enquiries: "Enquiries",
+  followups: "Follow-Ups",
   sales: "Sales",
   closed: "Closed deals",
   integrations: "Integrations",

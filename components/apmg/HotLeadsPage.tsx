@@ -30,6 +30,9 @@ import {
   SCORE_BANDS,
   type ScoreBand,
 } from "@/lib/data/leadScore";
+import { followUpChip } from "@/lib/followups/labels";
+import type { FollowUpQueueItem, FollowUpQueueResponse } from "@/lib/followups/types";
+import { useRbac } from "@/lib/rbac/RbacProvider";
 import {
   archiveLeads,
   clearReturn,
@@ -277,6 +280,7 @@ function HotLeadRow({
   onArchive,
   onRestore,
   onClearReturn,
+  followUp,
 }: {
   lead: LeadActivity;
   lane: Lane;
@@ -293,6 +297,8 @@ function HotLeadRow({
   onArchive: (leadId: string) => void;
   onRestore: (leadId: string) => void;
   onClearReturn: (leadId: string) => void;
+  /** follow-up pipeline state, e.g. "Follow-up 1 sent · #2 due 28 Sep" */
+  followUp: string | null;
 }) {
   const score = leadScore(lead);
   const tier = scoreTier(score);
@@ -393,6 +399,18 @@ function HotLeadRow({
           >
             <Send className="h-2.5 w-2.5" aria-hidden />
             {formatInt(inquiries)}
+          </span>
+        )}
+        {followUp && (
+          <span
+            className={
+              followUp === "Ready for Sales"
+                ? "inline-flex items-center rounded-full border border-primary/40 bg-primary/10 px-1.5 py-px font-semibold text-primary"
+                : "inline-flex items-center rounded-full border border-border bg-background px-1.5 py-px text-muted-foreground"
+            }
+            title="Follow-Ups pipeline"
+          >
+            {followUp}
           </span>
         )}
       </div>
@@ -502,6 +520,25 @@ export function HotLeadsPage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [keyInput, setKeyInput] = useState("");
+
+  // Follow-up state per lead — read ONCE on mount (not on the 20s poll: the
+  // queue read is heavier than the hot-lead poll and changes only on action).
+  const { can } = useRbac();
+  const canFollowUps = can("followups.view");
+  const [followUps, setFollowUps] = useState<ReadonlyMap<string, FollowUpQueueItem>>(new Map());
+  useEffect(() => {
+    if (!canFollowUps) return;
+    let live = true;
+    fetch("/api/followups", { cache: "no-store" })
+      .then((r) => r.json() as Promise<FollowUpQueueResponse>)
+      .then((d) => {
+        if (live && d.ok) setFollowUps(new Map(d.items.map((i) => [i.leadId, i])));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [canFollowUps]);
 
   // Narrow to the chosen band, then rank.
   const visible = useMemo(
@@ -1034,6 +1071,7 @@ export function HotLeadsPage() {
                         onArchive={(id) => void archive([id])}
                         onRestore={(id) => void single(id, unarchiveLead)}
                         onClearReturn={(id) => void single(id, clearReturn)}
+                        followUp={followUpChip(followUps.get(lead.leadId))}
                       />
                     ))}
                   </motion.ul>

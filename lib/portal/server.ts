@@ -412,6 +412,52 @@ export async function insertPortalEvents(
   }
 }
 
+/** PostgREST's max-rows on this project: one response never carries more than
+ *  this, and it says nothing when it cuts — `limit=2000` answers a 200 with
+ *  1000 rows (verified against the live project 2026-09-26). */
+export const MAX_ROWS_PER_READ = 1000;
+/** Pages one readAllRows call may take before it stops and logs (50,000 rows). */
+const MAX_PAGES = 50;
+
+export type RowsRead = { ok: true; rows: unknown[] } | { ok: false; status: number; detail: string };
+
+/**
+ * Every row a PostgREST read matches, one MAX_ROWS_PER_READ page at a time.
+ *
+ * WHY THIS EXISTS. A single `limit=2000` read silently returns 1000 rows, and
+ * the portal's visitor counts were built on exactly that: on 2026-09-26 the
+ * Telemetry tab showed 9 of 160 anonymous portal views and 3 of 33 Facebook
+ * visitors, because the newest thousand rows reached back only 3.3 days.
+ *
+ * `pathAndQuery` must not carry limit/offset, and must carry a TOTAL order that
+ * ends in `id` — `order=created_at.asc,id.asc` — or pages can overlap and skip.
+ * Ascending on purpose: a row inserted mid-read lands after the last page
+ * instead of shifting every offset, so a visitor arriving during the read can't
+ * be counted twice across a page boundary. Callers that want newest-first
+ * reverse the result.
+ *
+ * A network failure throws, like the single fetch it replaces, so callers keep
+ * their existing "Could not reach the database" catch.
+ */
+export async function readAllRows(base: string, key: string, pathAndQuery: string): Promise<RowsRead> {
+  const rows: unknown[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await fetch(
+      `${base}/rest/v1/${pathAndQuery}&limit=${MAX_ROWS_PER_READ}&offset=${page * MAX_ROWS_PER_READ}`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: "no-store" },
+    );
+    if (!res.ok) return { ok: false, status: res.status, detail: await res.text().catch(() => "") };
+    const got = await res.json().catch(() => null);
+    if (!Array.isArray(got)) return { ok: true, rows };
+    rows.push(...got);
+    if (got.length < MAX_ROWS_PER_READ) return { ok: true, rows };
+  }
+  console.error(
+    `[portal] ${pathAndQuery.split("?")[0]} hit the ${MAX_PAGES}-page cap at ${rows.length} rows; later rows were not read.`,
+  );
+  return { ok: true, rows };
+}
+
 /** True when a PostgREST error means a portal table doesn't exist yet — i.e.
  *  supabase/portal-telemetry.sql hasn't been run. The read routes degrade to
  *  demo mode on this so the admin page shows the "run the migration" banner

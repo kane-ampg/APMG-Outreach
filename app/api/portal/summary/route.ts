@@ -1,17 +1,24 @@
 import { requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
-import { isMissingColumn, isMissingPortalTable } from "@/lib/portal/server";
+import { isMissingColumn, isMissingPortalTable, readAllRows, type RowsRead } from "@/lib/portal/server";
 import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
 
-// GET /api/portal/summary — the aggregation behind the admin Enquiries tab:
-// funnel totals (email click → portal visit → service open → enquiry), the
-// per-service and per-sector breakdowns, and a short recent-events feed.
-// Aggregated here in the route (last 2000 events / 500 enquiries) rather than
-// in SQL so the read stays one pair of plain PostgREST GETs like every other
-// route in this repo — at portal traffic volumes that's plenty.
+// GET /api/portal/summary — the aggregation behind the admin Enquiries tab and
+// the Telemetry KPI row: funnel totals (email click → portal visit → service
+// open → enquiry), the per-service, per-sector and per-source breakdowns (the
+// "direct" source is the anonymous visitors), and a short recent-events feed.
+// Aggregated here in the route rather than in SQL so every read stays a plain
+// PostgREST GET like the rest of this repo.
+//
+// ALL-TIME, ONE READ PER FUNNEL STEP. This used to tally "the newest 2000
+// portal_events rows". PostgREST caps a response at 1000, and that window held
+// every row in the table — the send ledger, chat pings, dashboard clicks — so
+// one outreach send pushed a week of portal visits out of it. Each step is now
+// read on its own, carrying only the columns its tally needs, and paged to the
+// end (readAllRows). Same bytes per poll as the old single read (~250 KB at
+// 2026-09 volumes), and every visit counts.
 // Server-side (keeps the service role key off the browser).
 export const runtime = "nodejs";
 
-const EVENTS_LIMIT = 2000;
 const INQUIRIES_LIMIT = 500;
 const RECENT_LIMIT = 30;
 
@@ -26,17 +33,29 @@ const PORTAL_EVENT_NAMES = new Set([
   "portal_inquiry",
 ]);
 
+/** Total order for the paged reads — see readAllRows for why ascending. */
+const PAGED_ORDER = "order=created_at.asc,id.asc";
+const CLICKS_QUERY = `portal_events?select=category&event=eq.attribution_click&${PAGED_ORDER}`;
+const VIEWS_QUERY =
+  `portal_events?select=lead_id,category,visitor_id,source:props->>source` +
+  `&event=eq.portal_view&${PAGED_ORDER}`;
+const OPENS_QUERY = `portal_events?select=service:props->>service&event=eq.portal_service_open&${PAGED_ORDER}`;
+const RECENT_QUERY =
+  `portal_events?select=event,props,campaign,category,created_at` +
+  `&event=in.(${[...PORTAL_EVENT_NAMES].join(",")})&order=created_at.desc,id.desc&limit=${RECENT_LIMIT}`;
+
 /** Bucket label for visitors with no attributed lead (typed the URL, forwarded
  *  link, cookie expired…). */
 const DIRECT = "Direct / unknown";
 
-type EventRow = {
+type ClickRow = { category: string | null };
+type ViewRow = { lead_id: string | null; category: string | null; visitor_id: string | null; source: string | null };
+type OpenRow = { service: string | null };
+type RecentRow = {
   event: string;
   props: Record<string, unknown> | null;
-  lead_id: string | null;
   campaign: string | null;
   category: string | null;
-  visitor_id: string | null;
   created_at: string;
 };
 
@@ -77,6 +96,24 @@ function restGet(base: string, key: string, pathAndQuery: string): Promise<Respo
   });
 }
 
+/** A read that failed: the migration banner when the portal tables are
+ *  missing, a 502 otherwise. */
+function storageFailure(status: number, detail: string): Response {
+  console.error(`[portal/summary] Supabase ${status}:`, detail.slice(0, 1000));
+  if (isMissingPortalTable(status, detail)) {
+    // Migration not run yet → answer demo so the admin tab shows the "run
+    // supabase/portal-telemetry.sql" banner instead of a hard error.
+    return Response.json({ ok: true, mode: "demo", needsMigration: true, ...EMPTY_SUMMARY });
+  }
+  return Response.json({ ok: false, mode: "live", ...EMPTY_SUMMARY, error: "Couldn't read the portal tables." }, { status: 502 });
+}
+
+/** Non-string / empty → null, so a row's column reads the same whether
+ *  PostgREST sent null, "" or nothing. */
+function str(v: unknown): string | null {
+  return typeof v === "string" && v ? v : null;
+}
+
 export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, mode: "live", ...EMPTY_SUMMARY, error: "Forbidden." }, { status: 403 });
@@ -100,15 +137,17 @@ export async function GET(req: Request): Promise<Response> {
       `portal_inquiries?select=${cols}&order=created_at.desc&limit=${INQUIRIES_LIMIT}`,
     );
 
-  let eventsRes: Response;
+  let clicks: RowsRead;
+  let views: RowsRead;
+  let opens: RowsRead;
+  let recentRes: Response;
   let inquiriesRes: Response;
   try {
-    [eventsRes, inquiriesRes] = await Promise.all([
-      restGet(
-        target.base,
-        target.key,
-        `portal_events?select=event,props,lead_id,campaign,category,visitor_id,created_at&order=created_at.desc&limit=${EVENTS_LIMIT}`,
-      ),
+    [clicks, views, opens, recentRes, inquiriesRes] = await Promise.all([
+      readAllRows(target.base, target.key, CLICKS_QUERY),
+      readAllRows(target.base, target.key, VIEWS_QUERY),
+      readAllRows(target.base, target.key, OPENS_QUERY),
+      restGet(target.base, target.key, RECENT_QUERY),
       listInquiries(INQUIRY_COLS),
     ]);
     // `source` column not migrated in yet — aggregate without it (source
@@ -127,21 +166,16 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ ok: false, mode: "live", ...EMPTY_SUMMARY, error: "Could not reach the database." }, { status: 502 });
   }
 
-  for (const res of [eventsRes, inquiriesRes]) {
-    if (res.ok) continue;
-    const detail = await res.text().catch(() => "");
-    console.error(`[portal/summary] Supabase ${res.status}:`, detail.slice(0, 1000));
-    if (isMissingPortalTable(res.status, detail)) {
-      // Migration not run yet → answer demo so the admin tab shows the "run
-      // supabase/portal-telemetry.sql" banner instead of a hard error.
-      return Response.json({ ok: true, mode: "demo", needsMigration: true, ...EMPTY_SUMMARY });
-    }
-    return Response.json({ ok: false, mode: "live", ...EMPTY_SUMMARY, error: "Couldn't read the portal tables." }, { status: 502 });
+  if (!clicks.ok) return storageFailure(clicks.status, clicks.detail);
+  if (!views.ok) return storageFailure(views.status, views.detail);
+  if (!opens.ok) return storageFailure(opens.status, opens.detail);
+  for (const res of [recentRes, inquiriesRes]) {
+    if (!res.ok) return storageFailure(res.status, await res.text().catch(() => ""));
   }
 
-  const eventRowsRaw = (await eventsRes.json().catch(() => [])) as EventRow[];
+  const recentRowsRaw = (await recentRes.json().catch(() => [])) as RecentRow[];
   const inquiryRowsRaw = (await inquiriesRes.json().catch(() => [])) as InquiryRow[];
-  const eventRows = Array.isArray(eventRowsRaw) ? eventRowsRaw : [];
+  const recentRows = Array.isArray(recentRowsRaw) ? recentRowsRaw : [];
   const inquiryRows = Array.isArray(inquiryRowsRaw) ? inquiryRowsRaw : [];
 
   // ── aggregate ──────────────────────────────────────────────────────────────
@@ -173,39 +207,39 @@ export async function GET(req: Request): Promise<Response> {
   const channelOf = (source: string | null, leadId: string | null) =>
     source ?? (leadId ? OUTREACH_SOURCE : DIRECT_SOURCE);
 
-  for (const row of eventRows) {
-    if (!row || !PORTAL_EVENT_NAMES.has(row.event)) continue;
-    const rawService = row.props?.service;
-    const service = typeof rawService === "string" && rawService ? rawService : null;
-    const rawSource = row.props?.source;
-    const source = typeof rawSource === "string" && rawSource ? rawSource : null;
+  for (const row of clicks.rows as ClickRow[]) {
+    if (!row) continue;
+    totals.attributionClicks += 1;
+    categoryBucket(str(row.category) ?? DIRECT).clicks += 1;
+  }
+  for (const row of views.rows as ViewRow[]) {
+    if (!row) continue;
+    const visitor = str(row.visitor_id);
+    totals.portalViews += 1;
+    categoryBucket(str(row.category) ?? DIRECT).views += 1;
+    if (visitor) visitors.add(visitor);
+    const src = sourceBucket(channelOf(str(row.source), str(row.lead_id)));
+    src.views += 1;
+    if (visitor) src.visitors.add(visitor);
+  }
+  for (const row of opens.rows as OpenRow[]) {
+    if (!row) continue;
+    totals.serviceOpens += 1;
+    const service = str(row.service);
+    if (service) serviceBucket(service).opens += 1;
+  }
 
-    if (row.event === "attribution_click") {
-      totals.attributionClicks += 1;
-      categoryBucket(row.category ?? DIRECT).clicks += 1;
-    } else if (row.event === "portal_view") {
-      totals.portalViews += 1;
-      categoryBucket(row.category ?? DIRECT).views += 1;
-      if (row.visitor_id) visitors.add(row.visitor_id);
-      const src = sourceBucket(channelOf(source, row.lead_id));
-      src.views += 1;
-      if (row.visitor_id) src.visitors.add(row.visitor_id);
-    } else if (row.event === "portal_service_open") {
-      totals.serviceOpens += 1;
-      if (service) serviceBucket(service).opens += 1;
-    }
-
-    // rows arrive newest-first, so the first 30 portal-relevant ones = recent feed
-    if (recentEvents.length < RECENT_LIMIT) {
-      recentEvents.push({
-        event: row.event,
-        service,
-        category: row.category ?? null,
-        campaign: row.campaign ?? null,
-        source,
-        createdAt: row.created_at,
-      });
-    }
+  // The recent read is already the newest RECENT_LIMIT funnel rows, newest first.
+  for (const row of recentRows) {
+    if (!row || typeof row.event !== "string") continue;
+    recentEvents.push({
+      event: row.event,
+      service: str(row.props?.service),
+      category: row.category ?? null,
+      campaign: row.campaign ?? null,
+      source: str(row.props?.source),
+      createdAt: row.created_at,
+    });
   }
 
   // Enquiry counts come from portal_inquiries — the canonical store — rather

@@ -63,6 +63,8 @@ export const PERMISSION_SECTIONS = [
     key: "sell",
     label: "Sell",
     permissions: [
+      { perm: "followups.view", short: "Follow-Ups" },
+      { perm: "followups.send", short: "Send follow-ups" },
       { perm: "sales.view", short: "Sales queue" },
       { perm: "leads.contact", short: "Contact a lead" },
       { perm: "leads.close", short: "Close won / lost" },

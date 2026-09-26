@@ -103,7 +103,7 @@ export function describeGap(days: number): string {
 
 /** Map trail slugs → readable trade names, dropping anything unrecognised
  *  (the trail is written by the portal; an unknown slug is not copy). */
-function serviceWords(services: string[]): string[] {
+export function serviceWords(services: string[]): string[] {
   const out: string[] = [];
   for (const slug of services) {
     const word = SERVICE_WORDS[(slug ?? "").trim().toLowerCase()];
@@ -116,11 +116,19 @@ function serviceWords(services: string[]): string[] {
 /** Join a short list the way a person writes it: "a, b and c" — but fall back
  *  to plain commas when an item already contains "and", so a gardening lead
  *  doesn't read "grounds and gardening and painting". */
-function joinWords(list: string[]): string {
+export function joinWords(list: string[]): string {
   if (list.length <= 1) return list[0] ?? "";
   if (list.some((w) => w.includes(" and "))) return list.join(", ");
   return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
 }
+
+/**
+ * The hard rule every follow-up prompt carries, word for word. Exported so the
+ * hot-lead follow-up prompt (lib/ai/hotFollowUpPrompt.ts) uses the exact same
+ * sentence rather than a paraphrase that could drift weaker.
+ */
+export const NO_TRACKING_RULE =
+  `- CRITICAL: never mention, hint at, imply or reference that we can see what they viewed, clicked, opened or downloaded. Do not write "I saw you", "I noticed you", "you had a look at", "since you were browsing", or anything of that kind. The only sign of this knowledge may be that the email happens to be about the right thing. Breaking this rule is a serious error.`;
 
 /**
  * Build the follow-up instruction block for one lead, or "" when the lead has
@@ -153,7 +161,7 @@ export function buildFollowUpPrompt(history: LeadHistory | null | undefined): st
       // claim in the writer's hands that the recipient could know is wrong.
       `This lead has been looking at these APMG services on our website: ${joinWords(words)}.`,
       `- Lead the email with ${words.length === 1 ? "that service" : "those services"} and make ${words.length === 1 ? "it" : "them"} the star of the pitch, still tailored to the recipient's sector and the people who use their site every day. Mention APMG's other trades only briefly, as backup.`,
-      `- CRITICAL: never mention, hint at, imply or reference that we can see what they viewed, clicked, opened or downloaded. Do not write "I saw you", "I noticed you", "you had a look at", "since you were browsing", or anything of that kind. The only sign of this knowledge may be that the email happens to be about the right thing. Breaking this rule is a serious error.`,
+      NO_TRACKING_RULE,
     );
   } else {
     lines.push(

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { fakePostgrest, type Row } from "@/lib/portal/fakePostgrest";
 
 /**
  * The opt-out half of the Telemetry payload.
@@ -201,6 +202,84 @@ describe("GET /api/portal/lead-activity — an unreadable opt-out list", () => {
 
     expect(body.mode).toBe("live");
     expect(body.unsubscribesAvailable).toBe(false);
+  });
+});
+
+/**
+ * The anonymous half of the payload: the "Anonymous portal visitors" card and
+ * the source-tagged visitor trails (the Facebook / Google rows in the table).
+ * PostgREST answers at most 1000 rows per read however large the `limit`, so
+ * these pin counts past that cap against a stub that enforces it.
+ */
+describe("GET /api/portal/lead-activity — anonymous visitors past the 1000-row cap", () => {
+  let seq = 0;
+  /** One portal_events row; created_at rises with every call (oldest first). */
+  function ev(event: string, extra: Row = {}): Row {
+    seq += 1;
+    return {
+      id: `e${String(seq).padStart(6, "0")}`,
+      event,
+      props: {},
+      view: null,
+      lead_id: null,
+      campaign: null,
+      category: null,
+      visitor_id: null,
+      created_at: new Date(Date.UTC(2026, 6, 1) + seq * 1000).toISOString(),
+      ...extra,
+    };
+  }
+
+  function serve(events: Row[]) {
+    const pg = fakePostgrest({ portal_events: events, email_suppression: [], leads: [] });
+    vi.stubGlobal("fetch", vi.fn(pg.handler));
+  }
+
+  beforeEach(() => {
+    seq = 0;
+  });
+
+  it("counts every anonymous visitor, not just the newest 1000 rows", async () => {
+    serve(Array.from({ length: 1200 }, (_, i) => ev("portal_view", { visitor_id: `v${i}` })));
+
+    const body = await (await GET(req())).json();
+
+    expect(body.anonymous).toMatchObject({ visitors: 1200, events: 1200 });
+  });
+
+  it("keeps a tagged visitor's trail when newer untagged traffic would have pushed it out", async () => {
+    serve([
+      ev("portal_view", { visitor_id: "fb1", props: { source: "facebook" } }),
+      ev("portal_service_open", { visitor_id: "fb1", view: "portal", props: { source: "facebook", service: "plumbing" } }),
+      ...Array.from({ length: 1000 }, (_, i) => ev("portal_view", { visitor_id: `v${i}` })),
+    ]);
+
+    const body = await (await GET(req())).json();
+
+    expect(body.visitors).toHaveLength(1);
+    expect(body.visitors[0]).toMatchObject({
+      visitorId: "fb1",
+      source: "facebook",
+      counts: { portalViews: 1, serviceOpens: 1 },
+    });
+    // The trail reads chronologically: the visit, then the card they opened.
+    expect(body.visitors[0].events.map((e: { event: string }) => e.event)).toEqual([
+      "portal_view",
+      "portal_service_open",
+    ]);
+    expect(body.anonymous.visitors).toBe(1000);
+  });
+
+  it("files a visitor under their LATEST source — last touch wins", async () => {
+    serve([
+      ev("portal_view", { visitor_id: "x", props: { source: "google" } }),
+      ev("portal_view", { visitor_id: "x", props: { source: "facebook" } }),
+    ]);
+
+    const body = await (await GET(req())).json();
+
+    expect(body.visitors[0]).toMatchObject({ visitorId: "x", source: "facebook" });
+    expect(body.visitors[0].firstSeen < body.visitors[0].lastSeen).toBe(true);
   });
 });
 
