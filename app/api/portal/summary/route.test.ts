@@ -107,8 +107,36 @@ describe("GET /api/portal/summary — counts past PostgREST's 1000-row cap", () 
     const body = await summary();
 
     expect(body.totals.serviceOpens).toBe(1001);
-    expect(body.byService).toContainEqual({ service: "painting", opens: 501, inquiries: 0 });
-    expect(body.byService).toContainEqual({ service: "plumbing", opens: 500, inquiries: 0 });
+    expect(body.byService).toContainEqual(expect.objectContaining({ service: "painting", opens: 501 }));
+    expect(body.byService).toContainEqual(expect.objectContaining({ service: "plumbing", opens: 500 }));
+  });
+
+  it("splits each service's clicks by the channel the visitor came through", async () => {
+    serve({
+      portal_events: [
+        ev("portal_service_open", { lead_id: LEAD, props: { service: "painting" } }),
+        ev("portal_service_open", { lead_id: LEAD, props: { service: "painting" } }),
+        ev("portal_service_open", { visitor_id: "fb", props: { service: "painting", source: "facebook" } }),
+        ev("portal_service_open", { visitor_id: "anon", props: { service: "painting" } }),
+        ev("portal_service_open", { visitor_id: "anon", props: { service: "flooring" } }),
+      ],
+      portal_inquiries: [],
+    });
+
+    const body = await summary();
+
+    expect(body.byService).toContainEqual({
+      service: "painting",
+      opens: 4,
+      inquiries: 0,
+      opensBySource: { outreach: 2, facebook: 1, direct: 1 },
+    });
+    expect(body.byService).toContainEqual({
+      service: "flooring",
+      opens: 1,
+      inquiries: 0,
+      opensBySource: { direct: 1 },
+    });
   });
 
   it("files an outreach visitor's view under outreach, not direct", async () => {
@@ -121,6 +149,35 @@ describe("GET /api/portal/summary — counts past PostgREST's 1000-row cap", () 
 
     expect(body.bySource).toContainEqual({ source: "outreach", visitors: 1, views: 1, inquiries: 0 });
     expect(body.bySource).toContainEqual({ source: "direct", visitors: 1, views: 1, inquiries: 0 });
+  });
+});
+
+describe("GET /api/portal/summary — the Leads engaged card", () => {
+  // The card used to count the Telemetry table's rows, which the lead-activity
+  // route caps at the newest 100 — so it read 100 for weeks while 1,238 leads
+  // had clicked (2026-09-26).
+  it("counts every lead that ever clicked, once each, past the row cap", async () => {
+    const leads = Array.from({ length: 1200 }, (_, i) => `00000000-0000-4000-8000-${String(i).padStart(12, "0")}`);
+    serve({
+      portal_events: [
+        ...leads.map((lead_id) => ev("attribution_click", { lead_id })),
+        ev("attribution_click", { lead_id: leads[0] }), // a second click is still one lead
+      ],
+      portal_inquiries: [
+        { lead_id: leads[5], created_at: "2026-09-01T00:00:00Z", service_slug: "painting" },
+        { lead_id: leads[5], created_at: "2026-09-02T00:00:00Z", service_slug: "painting" },
+        { lead_id: null, created_at: "2026-09-03T00:00:00Z", service_slug: "general" },
+      ],
+    });
+
+    const body = await summary();
+
+    expect(body.totals.attributionClicks).toBe(1201);
+    expect(body.totals.engagedLeads).toBe(1200);
+    // one lead enquired twice: one lead went on to enquire, two enquiries tracked
+    expect(body.totals.enquiredLeads).toBe(1);
+    expect(body.totals.attributedInquiries).toBe(2);
+    expect(body.totals.inquiries).toBe(3);
   });
 });
 

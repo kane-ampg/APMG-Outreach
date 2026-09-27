@@ -1,5 +1,12 @@
 import { requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
-import { isMissingPortalTable, portalAdminAuthorized } from "@/lib/portal/server";
+import {
+  isMissingColumn,
+  isMissingPortalTable,
+  portalAdminAuthorized,
+  readAllRows,
+  type RowsRead,
+} from "@/lib/portal/server";
+import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
 
 // GET /api/portal/report?from=<ISO>&to=<ISO> — the numbers behind the
 // Telemetry tab's "Export PDF" period report. Everything is scoped to the
@@ -13,13 +20,19 @@ import { isMissingPortalTable, portalAdminAuthorized } from "@/lib/portal/server
 //                breakdown joined with that campaign's attribution clicks,
 //                and unsubscribes recorded in the period
 //   engagement — the portal funnel inside the period: attribution clicks,
-//                portal views, service opens, enquiries, top services
+//                portal views, service opens, enquiries, every service opened
+//   channels   — the same funnel per traffic channel (facebook, google,
+//                outreach, direct, …): visitors, visits, service clicks,
+//                enquiries and which services — the report's Facebook &
+//                Google section
 //   inquiries  — the newest enquiries of the period (bounded), for the
 //                report's detail table
 //
-// Aggregated in-route from bounded PostgREST windows (the repo's standing
-// trade-off — see /api/portal/summary). True totals come from PostgREST
-// count=exact even when a window caps the rows fetched for breakdowns.
+// Aggregated in-route (the repo's standing trade-off — see
+// /api/portal/summary). The send ledger and the funnel are read to the end of
+// the period with readAllRows: a single `limit=10000` read answers PostgREST's
+// 1000, and by 2026-09 one month held 1,720 funnel events and 1,113 sends.
+// Leads are counted with count=exact.
 //
 // SECURITY — the report names businesses (enquiry rows) and quantifies the
 // operator's outreach, so it sits behind the same PORTAL_ADMIN_KEY shared
@@ -28,17 +41,26 @@ export const runtime = "nodejs";
 
 /** Widest report window we'll compute (guards runaway/garbage params). */
 const MAX_RANGE_MS = 400 * 24 * 60 * 60 * 1000;
-/** Row window per breakdown query — matched to send volumes (MAX_RECIPIENTS
- *  per campaign is far below this); count=exact keeps totals honest anyway. */
-const ROWS_LIMIT = 10000;
 /** Enquiry rows returned for the report's detail table. */
 const INQUIRIES_LIMIT = 25;
-const TOP_SERVICES_LIMIT = 8;
 
 /** Must match SENT_EVENT in /api/pipeline/campaigns/send. */
 const SENT_EVENT = "email_sent";
 
 const FUNNEL_EVENTS = ["attribution_click", "portal_view", "portal_service_open", "portal_inquiry"] as const;
+
+/** Total order for the paged reads — see readAllRows for why ascending. */
+const PAGED_ORDER = "order=created_at.asc,id.asc";
+
+type ChannelReport = {
+  source: string;
+  visitors: number;
+  views: number;
+  serviceClicks: number;
+  inquiries: number;
+  /** every service this channel's visitors opened, most first */
+  services: { service: string; opens: number }[];
+};
 
 const EMPTY = {
   leads: { added: 0, withEmail: 0, withoutEmail: 0, totalAllTime: 0, withEmailAllTime: 0 },
@@ -56,6 +78,7 @@ const EMPTY = {
     inquiries: 0,
     topServices: [] as { service: string; opens: number }[],
   },
+  channels: [] as ChannelReport[],
   inquiries: [] as {
     business: string | null;
     name: string | null;
@@ -87,11 +110,26 @@ function totalOf(res: Response): number {
   return Number.isFinite(total) && total >= 0 ? total : 0;
 }
 
-function propStr(props: unknown, key: string): string | null {
-  if (!props || typeof props !== "object") return null;
-  const v = (props as Record<string, unknown>)[key];
-  return typeof v === "string" && v ? v : null;
+const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+/** A report table that couldn't be read: the migration banner when the portal
+ *  tables are missing, a 502 otherwise. */
+function storageFailure(status: number, detail: string): Response {
+  console.error(`[portal/report] Supabase ${status}:`, detail.slice(0, 1000));
+  if (isMissingPortalTable(status, detail)) {
+    return Response.json({ ok: true, mode: "demo", needsMigration: true, ...EMPTY });
+  }
+  return Response.json(
+    { ok: false, mode: "live", ...EMPTY, error: "Couldn't read the report tables." },
+    { status: 502 },
+  );
 }
+
+/** Same channel rule as /api/portal/summary: an explicit traffic source
+ *  (facebook, google, …) wins; otherwise outreach when the row carries a lead,
+ *  direct (anonymous) when it doesn't. */
+const channelOf = (source: string | null, leadId: string | null) =>
+  source ?? (leadId ? OUTREACH_SOURCE : DIRECT_SOURCE);
 
 export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
@@ -133,8 +171,9 @@ export async function GET(req: Request): Promise<Response> {
   let leadsReachableRes: Response;
   let leadsAllRes: Response;
   let leadsAllReachableRes: Response;
-  let sentRes: Response;
-  let funnelRes: Response;
+  let sent: RowsRead;
+  let funnel: RowsRead;
+  let enquirySources: RowsRead;
   let inquiriesRes: Response;
   let unsubRes: Response;
   try {
@@ -143,8 +182,9 @@ export async function GET(req: Request): Promise<Response> {
       leadsReachableRes,
       leadsAllRes,
       leadsAllReachableRes,
-      sentRes,
-      funnelRes,
+      sent,
+      funnel,
+      enquirySources,
       inquiriesRes,
       unsubRes,
     ] = await Promise.all([
@@ -152,16 +192,21 @@ export async function GET(req: Request): Promise<Response> {
       restGet(target.base, target.key, `leads?select=id&${win}&emails=neq.{}&limit=1`),
       restGet(target.base, target.key, `leads?select=id&limit=1`),
       restGet(target.base, target.key, `leads?select=id&emails=neq.{}&limit=1`),
-      restGet(
+      readAllRows(
         target.base,
         target.key,
-        `portal_events?select=lead_id,campaign&event=eq.${SENT_EVENT}&${win}&limit=${ROWS_LIMIT}`,
+        `portal_events?select=lead_id,campaign&event=eq.${SENT_EVENT}&${win}&${PAGED_ORDER}`,
       ),
-      restGet(
+      // Only the columns the tallies need — the props jsonb is two lifted keys.
+      readAllRows(
         target.base,
         target.key,
-        `portal_events?select=event,lead_id,campaign,props&event=in.(${FUNNEL_EVENTS.join(",")})&${win}&limit=${ROWS_LIMIT}`,
+        `portal_events?select=event,lead_id,campaign,visitor_id,service:props->>service,source:props->>source` +
+          `&event=in.(${FUNNEL_EVENTS.join(",")})&${win}&${PAGED_ORDER}`,
       ),
+      // Every enquiry of the period, for its channel — the detail table
+      // below is only the newest INQUIRIES_LIMIT.
+      readAllRows(target.base, target.key, `portal_inquiries?select=lead_id,source&${win}&${PAGED_ORDER}`),
       restGet(
         target.base,
         target.key,
@@ -169,6 +214,11 @@ export async function GET(req: Request): Promise<Response> {
       ),
       restGet(target.base, target.key, `email_suppression?select=id&${win}&limit=1`),
     ]);
+    // portal_inquiries.source arrives with a later portal-telemetry.sql —
+    // without it every enquiry still counts, filed by its lead instead.
+    if (!enquirySources.ok && isMissingColumn(enquirySources.detail)) {
+      enquirySources = await readAllRows(target.base, target.key, `portal_inquiries?select=lead_id&${win}&${PAGED_ORDER}`);
+    }
   } catch (e) {
     console.error("[portal/report] fetch to Supabase failed:", e);
     return Response.json(
@@ -179,18 +229,12 @@ export async function GET(req: Request): Promise<Response> {
 
   // The portal tables gate the whole report; email_suppression is optional
   // (its migration is separate) and degrades to zero unsubscribes.
-  for (const res of [leadsAddedRes, leadsReachableRes, leadsAllRes, leadsAllReachableRes, sentRes, funnelRes, inquiriesRes]) {
-    if (res.ok) continue;
-    const detail = await res.text().catch(() => "");
-    console.error(`[portal/report] Supabase ${res.status}:`, detail.slice(0, 1000));
-    if (isMissingPortalTable(res.status, detail)) {
-      return Response.json({ ok: true, mode: "demo", needsMigration: true, ...EMPTY });
-    }
-    return Response.json(
-      { ok: false, mode: "live", ...EMPTY, error: "Couldn't read the report tables." },
-      { status: 502 },
-    );
+  for (const res of [leadsAddedRes, leadsReachableRes, leadsAllRes, leadsAllReachableRes, inquiriesRes]) {
+    if (!res.ok) return storageFailure(res.status, await res.text().catch(() => ""));
   }
+  if (!sent.ok) return storageFailure(sent.status, sent.detail);
+  if (!funnel.ok) return storageFailure(funnel.status, funnel.detail);
+  if (!enquirySources.ok) return storageFailure(enquirySources.status, enquirySources.detail);
 
   // ── leads / reachability (exact counts; row bodies are ignored) ──────────
   const added = totalOf(leadsAddedRes);
@@ -199,22 +243,25 @@ export async function GET(req: Request): Promise<Response> {
   const withEmailAllTime = Math.min(totalOf(leadsAllReachableRes), totalAllTime);
 
   // ── outreach: the email_sent ledger ───────────────────────────────────────
-  const sentRows = (await sentRes.json().catch(() => [])) as { lead_id?: unknown; campaign?: unknown }[];
-  const emailsSent = totalOf(sentRes);
+  // Read to the end of the period, so the rows ARE the total.
+  const sentRows = sent.rows as { lead_id?: unknown; campaign?: unknown }[];
+  const emailsSent = sentRows.length;
   const sentLeads = new Set<string>();
   const sentByCampaign = new Map<string, number>();
-  for (const row of Array.isArray(sentRows) ? sentRows : []) {
+  for (const row of sentRows) {
     if (typeof row?.lead_id === "string" && row.lead_id) sentLeads.add(row.lead_id);
     const c = typeof row?.campaign === "string" && row.campaign ? row.campaign : "(untagged)";
     sentByCampaign.set(c, (sentByCampaign.get(c) ?? 0) + 1);
   }
 
   // ── engagement funnel inside the window ───────────────────────────────────
-  const funnelRows = (await funnelRes.json().catch(() => [])) as {
+  const funnelRows = funnel.rows as {
     event?: unknown;
     lead_id?: unknown;
     campaign?: unknown;
-    props?: unknown;
+    visitor_id?: unknown;
+    service?: unknown;
+    source?: unknown;
   }[];
   let emailClicks = 0;
   let portalViews = 0;
@@ -223,23 +270,60 @@ export async function GET(req: Request): Promise<Response> {
   const clickedLeads = new Set<string>();
   const clicksByCampaign = new Map<string, number>();
   const opensByService = new Map<string, number>();
-  for (const row of Array.isArray(funnelRows) ? funnelRows : []) {
+  // ── per channel: the Facebook & Google section ──
+  const byChannel = new Map<
+    string,
+    { visitors: Set<string>; views: number; serviceClicks: number; inquiries: number; services: Map<string, number> }
+  >();
+  const channel = (source: string) => {
+    let c = byChannel.get(source);
+    if (!c) {
+      c = { visitors: new Set(), views: 0, serviceClicks: 0, inquiries: 0, services: new Map() };
+      byChannel.set(source, c);
+    }
+    return c;
+  };
+  for (const row of funnelRows) {
     if (typeof row?.event !== "string") continue;
+    const lead = str(row.lead_id);
     if (row.event === "attribution_click") {
       emailClicks += 1;
-      if (typeof row.lead_id === "string" && row.lead_id) clickedLeads.add(row.lead_id);
-      const c = typeof row.campaign === "string" && row.campaign ? row.campaign : "(untagged)";
+      if (lead) clickedLeads.add(lead);
+      const c = str(row.campaign) ?? "(untagged)";
       clicksByCampaign.set(c, (clicksByCampaign.get(c) ?? 0) + 1);
     } else if (row.event === "portal_view") {
       portalViews += 1;
+      const c = channel(channelOf(str(row.source), lead));
+      c.views += 1;
+      const visitor = str(row.visitor_id);
+      if (visitor) c.visitors.add(visitor);
     } else if (row.event === "portal_service_open") {
       serviceOpens += 1;
-      const service = propStr(row.props, "service");
+      const service = str(row.service);
       if (service) opensByService.set(service, (opensByService.get(service) ?? 0) + 1);
+      const c = channel(channelOf(str(row.source), lead));
+      c.serviceClicks += 1;
+      if (service) c.services.set(service, (c.services.get(service) ?? 0) + 1);
     } else if (row.event === "portal_inquiry") {
       inquiryEvents += 1;
     }
   }
+  for (const row of enquirySources.rows as { lead_id?: unknown; source?: unknown }[]) {
+    if (!row) continue;
+    channel(channelOf(str(row.source), str(row.lead_id))).inquiries += 1;
+  }
+  const byOpens = (m: Map<string, number>) =>
+    [...m.entries()].map(([service, opens]) => ({ service, opens })).sort((a, b) => b.opens - a.opens);
+  const channels: ChannelReport[] = [...byChannel.entries()]
+    .map(([source, c]) => ({
+      source,
+      visitors: c.visitors.size,
+      views: c.views,
+      serviceClicks: c.serviceClicks,
+      inquiries: c.inquiries,
+      services: byOpens(c.services),
+    }))
+    .sort((a, b) => b.views - a.views);
 
   const campaigns = [...sentByCampaign.entries()]
     .map(([campaign, sent]) => ({ campaign, sent, clicks: clicksByCampaign.get(campaign) ?? 0 }))
@@ -250,10 +334,8 @@ export async function GET(req: Request): Promise<Response> {
     if (!sentByCampaign.has(campaign)) campaigns.push({ campaign, sent: 0, clicks });
   }
 
-  const topServices = [...opensByService.entries()]
-    .map(([service, opens]) => ({ service, opens }))
-    .sort((a, b) => b.opens - a.opens)
-    .slice(0, TOP_SERVICES_LIMIT);
+  // Every service opened, not a top few — there are only nine to list.
+  const topServices = byOpens(opensByService);
 
   // ── enquiries (server-canonical table, newest first) ─────────────────────
   const inquiryRows = (await inquiriesRes.json().catch(() => [])) as {
@@ -264,7 +346,6 @@ export async function GET(req: Request): Promise<Response> {
     category?: unknown;
     created_at?: unknown;
   }[];
-  const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
   const inquiries = (Array.isArray(inquiryRows) ? inquiryRows : [])
     .filter((r) => typeof r?.created_at === "string")
     .map((r) => ({
@@ -306,6 +387,7 @@ export async function GET(req: Request): Promise<Response> {
       inquiries: inquiriesTotal,
       topServices,
     },
+    channels,
     inquiries,
   });
 }

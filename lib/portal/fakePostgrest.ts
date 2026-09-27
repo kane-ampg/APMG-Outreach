@@ -1,7 +1,7 @@
 /**
  * Test double for PostgREST — just enough of it to exercise paged reads: the
  * filter operators the portal routes use (eq, neq, in, is.null, not.is.null,
- * an `or=(…)` group), `select` with `alias:col->>key` JSON paths, a multi-key
+ * gte/gt/lte/lt, an `or=(…)` group), `select` with `alias:col->>key` JSON paths, a multi-key
  * `order`, `limit`/`offset`, and — the reason it exists — the max-rows cap.
  *
  * The live project answers `limit=2000` with 1000 rows and a 200 (verified
@@ -33,6 +33,15 @@ function test(value: unknown, expr: string): boolean {
   if (expr === "not.is.null") return value !== null && value !== undefined;
   if (expr.startsWith("eq.")) return value !== null && value !== undefined && String(value) === expr.slice(3);
   if (expr.startsWith("neq.")) return value !== null && value !== undefined && String(value) !== expr.slice(4);
+  // Range operators compare as strings — enough for ISO-8601 timestamps.
+  for (const [op, ok] of [
+    ["gte.", (a: string, b: string) => a >= b],
+    ["gt.", (a: string, b: string) => a > b],
+    ["lte.", (a: string, b: string) => a <= b],
+    ["lt.", (a: string, b: string) => a < b],
+  ] as const) {
+    if (expr.startsWith(op)) return value !== null && value !== undefined && ok(String(value), expr.slice(op.length));
+  }
   if (expr.startsWith("in.(") && expr.endsWith(")")) {
     return value !== null && value !== undefined && expr.slice(4, -1).split(",").includes(String(value));
   }
@@ -118,11 +127,15 @@ export function fakePostgrest(tables: Record<string, Row[]>) {
     let out = rows.filter((r) => matches(r, p));
     const order = p.get("order");
     if (order) out = sortBy(out, order);
+    const total = out.length;
     const offset = Number(p.get("offset") ?? 0);
     const limit = Math.min(Number(p.get("limit") ?? FAKE_MAX_ROWS), FAKE_MAX_ROWS);
     out = out.slice(offset, offset + limit);
     const select = p.get("select");
-    return Response.json(select ? out.map((r) => project(r, select)) : out);
+    // The exact total rides along the way `Prefer: count=exact` makes it.
+    return Response.json(select ? out.map((r) => project(r, select)) : out, {
+      headers: { "content-range": `${offset}-${offset + out.length - 1}/${total}` },
+    });
   }
   return { handler, calls };
 }

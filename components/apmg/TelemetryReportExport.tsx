@@ -7,13 +7,15 @@ import { serviceName } from "@/lib/data/leadActivity";
 import { formatInt } from "@/lib/format";
 import { adminHeaders } from "@/lib/portal/adminKey";
 import { Button } from "@/components/ui/button";
+import { brandLogoSvg } from "./BrandLogos";
 
 /**
  * Telemetry → "Export PDF": a period report (single day, Mon–Sun week, or
  * calendar month) covering the whole outreach story for that window — leads
  * imported and their email reachability, emails sent (the campaign send
  * ledger), engagement funnel (clicks → portal → services → enquiries),
- * per-campaign breakdown, top services, and the period's enquiries.
+ * Facebook & Google engagement, per-campaign breakdown, every service opened,
+ * and the period's enquiries.
  *
  * Numbers come from GET /api/portal/report?from&to (PORTAL_ADMIN_KEY-gated,
  * same key the tab already holds). The PDF itself is the browser's print
@@ -115,6 +117,15 @@ interface ReportPayload {
     inquiries?: number;
     topServices?: { service?: string; opens?: number }[];
   };
+  /** the funnel per traffic channel (facebook, google, outreach, direct, …) */
+  channels?: {
+    source?: string;
+    visitors?: number;
+    views?: number;
+    serviceClicks?: number;
+    inquiries?: number;
+    services?: { service?: string; opens?: number }[];
+  }[];
   inquiries?: {
     business?: string | null;
     name?: string | null;
@@ -139,6 +150,35 @@ function esc(s: string): string {
 
 const pct = (part: number, total: number) => (total > 0 ? `${Math.round((part / total) * 100)}%` : "—");
 
+/** The two promoted channels the report breaks out, in display order. */
+const SOCIAL_CHANNELS = [
+  { source: "facebook", label: "Facebook" },
+  { source: "google", label: "Google" },
+] as const;
+
+type ChannelNumbers = {
+  visitors: number;
+  views: number;
+  serviceClicks: number;
+  inquiries: number;
+  services: { service: string; opens: number }[];
+};
+
+/** One channel's numbers out of the payload — zeros (not a gap in the report)
+ *  when nobody came through it this period. */
+function channelNumbers(data: ReportPayload, source: string): ChannelNumbers {
+  const c = (data.channels ?? []).find((x) => x?.source === source) ?? {};
+  return {
+    visitors: n(c.visitors),
+    views: n(c.views),
+    serviceClicks: n(c.serviceClicks),
+    inquiries: n(c.inquiries),
+    services: (Array.isArray(c.services) ? c.services : [])
+      .map((s) => ({ service: typeof s?.service === "string" ? s.service : "", opens: n(s?.opens) }))
+      .filter((s) => s.service && s.opens > 0),
+  };
+}
+
 /** The whole print-styled A4 document, as one HTML string (inline CSS only —
  *  it renders in a bare window). Every dynamic string goes through esc(). */
 function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string): string {
@@ -157,14 +197,21 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
   const views = n(eng.portalViews);
   const opens = n(eng.serviceOpens);
   const inquiries = n(eng.inquiries);
+  const social = SOCIAL_CHANNELS.map((c) => ({ ...c, ...channelNumbers(data, c.source) }));
 
-  const kpis = [
+  const kpis: { label: string; value: number; note: string; logo?: "facebook" | "google" }[] = [
     { label: "Leads added", value: added, note: "imported this period" },
     { label: "Reachable by email", value: withEmail, note: `${pct(withEmail, added)} of leads added` },
     { label: "Emails sent", value: emailsSent, note: `${formatInt(uniqueEmailed)} unique leads` },
     { label: "Email clicks", value: clicks, note: `${formatInt(uniqueClicked)} leads engaged` },
     { label: "Portal views", value: views, note: `${pct(views, clicks)} of clicks` },
     { label: "Enquiries", value: inquiries, note: `${pct(inquiries, emailsSent)} of emails sent` },
+    ...social.map((c) => ({
+      label: `${c.label} visits`,
+      value: c.views,
+      note: `${formatInt(c.visitors)} visitor${c.visitors === 1 ? "" : "s"} · ${formatInt(c.inquiries)} enquir${c.inquiries === 1 ? "y" : "ies"}`,
+      logo: c.source,
+    })),
   ];
 
   const funnel = [
@@ -246,9 +293,11 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
   section { margin-top: 22px; break-inside: avoid; }
   h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .16em; color: var(--red);
     border-bottom: 1px solid var(--line); padding-bottom: 5px; margin-bottom: 10px; }
-  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
   .kpi { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
-  .kpi .l { font-size: 9px; text-transform: uppercase; letter-spacing: .12em; color: var(--mut); }
+  .kpi .l { font-size: 9px; text-transform: uppercase; letter-spacing: .12em; color: var(--mut);
+    display: flex; align-items: center; gap: 5px; }
+  .ch { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; }
   .kpi .v { font-size: 24px; font-weight: 750; letter-spacing: -0.02em; margin-top: 2px; }
   .kpi .n { font-size: 10px; color: var(--mut); margin-top: 1px; }
   table { width: 100%; border-collapse: collapse; }
@@ -288,7 +337,7 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
     <div class="kpis">
       ${kpis
         .map(
-          (k) => `<div class="kpi"><div class="l">${esc(k.label)}</div><div class="v num">${esc(
+          (k) => `<div class="kpi"><div class="l">${k.logo ? brandLogoSvg(k.logo, 11) : ""}${esc(k.label)}</div><div class="v num">${esc(
             formatInt(k.value),
           )}</div><div class="n">${esc(k.note)}</div></div>`,
         )
@@ -334,6 +383,34 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
   </section>
 
   <section>
+    <h2>Facebook &amp; Google</h2>
+    <table>
+      <thead><tr><th>Channel</th><th class="r">Visitors</th><th class="r">Portal visits</th><th class="r">Service clicks</th><th class="r">Enquiries</th><th class="r">Visit → enquiry</th></tr></thead>
+      <tbody>
+        ${social
+          .map(
+            (c) => `<tr><td><span class="ch">${brandLogoSvg(c.source, 14)}${esc(c.label)}</span></td>
+              <td class="r num">${formatInt(c.visitors)}</td><td class="r num">${formatInt(c.views)}</td>
+              <td class="r num">${formatInt(c.serviceClicks)}</td><td class="r num">${formatInt(c.inquiries)}</td>
+              <td class="r num">${pct(c.inquiries, c.views)}</td></tr>`,
+          )
+          .join("")}
+      </tbody>
+    </table>
+    <div class="note">${social
+      .map(
+        (c) =>
+          `<b>${esc(c.label)}</b> services clicked: ${
+            c.services.length > 0
+              ? c.services.map((s) => `${esc(serviceName(s.service))} ${esc(formatInt(s.opens))}`).join(" · ")
+              : "none this period"
+          }`,
+      )
+      .join("<br />")}</div>
+    <div class="note">Facebook counts visits through the promoted link or from facebook.com; Google counts visits from a Google search or a link tagged utm_source=google. Visitors are distinct browsers.</div>
+  </section>
+
+  <section>
     <div class="split">
       <div>
         <h2>Campaigns this period</h2>
@@ -349,7 +426,7 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
         }
       </div>
       <div>
-        <h2>Top services viewed</h2>
+        <h2>Services viewed</h2>
         ${
           services.length > 0
             ? `<table><thead><tr><th>Service</th><th class="r">Opens</th></tr></thead><tbody>${services

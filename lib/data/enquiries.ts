@@ -67,7 +67,13 @@ export interface PortalSummary {
     uniqueVisitors: number;
   };
   /** per-service interest, desc by opens + inquiries */
-  byService: Array<{ service: string; opens: number; inquiries: number }>;
+  byService: Array<{
+    service: string;
+    opens: number;
+    inquiries: number;
+    /** channel slug (outreach / direct / facebook / …) → opens */
+    opensBySource?: Record<string, number>;
+  }>;
   /** per-sector journey (CSV category the lead was scraped under);
    *  the route maps a null category to "Direct / unknown" */
   byCategory: Array<{ category: string; clicks: number; views: number; inquiries: number }>;

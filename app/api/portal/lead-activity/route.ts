@@ -45,7 +45,6 @@ const EVENTS_LIMIT = 2000;
 const MAX_LEADS = 100;
 const MAX_VISITORS = 50;
 const MAX_EVENTS_PER_LEAD = 50;
-const TOP_SERVICES_LIMIT = 6;
 /** Opt-out rows returned. The KPI count comes from count=exact, so the cap
  *  only limits what the table can page through, never the number shown. */
 const MAX_UNSUBSCRIBES = 100;
@@ -551,8 +550,8 @@ export async function GET(req: Request): Promise<Response> {
   }
   const topServices = [...opensByService.entries()]
     .map(([service, opens]) => ({ service, opens }))
-    .sort((a, b) => b.opens - a.opens)
-    .slice(0, TOP_SERVICES_LIMIT);
+    // Every service opened, not a top few — there are only nine to list.
+    .sort((a, b) => b.opens - a.opens);
 
   const anonymous: AnonymousPortalActivity = {
     visitors: visitorIds.size,

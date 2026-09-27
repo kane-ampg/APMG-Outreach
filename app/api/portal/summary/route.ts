@@ -35,11 +35,13 @@ const PORTAL_EVENT_NAMES = new Set([
 
 /** Total order for the paged reads — see readAllRows for why ascending. */
 const PAGED_ORDER = "order=created_at.asc,id.asc";
-const CLICKS_QUERY = `portal_events?select=category&event=eq.attribution_click&${PAGED_ORDER}`;
+const CLICKS_QUERY = `portal_events?select=category,lead_id&event=eq.attribution_click&${PAGED_ORDER}`;
 const VIEWS_QUERY =
   `portal_events?select=lead_id,category,visitor_id,source:props->>source` +
   `&event=eq.portal_view&${PAGED_ORDER}`;
-const OPENS_QUERY = `portal_events?select=service:props->>service&event=eq.portal_service_open&${PAGED_ORDER}`;
+const OPENS_QUERY =
+  `portal_events?select=lead_id,service:props->>service,source:props->>source` +
+  `&event=eq.portal_service_open&${PAGED_ORDER}`;
 const RECENT_QUERY =
   `portal_events?select=event,props,campaign,category,created_at` +
   `&event=in.(${[...PORTAL_EVENT_NAMES].join(",")})&order=created_at.desc,id.desc&limit=${RECENT_LIMIT}`;
@@ -48,9 +50,9 @@ const RECENT_QUERY =
  *  link, cookie expired…). */
 const DIRECT = "Direct / unknown";
 
-type ClickRow = { category: string | null };
+type ClickRow = { category: string | null; lead_id: string | null };
 type ViewRow = { lead_id: string | null; category: string | null; visitor_id: string | null; source: string | null };
-type OpenRow = { service: string | null };
+type OpenRow = { lead_id: string | null; service: string | null; source: string | null };
 type RecentRow = {
   event: string;
   props: Record<string, unknown> | null;
@@ -75,8 +77,23 @@ const INQUIRY_COLS = "service_slug,category,campaign,lead_id,source,created_at,s
 const LEGACY_INQUIRY_COLS = INQUIRY_COLS.replace(",source", "");
 
 const EMPTY_SUMMARY = {
-  totals: { attributionClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0, uniqueVisitors: 0 },
-  byService: [] as Array<{ service: string; opens: number; inquiries: number }>,
+  totals: {
+    attributionClicks: 0,
+    portalViews: 0,
+    serviceOpens: 0,
+    inquiries: 0,
+    uniqueVisitors: 0,
+    engagedLeads: 0,
+    enquiredLeads: 0,
+    attributedInquiries: 0,
+  },
+  byService: [] as Array<{
+    service: string;
+    opens: number;
+    inquiries: number;
+    /** channel slug (outreach / direct / facebook / …) → opens */
+    opensBySource: Record<string, number>;
+  }>,
   byCategory: [] as Array<{ category: string; clicks: number; views: number; inquiries: number }>,
   bySource: [] as Array<{ source: string; visitors: number; views: number; inquiries: number }>,
   recentEvents: [] as Array<{
@@ -179,16 +196,23 @@ export async function GET(req: Request): Promise<Response> {
   const inquiryRows = Array.isArray(inquiryRowsRaw) ? inquiryRowsRaw : [];
 
   // ── aggregate ──────────────────────────────────────────────────────────────
-  const totals = { attributionClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0, uniqueVisitors: 0 };
+  const totals = { ...EMPTY_SUMMARY.totals };
   const visitors = new Set<string>();
-  const byServiceMap = new Map<string, { opens: number; inquiries: number }>();
+  /** Every lead that ever clicked a tracked email link — the Leads engaged
+   *  card. Counted here, over every click, because the Telemetry table's lead
+   *  list is capped at the newest 100 and the card used to count THAT. */
+  const clickedLeads = new Set<string>();
+  const byServiceMap = new Map<
+    string,
+    { opens: number; inquiries: number; opensBySource: Record<string, number> }
+  >();
   const byCategoryMap = new Map<string, { clicks: number; views: number; inquiries: number }>();
   const bySourceMap = new Map<string, { visitors: Set<string>; views: number; inquiries: number }>();
   const recentEvents: typeof EMPTY_SUMMARY.recentEvents = [];
 
   const serviceBucket = (service: string) => {
     let b = byServiceMap.get(service);
-    if (!b) byServiceMap.set(service, (b = { opens: 0, inquiries: 0 }));
+    if (!b) byServiceMap.set(service, (b = { opens: 0, inquiries: 0, opensBySource: {} }));
     return b;
   };
   const categoryBucket = (category: string) => {
@@ -211,6 +235,8 @@ export async function GET(req: Request): Promise<Response> {
     if (!row) continue;
     totals.attributionClicks += 1;
     categoryBucket(str(row.category) ?? DIRECT).clicks += 1;
+    const lead = str(row.lead_id);
+    if (lead) clickedLeads.add(lead);
   }
   for (const row of views.rows as ViewRow[]) {
     if (!row) continue;
@@ -226,7 +252,14 @@ export async function GET(req: Request): Promise<Response> {
     if (!row) continue;
     totals.serviceOpens += 1;
     const service = str(row.service);
-    if (service) serviceBucket(service).opens += 1;
+    if (!service) continue;
+    const b = serviceBucket(service);
+    b.opens += 1;
+    // Which door the clicker came through — the Telemetry "Services clicked"
+    // panel shows it per service, so scanner-heavy outreach clicks can be
+    // told apart from Facebook / anonymous interest.
+    const channel = channelOf(str(row.source), str(row.lead_id));
+    b.opensBySource[channel] = (b.opensBySource[channel] ?? 0) + 1;
   }
 
   // The recent read is already the newest RECENT_LIMIT funnel rows, newest first.
@@ -246,12 +279,22 @@ export async function GET(req: Request): Promise<Response> {
   // than the (best-effort, client-influenced) telemetry events.
   totals.inquiries = inquiryRows.length;
   totals.uniqueVisitors = visitors.size;
+  totals.engagedLeads = clickedLeads.size;
+  const enquiredLeads = new Set<string>();
   for (const row of inquiryRows) {
     if (!row) continue;
+    const lead = str(row.lead_id);
+    if (lead) {
+      totals.attributedInquiries += 1;
+      // "went on to enquire" — only a lead that clicked counts toward the
+      // engaged card's ratio, so it can never pass 100%.
+      if (clickedLeads.has(lead)) enquiredLeads.add(lead);
+    }
     serviceBucket(row.service_slug || "general").inquiries += 1;
     categoryBucket(row.category ?? DIRECT).inquiries += 1;
     sourceBucket(channelOf(row.source ?? null, row.lead_id ?? null)).inquiries += 1;
   }
+  totals.enquiredLeads = enquiredLeads.size;
 
   const byService = [...byServiceMap.entries()]
     .map(([service, counts]) => ({ service, ...counts }))

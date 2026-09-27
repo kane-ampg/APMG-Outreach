@@ -1,6 +1,15 @@
 "use client";
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   AlertTriangle,
@@ -8,7 +17,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Facebook,
   Inbox,
   LayoutGrid,
   MailX,
@@ -31,9 +39,11 @@ import {
   type UnsubscribedPerson,
 } from "@/lib/data/leadActivity";
 import { sourceLabel } from "@/lib/data/enquiries";
+import { toServiceClicks, type ServiceClickRow, type ServiceClicks } from "@/lib/data/serviceClicks";
 import { PORTAL_ORIGIN } from "@/lib/hosts";
-import { OUTREACH_SOURCE } from "@/lib/portal/source";
+import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
 import { EventTrail, TimelineLine, fmtStamp } from "./LeadTrail";
+import { FacebookLogo, GoogleLogo } from "./BrandLogos";
 import { leadScore, scoreTier } from "@/lib/data/leadScore";
 import {
   ackAllLeadActivity,
@@ -177,6 +187,11 @@ type LoadState =
        *  the promoted portal link (?utm_source=facebook). All-zero until the
        *  first tagged visit. */
       facebook: SourceBucket;
+      /** The google bucket — visitors from a google.* search Referer or a
+       *  ?utm_source=google link. All-zero until the first one. */
+      google: SourceBucket;
+      /** clicks per service, every visitor — the "Services clicked" card */
+      services: ServiceClicks;
       /** exact count — the KPI never shows only what fitted in the page cap */
       unsubscribesTotal: number;
       /** false = the opt-out list couldn't be read at all (its migration is
@@ -342,7 +357,8 @@ interface TelemetryStat {
   id: string;
   label: string;
   value: number;
-  icon: LucideIcon;
+  /** a lucide icon, or a full-colour brand mark (BrandLogos) for a channel */
+  icon: ComponentType<{ className?: string }>;
   caption: string;
   /** proportion foot, 0–1 (stays in the red family, like KpiCard's RatioBar) */
   ratio: { value: number; label: string } | null;
@@ -409,18 +425,21 @@ function StatCard({ stat }: { stat: TelemetryStat }) {
 }
 
 /** The fused KPI panel's grid — one definition, shared by the live row and its
- *  skeleton so they can't drift apart. Six gauges: two columns on a phone,
- *  three once the sidebar is beside them, six across only from xl, where a
- *  column is still wide enough for a 40px count-up readout. Six divides evenly
- *  at every step, so the fused panel never needs a filler cell. */
+ *  skeleton so they can't drift apart. Seven gauges: two columns on a phone,
+ *  four once the sidebar is beside them, seven across only from `wide`
+ *  (1700px), where a column is still wide enough for a 40px count-up readout.
+ *  Seven divides evenly nowhere below that, so the LAST gauge spans two
+ *  columns there (2·3+2 and 4+1+1+2): the fused panel never shows an empty
+ *  cell. */
+const KPI_COUNT = 7;
 const KPI_GRID =
-  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-3 xl:grid-cols-6";
+  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-4 wide:grid-cols-7 [&>*:last-child]:col-span-2 wide:[&>*:last-child]:col-span-1";
 
 /** Skeleton mirroring the fused KPI panel while both endpoints are in flight. */
 function KpiPanelSkeleton() {
   return (
     <div className={KPI_GRID}>
-      {Array.from({ length: 6 }).map((_, i) => (
+      {Array.from({ length: KPI_COUNT }).map((_, i) => (
         <div key={i} className="flex h-full flex-col bg-card p-5" aria-busy>
           <div className="h-3 w-2/3 animate-pulse rounded bg-muted" />
           <div className="mt-3 h-[34px] w-3/4 animate-pulse rounded bg-muted sm:h-[40px]" />
@@ -968,6 +987,122 @@ function LeadListSkeleton() {
   );
 }
 
+/* ───────────────────────────  services clicked card  ─────────────────────────── */
+
+/** Short channel names for the per-service split line — the card is 20rem wide. */
+function channelShort(source: string): string {
+  if (source === OUTREACH_SOURCE) return "email";
+  if (source === DIRECT_SOURCE) return "anonymous";
+  return sourceLabel(source);
+}
+
+/** "7 email · 1 anonymous · 1 enquiry" — where one service's clicks came from. */
+function ClickSplit({ row }: { row: ServiceClickRow }) {
+  const parts = row.bySource.map((s) => `${formatInt(s.opens)} ${channelShort(s.source)}`);
+  if (row.inquiries > 0) {
+    parts.push(`${formatInt(row.inquiries)} ${row.inquiries === 1 ? "enquiry" : "enquiries"}`);
+  }
+  if (parts.length === 0) return null;
+  return <p className="mt-1 font-mono text-[10px] text-muted-foreground">{parts.join(" · ")}</p>;
+}
+
+/**
+ * Which trades people click — every visitor, every trade. Zero-click trades
+ * stay listed (that's an answer too), and the quote buttons sit apart: they
+ * aren't a trade, and at several times every trade combined a bar for them
+ * would flatten the rest of the list.
+ */
+function ServicesClickedPanel({ services }: { services: ServiceClicks }) {
+  const max = Math.max(1, ...services.trades.map((t) => t.opens));
+  return (
+    <section className="flex min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10">
+      <PanelHead
+        title="Services clicked"
+        meta={
+          <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            {formatInt(services.total)} {services.total === 1 ? "click" : "clicks"}
+          </span>
+        }
+      />
+      <div className="px-4 py-4">
+        <div
+          className="flex items-center justify-between border-b border-border/70 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
+          aria-hidden
+        >
+          <span>Service</span>
+          <span>clicks</span>
+        </div>
+        <ul className="mt-2 space-y-2.5">
+          {services.trades.map((t) => (
+            <li key={t.service}>
+              <div className="flex items-baseline justify-between gap-2">
+                <span
+                  className={cn(
+                    "truncate text-[12px] font-medium",
+                    t.opens > 0 ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  {serviceName(t.service)}
+                </span>
+                <span className="tnum shrink-0 font-mono text-[11px] text-foreground">
+                  {formatInt(t.opens)}
+                </span>
+              </div>
+              <div
+                className="mt-1 h-1 w-full overflow-hidden rounded-full bg-border"
+                role="img"
+                aria-label={`${serviceName(t.service)}: ${t.opens} clicks`}
+              >
+                <div
+                  className="h-full rounded-full bg-primary"
+                  style={{ width: `${(t.opens / max) * 100}%` }}
+                />
+              </div>
+              <ClickSplit row={t} />
+            </li>
+          ))}
+        </ul>
+
+        <div className="mt-3 border-t border-border pt-2.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="truncate text-[12px] font-medium text-foreground">
+              Quote buttons <span className="text-muted-foreground">· general enquiry</span>
+            </span>
+            <span className="tnum shrink-0 font-mono text-[11px] text-foreground">
+              {formatInt(services.general.opens)}
+            </span>
+          </div>
+          <ClickSplit row={services.general} />
+        </div>
+
+        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+          Every visitor, all time. Email clicks include mail scanners that open links on their
+          own, so those numbers run high.
+        </p>
+      </div>
+    </section>
+  );
+}
+
+function ServicesClickedSkeleton() {
+  return (
+    <section
+      className="flex min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10"
+      aria-busy
+    >
+      <PanelHead title="Services clicked" />
+      <div className="space-y-3 px-4 py-4">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i}>
+            <div className="h-3 w-1/2 animate-pulse rounded bg-muted" />
+            <div className="mt-1.5 h-1 w-full animate-pulse rounded-full bg-muted/70" />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /* ───────────────────────────  anonymous visitors card  ─────────────────────────── */
 
 function AnonymousPanel({
@@ -1105,7 +1240,7 @@ function AnonymousPanel({
               className="flex items-center justify-between border-b border-border/70 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
               aria-hidden
             >
-              <span>Top services</span>
+              <span>Services</span>
               <span>opens</span>
             </div>
             <ul className="mt-2 space-y-2.5">
@@ -1185,6 +1320,7 @@ interface SummaryPayload {
   needsMigration?: boolean;
   totals?: Record<string, unknown>;
   bySource?: unknown;
+  byService?: unknown;
   error?: string;
 }
 
@@ -1268,9 +1404,19 @@ export function TelemetryPage() {
           leads: [],
           visitors: [],
           anonymous: { visitors: 0, events: 0, topServices: [] },
-          totals: { attributionClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0 },
+          totals: {
+            engagedLeads: 0,
+            enquiredLeads: 0,
+            attributedInquiries: 0,
+            attributionClicks: 0,
+            portalViews: 0,
+            serviceOpens: 0,
+            inquiries: 0,
+          },
           unsubscribes: [],
           facebook: EMPTY_SOURCE,
+          google: EMPTY_SOURCE,
+          services: toServiceClicks([]),
           unsubscribesTotal: 0,
           // No database, so the opt-out list is unknown rather than empty.
           unsubscribesAvailable: false,
@@ -1321,6 +1467,9 @@ export function TelemetryPage() {
         visitors,
         anonymous: toAnonymous(act.anonymous),
         totals: {
+          engagedLeads: num(sum.totals.engagedLeads),
+          enquiredLeads: num(sum.totals.enquiredLeads),
+          attributedInquiries: num(sum.totals.attributedInquiries),
           attributionClicks: num(sum.totals.attributionClicks),
           portalViews: num(sum.totals.portalViews),
           serviceOpens: num(sum.totals.serviceOpens),
@@ -1328,6 +1477,8 @@ export function TelemetryPage() {
         },
         unsubscribes,
         facebook: toSourceBucket(sum.bySource, "facebook"),
+        google: toSourceBucket(sum.bySource, "google"),
+        services: toServiceClicks(sum.byService),
         // The exact total can exceed what the route sends; never let the KPI
         // read lower than the rows the table is actually showing either.
         unsubscribesTotal: Math.max(num(act.unsubscribesTotal), unsubscribes.length),
@@ -1519,8 +1670,6 @@ export function TelemetryPage() {
   const stats = useMemo<TelemetryStat[]>(() => {
     if (!ready) return [];
     const t = ready.totals;
-    const enquiredLeads = leads.filter((l) => l.counts.inquiries > 0).length;
-    const attributedInquiries = leads.reduce((sum, l) => sum + l.counts.inquiries, 0);
     // Opt-outs whose link carried a lead id — the rest arrived as a bare
     // address we can't tie to anyone, which is worth seeing as a proportion
     // (a run of unmatched rows is the signature of a gateway detonating the
@@ -1530,10 +1679,13 @@ export function TelemetryPage() {
       {
         id: "engaged",
         label: "Leads engaged",
-        value: leads.length,
+        // Every lead that ever clicked, counted by the summary route — NOT the
+        // table's row count, which is capped at the newest 100 leads (this
+        // card read 100 for weeks while 1,238 had clicked).
+        value: t.engagedLeads,
         icon: Users,
         caption: "clicked through from outreach",
-        ratio: { value: ratio(enquiredLeads, leads.length), label: "went on to enquire" },
+        ratio: { value: ratio(t.enquiredLeads, t.engagedLeads), label: "went on to enquire" },
       },
       {
         id: "clicks",
@@ -1558,7 +1710,7 @@ export function TelemetryPage() {
         icon: Inbox,
         caption: "qualified — email captured",
         ratio: {
-          value: ratio(attributedInquiries, t.inquiries),
+          value: ratio(t.attributedInquiries, t.inquiries),
           label: "from tracked leads",
         },
       },
@@ -1569,13 +1721,29 @@ export function TelemetryPage() {
         // source=facebook (?utm_source= on the post's URL, or a facebook.com
         // Referer). Views, not uniques — same unit as the Email clicks gauge.
         value: ready.facebook.views,
-        icon: Facebook,
+        icon: FacebookLogo,
         caption:
           ready.facebook.visitors === 1
             ? "portal visits · 1 visitor"
             : `portal visits · ${formatInt(ready.facebook.visitors)} visitors`,
         ratio: {
           value: ratio(ready.facebook.inquiries, ready.facebook.views),
+          label: "became enquiries",
+        },
+      },
+      {
+        id: "google",
+        label: "Google",
+        // Portal visits stamped source=google — a google.* search Referer
+        // (lib/portal/source.ts) or ?utm_source=google. Same unit as Facebook.
+        value: ready.google.views,
+        icon: GoogleLogo,
+        caption:
+          ready.google.visitors === 1
+            ? "portal visits · 1 visitor"
+            : `portal visits · ${formatInt(ready.google.visitors)} visitors`,
+        ratio: {
+          value: ratio(ready.google.inquiries, ready.google.views),
           label: "became enquiries",
         },
       },
@@ -1598,7 +1766,7 @@ export function TelemetryPage() {
           : null,
       },
     ];
-  }, [ready, leads]);
+  }, [ready]);
 
   const totalEvents = useMemo(
     () => rows.reduce((sum, r) => sum + r.events.filter((e) => !isHiddenEvent(e.event)).length, 0),
@@ -1856,7 +2024,11 @@ export function TelemetryPage() {
                             ? `${formatInt(ready.unsubscribesTotal)} opted out`
                             : "list unavailable"
                           : activeSector === ALL_SECTORS && activeChannel === ALL_CHANNELS
-                            ? `${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"} · ${formatInt(totalEvents)} events`
+                            ? // The route sends only the newest leads, so say so
+                              // beside the Leads engaged card that counts them all.
+                              leads.length < ready.totals.engagedLeads
+                              ? `newest ${formatInt(leads.length)} of ${formatInt(ready.totals.engagedLeads)} leads · ${formatInt(visitors.length)} ${visitors.length === 1 ? "visitor" : "visitors"}`
+                              : `${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"} · ${formatInt(totalEvents)} events`
                             : `${formatInt(sortedRows.length)} of ${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"}`}
                     </span>
                   }
@@ -2060,22 +2232,32 @@ export function TelemetryPage() {
               </section>
             </Reveal>
 
-            <Reveal delay={0.14} className="min-w-0">
-              {ready ? (
-                <AnonymousPanel
-                  anonymous={ready.anonymous}
-                  canClear={
-                    ready.mode === "live" &&
-                    (ready.anonymous.visitors > 0 ||
-                      ready.anonymous.events > 0 ||
-                      ready.visitors.length > 0)
-                  }
-                  onClear={clearAnonymous}
-                />
-              ) : (
-                <AnonymousSkeleton />
-              )}
-            </Reveal>
+            {/* the rollup column: which services, then who was anonymous */}
+            <div className="flex min-w-0 flex-col gap-3">
+              <Reveal delay={0.12} className="min-w-0">
+                {ready ? (
+                  <ServicesClickedPanel services={ready.services} />
+                ) : (
+                  <ServicesClickedSkeleton />
+                )}
+              </Reveal>
+              <Reveal delay={0.14} className="min-w-0">
+                {ready ? (
+                  <AnonymousPanel
+                    anonymous={ready.anonymous}
+                    canClear={
+                      ready.mode === "live" &&
+                      (ready.anonymous.visitors > 0 ||
+                        ready.anonymous.events > 0 ||
+                        ready.visitors.length > 0)
+                    }
+                    onClear={clearAnonymous}
+                  />
+                ) : (
+                  <AnonymousSkeleton />
+                )}
+              </Reveal>
+            </div>
           </div>
 
           {/* pointer to the raw stream — this page is curated, that one isn't */}

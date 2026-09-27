@@ -78,7 +78,7 @@ export interface SourcedVisitorActivity {
 export interface AnonymousActivity {
   visitors: number;
   events: number;
-  /** top 6 by opens */
+  /** every service opened, most opens first */
   topServices: Array<{ service: string; opens: number }>;
 }
 
@@ -120,6 +120,13 @@ export interface LeadActivityResponse {
 
 /** The four KPI-row totals the page reads off GET /api/portal/summary. */
 export interface ActivityTotals {
+  /** every lead that ever clicked a tracked email link (the Leads engaged
+   *  card) — counted server-side, never from the capped lead list */
+  engagedLeads: number;
+  /** of those, the leads with at least one enquiry */
+  enquiredLeads: number;
+  /** enquiries that carry a lead — "from tracked leads" */
+  attributedInquiries: number;
   attributionClicks: number;
   portalViews: number;
   serviceOpens: number;

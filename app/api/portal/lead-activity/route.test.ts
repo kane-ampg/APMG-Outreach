@@ -270,6 +270,15 @@ describe("GET /api/portal/lead-activity — anonymous visitors past the 1000-row
     expect(body.anonymous.visitors).toBe(1000);
   });
 
+  it("lists every service anonymous visitors opened, not just the top few", async () => {
+    const slugs = ["electrical", "painting", "plumbing", "carpentry", "flooring", "gardening", "handyman", "make-safe"];
+    serve(slugs.map((service) => ev("portal_service_open", { visitor_id: "a", view: "portal", props: { service } })));
+
+    const body = await (await GET(req())).json();
+
+    expect(body.anonymous.topServices).toHaveLength(8);
+  });
+
   it("files a visitor under their LATEST source — last touch wins", async () => {
     serve([
       ev("portal_view", { visitor_id: "x", props: { source: "google" } }),

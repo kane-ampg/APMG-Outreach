@@ -119,7 +119,7 @@ export interface AnonymousPortalActivity {
   visitors: number;
   /** portal-relevant anonymous events in the window */
   events: number;
-  /** most-opened service cards, desc, top 6 */
+  /** every service card opened, most-opened first */
   topServices: Array<{ service: string; opens: number }>;
 }
 
