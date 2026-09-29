@@ -1,4 +1,11 @@
-import { isUuid, requireLiveSupabase, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import {
+  isMissingLinkedInColumn,
+  isUuid,
+  requireLiveSupabase,
+  sameOrigin,
+  supabaseTarget,
+} from "@/lib/pipeline/server";
+import { leadSource, type LeadSource } from "@/lib/pipeline/source";
 import {
   CUSTOMER_JOURNEY_EVENTS,
   isMissingPortalTable,
@@ -121,7 +128,31 @@ const UNSUBSCRIBE_QUERY =
   `email_suppression?select=email,lead_id,campaign,reason,created_at` +
   `&order=created_at.desc&limit=${MAX_UNSUBSCRIBES}`;
 
-type LeadRow = { id?: unknown; name?: unknown; category?: unknown };
+type LeadRow = {
+  id?: unknown;
+  name?: unknown;
+  category?: unknown;
+  bing_maps_url?: unknown;
+  source?: unknown;
+  contact_name?: unknown;
+  contact_title?: unknown;
+};
+
+/** What the leads lookup resolves per id. */
+type LeadInfo = {
+  name: string | null;
+  category: string | null;
+  /** Google / Bing off the maps URL, LinkedIn off the stored source */
+  source: LeadSource;
+  contactName: string | null;
+  contactTitle: string | null;
+};
+
+/** The lookup's columns; the LinkedIn three (supabase/linkedin-source.sql) are
+ *  dropped for a retry when that migration hasn't been run — the maps URL is
+ *  an original column, so Google/Bing still resolve either way. */
+const LEAD_COLS = "id,name,category,bing_maps_url,source,contact_name,contact_title";
+const LEAD_COLS_LEGACY = "id,name,category,bing_maps_url";
 
 type SuppressionRow = {
   email?: unknown;
@@ -211,26 +242,35 @@ function totalOf(res: Response): number {
  * through isUuid, so comma-joining them into the in.() filter is both safe
  * (uuids never need PostgREST quoting) and bounded well inside URL limits.
  */
-async function lookupLeadNames(
-  base: string,
-  key: string,
-  ids: string[],
-): Promise<Map<string, { name: string | null; category: string | null }>> {
-  const out = new Map<string, { name: string | null; category: string | null }>();
+async function lookupLeadNames(base: string, key: string, ids: string[]): Promise<Map<string, LeadInfo>> {
+  const out = new Map<string, LeadInfo>();
   if (ids.length === 0) return out;
+  const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
   try {
-    const res = await restGet(base, key, `leads?select=id,name,category&id=in.(${ids.join(",")})`);
+    const query = (cols: string) => restGet(base, key, `leads?select=${cols}&id=in.(${ids.join(",")})`);
+    let res = await query(LEAD_COLS);
     if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      console.error(`[portal/lead-activity] leads lookup ${res.status}:`, detail.slice(0, 500));
-      return out;
+      let detail = await res.text().catch(() => "");
+      // Before linkedin-source.sql: name the leads without the LinkedIn columns
+      // rather than losing every business name on the tab.
+      if (isMissingLinkedInColumn(detail)) {
+        res = await query(LEAD_COLS_LEGACY);
+        detail = res.ok ? "" : await res.text().catch(() => "");
+      }
+      if (!res.ok) {
+        console.error(`[portal/lead-activity] leads lookup ${res.status}:`, detail.slice(0, 500));
+        return out;
+      }
     }
     const rows = (await res.json().catch(() => [])) as LeadRow[];
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!row || !isUuid(row.id)) continue;
       out.set(row.id, {
-        name: typeof row.name === "string" && row.name ? row.name : null,
-        category: typeof row.category === "string" && row.category ? row.category : null,
+        name: text(row.name),
+        category: text(row.category),
+        source: leadSource(text(row.bing_maps_url), text(row.source)),
+        contactName: text(row.contact_name),
+        contactTitle: text(row.contact_title),
       });
     }
   } catch (e) {
@@ -428,6 +468,9 @@ export async function GET(req: Request): Promise<Response> {
       // the live leads row is only the fallback.
       category: bucket.category ?? info?.category ?? null,
       campaign: bucket.campaign,
+      leadSource: info?.source ?? null,
+      contactName: info?.contactName ?? null,
+      contactTitle: info?.contactTitle ?? null,
       firstSeen: bucket.firstSeen,
       lastSeen: bucket.lastSeen,
       events: bucket.newestFirst.reverse(), // → chronological ASC for the timeline

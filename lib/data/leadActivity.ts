@@ -20,6 +20,8 @@
  * in a screenshot, which is exactly the failure mode this module used to have.
  */
 
+import type { LeadSource } from "@/lib/pipeline/source";
+
 /* ───────────────────────────  API contract types  ─────────────────────────── */
 
 /** One click in a lead's trail, chronological ASC within LeadActivity.events.
@@ -42,6 +44,12 @@ export interface LeadActivity {
   business: string | null;
   category: string | null;
   campaign: string | null;
+  /** where we got the lead — lib/pipeline/source.ts (stored LinkedIn source,
+   *  else derived from the maps URL); null when the lead row is gone */
+  leadSource?: LeadSource | null;
+  /** LinkedIn leads: the person behind the row, and their role */
+  contactName?: string | null;
+  contactTitle?: string | null;
   firstSeen: string;
   lastSeen: string;
   /** chronological ASC, capped to the most recent 50 by the route */

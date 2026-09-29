@@ -104,6 +104,14 @@ export function LeadDetail({ lead, onClose }: { lead: LeadView; onClose: () => v
 
           {/* key facts */}
           <div className="grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2">
+            {lead.contact_name && (
+              <Fact label="Contact" full>
+                <span className="text-[14px] text-foreground">
+                  {lead.contact_name}
+                  {lead.contact_title && <span className="text-muted-foreground"> · {lead.contact_title}</span>}
+                </span>
+              </Fact>
+            )}
             <Fact label="Website" full>
               {lead.website ? <Link href={lead.website} /> : <Dash />}
             </Fact>

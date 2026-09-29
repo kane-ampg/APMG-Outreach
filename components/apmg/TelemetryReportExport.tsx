@@ -7,7 +7,7 @@ import { serviceName } from "@/lib/data/leadActivity";
 import { formatInt } from "@/lib/format";
 import { adminHeaders } from "@/lib/portal/adminKey";
 import { Button } from "@/components/ui/button";
-import { brandLogoSvg } from "./BrandLogos";
+import { brandLogoSvg, type Brand } from "./BrandLogos";
 
 /**
  * Telemetry → "Export PDF": a period report (single day, Mon–Sun week, or
@@ -150,10 +150,11 @@ function esc(s: string): string {
 
 const pct = (part: number, total: number) => (total > 0 ? `${Math.round((part / total) * 100)}%` : "—");
 
-/** The two promoted channels the report breaks out, in display order. */
+/** The promoted channels the report breaks out, in display order. */
 const SOCIAL_CHANNELS = [
   { source: "facebook", label: "Facebook" },
   { source: "google", label: "Google" },
+  { source: "linkedin", label: "LinkedIn" },
 ] as const;
 
 type ChannelNumbers = {
@@ -199,7 +200,7 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
   const inquiries = n(eng.inquiries);
   const social = SOCIAL_CHANNELS.map((c) => ({ ...c, ...channelNumbers(data, c.source) }));
 
-  const kpis: { label: string; value: number; note: string; logo?: "facebook" | "google" }[] = [
+  const kpis: { label: string; value: number; note: string; logo?: Brand }[] = [
     { label: "Leads added", value: added, note: "imported this period" },
     { label: "Reachable by email", value: withEmail, note: `${pct(withEmail, added)} of leads added` },
     { label: "Emails sent", value: emailsSent, note: `${formatInt(uniqueEmailed)} unique leads` },
@@ -293,7 +294,8 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
   section { margin-top: 22px; break-inside: avoid; }
   h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .16em; color: var(--red);
     border-bottom: 1px solid var(--line); padding-bottom: 5px; margin-bottom: 10px; }
-  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  /* nine KPIs (six funnel + three channels): 3 × 3, never a lone last card */
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
   .kpi { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
   .kpi .l { font-size: 9px; text-transform: uppercase; letter-spacing: .12em; color: var(--mut);
     display: flex; align-items: center; gap: 5px; }
@@ -383,7 +385,7 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
   </section>
 
   <section>
-    <h2>Facebook &amp; Google</h2>
+    <h2>Facebook, Google &amp; LinkedIn</h2>
     <table>
       <thead><tr><th>Channel</th><th class="r">Visitors</th><th class="r">Portal visits</th><th class="r">Service clicks</th><th class="r">Enquiries</th><th class="r">Visit → enquiry</th></tr></thead>
       <tbody>
@@ -407,7 +409,7 @@ function buildReportHtml(data: ReportPayload, period: Period, modeLabel: string)
           }`,
       )
       .join("<br />")}</div>
-    <div class="note">Facebook counts visits through the promoted link or from facebook.com; Google counts visits from a Google search or a link tagged utm_source=google. Visitors are distinct browsers.</div>
+    <div class="note">Facebook counts visits through the promoted link or from facebook.com; Google counts visits from a Google search or a link tagged utm_source=google; LinkedIn counts visits from linkedin.com or a link tagged utm_source=linkedin. Visitors are distinct browsers.</div>
   </section>
 
   <section>

@@ -41,9 +41,10 @@ import {
 import { sourceLabel } from "@/lib/data/enquiries";
 import { toServiceClicks, type ServiceClickRow, type ServiceClicks } from "@/lib/data/serviceClicks";
 import { PORTAL_ORIGIN } from "@/lib/hosts";
+import { LEAD_SOURCES, type LeadSource } from "@/lib/pipeline/source";
 import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
 import { EventTrail, TimelineLine, fmtStamp } from "./LeadTrail";
-import { FacebookLogo, GoogleLogo } from "./BrandLogos";
+import { BRAND_LOGO, FacebookLogo, GoogleLogo, isBrand, LinkedInLogo } from "./BrandLogos";
 import { leadScore, scoreTier } from "@/lib/data/leadScore";
 import {
   ackAllLeadActivity,
@@ -73,8 +74,8 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  * everyone who has unsubscribed, which is the one audience the send route will
  * never mail again. Both ride the same lead-activity payload.
  *
- * The heart of the page is the lead-activity list: a real six-column table
- * (Lead · ID · Score · Sector · Events · Last seen) under a shared column
+ * The heart of the page is the lead-activity list: a real seven-column table
+ * (Lead · Source · ID · Score · Sector · Events · Last seen) under a shared column
  * head, one row per attributed lead (someone who opened a tracked outreach
  * email) — plus one row per SOURCE-TAGGED anonymous visitor (someone who
  * arrived through the promoted ?utm_source= link: facebook, tiktok, …), which
@@ -145,10 +146,11 @@ const ALL_SECTORS = "__all__";
 const ALL_CHANNELS = "__all__";
 
 /** Channels always offered, even before their first row: outreach email is
- *  what every attributed lead came through, and Facebook is the promoted
- *  social link. Any OTHER tagged source (tiktok, instagram, …) grows a chip
- *  the moment a visitor actually arrives through it. */
-const BASE_CHANNELS = [OUTREACH_SOURCE, "facebook"];
+ *  what every attributed lead came through, Facebook is the promoted social
+ *  link, and LinkedIn is both a social link and a lead source (contact lists
+ *  imported on the Pipeline tab). Any OTHER tagged source (tiktok, instagram,
+ *  …) grows a chip the moment a visitor actually arrives through it. */
+const BASE_CHANNELS = [OUTREACH_SOURCE, "facebook", "linkedin"];
 
 /** One row of the activity table: an attributed outreach lead, or an
  *  anonymous visitor who arrived through a tagged social link. Visitor rows
@@ -156,6 +158,44 @@ const BASE_CHANNELS = [OUTREACH_SOURCE, "facebook"];
  *  it) plus the channel they came from; they have no lead behind them, so the
  *  per-row delete is withheld (the Anonymous panel's Clear covers them). */
 type ActivityRow = LeadActivity & { channel: string; deletable: boolean };
+
+/**
+ * Does this row belong under a channel chip? A row's channel is how it reached
+ * the portal. LinkedIn is the one chip that ALSO means "where we got the
+ * lead": a lead imported from a LinkedIn contact list who clicked our email
+ * arrived by outreach, but is still a LinkedIn lead — so it shows under both
+ * Outreach email and LinkedIn.
+ */
+function inChannel(row: ActivityRow, channel: string): boolean {
+  if (row.channel === channel) return true;
+  return channel === "linkedin" && row.leadSource === "linkedin";
+}
+
+/** Lead-source names in this table. "Google" / "Bing" alone would read as
+ *  search traffic here (the Google gauge), so maps leads say Maps. */
+const LEAD_SOURCE_NAME: Record<Exclude<LeadSource, "unknown">, string> = {
+  google: "Google Maps",
+  bing: "Bing Maps",
+  linkedin: "LinkedIn",
+};
+
+/**
+ * The Source column: where this row came from. A tagged visitor is its channel
+ * (Facebook, LinkedIn, TikTok…); an outreach lead is where we got the lead —
+ * a LinkedIn contact list, or the Google / Bing maps scrape. Null when that's
+ * unknowable (a hand-added lead, or one deleted since it clicked).
+ */
+function rowSource(row: ActivityRow): { slug: string; label: string } | null {
+  if (row.channel !== OUTREACH_SOURCE) return { slug: row.channel, label: sourceLabel(row.channel) };
+  const src = row.leadSource;
+  if (!src || src === "unknown") return null;
+  return { slug: src, label: LEAD_SOURCE_NAME[src] };
+}
+
+/** Rebuild the API's leadSource, dropping anything that isn't one we know. */
+function toLeadSource(v: unknown): LeadSource | null {
+  return typeof v === "string" && (LEAD_SOURCES as readonly string[]).includes(v) ? (v as LeadSource) : null;
+}
 
 /* ───────────────────────────  main-table tabs  ─────────────────────────── */
 
@@ -190,6 +230,9 @@ type LoadState =
       /** The google bucket — visitors from a google.* search Referer or a
        *  ?utm_source=google link. All-zero until the first one. */
       google: SourceBucket;
+      /** The linkedin bucket — visitors from a linkedin.com / lnkd.in Referer
+       *  or a ?utm_source=linkedin (or li) link. All-zero until the first one. */
+      linkedin: SourceBucket;
       /** clicks per service, every visitor — the "Services clicked" card */
       services: ServiceClicks;
       /** exact count — the KPI never shows only what fitted in the page cap */
@@ -243,6 +286,9 @@ function toLead(v: unknown): LeadActivity | null {
     business: str(o.business),
     category: str(o.category),
     campaign: str(o.campaign),
+    leadSource: toLeadSource(o.leadSource),
+    contactName: str(o.contactName),
+    contactTitle: str(o.contactTitle),
     firstSeen: str(o.firstSeen) ?? events[0]?.ts ?? "",
     lastSeen: str(o.lastSeen) ?? events[events.length - 1]?.ts ?? "",
     events,
@@ -351,6 +397,18 @@ const ratio = (count: number, total: number) => (total > 0 ? count / total : 0);
    TimelineLine live in ./LeadTrail — shared with the Enquiries tab's activity
    modal so a trail reads the same on both surfaces. */
 
+/** A traffic source's brand mark at chip / row size, with its name for
+ *  screen readers (the logo SVGs themselves are aria-hidden). */
+function ChannelMark({ brand }: { brand: "facebook" | "google" | "linkedin" }) {
+  const Logo = BRAND_LOGO[brand];
+  return (
+    <span className="inline-flex shrink-0" title={sourceLabel(brand)}>
+      <Logo className="h-3.5 w-3.5" />
+      <span className="sr-only">{sourceLabel(brand)}</span>
+    </span>
+  );
+}
+
 /* ───────────────────────────  KPI cards  ─────────────────────────── */
 
 interface TelemetryStat {
@@ -425,15 +483,14 @@ function StatCard({ stat }: { stat: TelemetryStat }) {
 }
 
 /** The fused KPI panel's grid — one definition, shared by the live row and its
- *  skeleton so they can't drift apart. Seven gauges: two columns on a phone,
- *  four once the sidebar is beside them, seven across only from `wide`
+ *  skeleton so they can't drift apart. Eight gauges: two columns on a phone,
+ *  four once the sidebar is beside them, eight across only from `wide`
  *  (1700px), where a column is still wide enough for a 40px count-up readout.
- *  Seven divides evenly nowhere below that, so the LAST gauge spans two
- *  columns there (2·3+2 and 4+1+1+2): the fused panel never shows an empty
- *  cell. */
-const KPI_COUNT = 7;
+ *  Eight divides evenly at every step (4×2, 2×4, 1×8), so the fused panel
+ *  never shows an empty cell. */
+const KPI_COUNT = 8;
 const KPI_GRID =
-  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-4 wide:grid-cols-7 [&>*:last-child]:col-span-2 wide:[&>*:last-child]:col-span-1";
+  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-4 wide:grid-cols-8";
 
 /** Skeleton mirroring the fused KPI panel while both endpoints are in flight. */
 function KpiPanelSkeleton() {
@@ -545,8 +602,8 @@ function PanelEmpty({ icon: Icon, hint }: { icon: LucideIcon; hint: string }) {
 
 /* ───────────────────────────  lead row  ─────────────────────────── */
 
-/** The activity list's column template — Lead · ID · Score · Sector · Events ·
- *  Last seen. ONE definition, read by both the column head and every row, so
+/** The activity list's column template — Lead · Source · ID · Score · Sector ·
+ *  Events · Last seen. ONE definition, read by both the column head and every row, so
  *  the headings can't drift off the cells they sit over. Deliberately left
  *  unprefixed: below lg the row is flex-col, where a grid template is inert,
  *  so the stacked layout needs no second definition.
@@ -556,7 +613,7 @@ function PanelEmpty({ icon: Icon, hint }: { icon: LucideIcon; hint: string }) {
  *  400px wide. Below that width it wraps and the row doubles in height, which
  *  is what the tighter sub-xl set is for. */
 const LEAD_COLS =
-  "grid-cols-[minmax(0,8.5rem)_4.5rem_5.5rem_minmax(0,6rem)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,13rem)_6rem_5.5rem_minmax(0,9rem)_minmax(0,1fr)_auto]";
+  "grid-cols-[minmax(0,8.5rem)_minmax(0,6rem)_4.5rem_5.5rem_minmax(0,6rem)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,13rem)_7.5rem_6rem_5.5rem_minmax(0,9rem)_minmax(0,1fr)_auto]";
 
 /** Width of the per-row trash column, mirrored by a spacer in the head so the
  *  headings stay over their own columns instead of sliding one gap right. */
@@ -591,6 +648,7 @@ function LeadTableHead() {
         )}
       >
         <span>Lead</span>
+        <span>Source</span>
         <span>ID</span>
         <span>Score</span>
         <span>Sector</span>
@@ -622,7 +680,7 @@ const LeadRow = memo(function LeadRow({
   onDeleteCancel,
   onDeleteConfirm,
 }: {
-  lead: LeadActivity;
+  lead: ActivityRow;
   open: boolean;
   /** New (unacknowledged) customer events on this lead — drives the blinking
    *  red dot. Cleared by toggling the row (that's the acknowledgement). */
@@ -645,6 +703,7 @@ const LeadRow = memo(function LeadRow({
   const name = leadDisplayName(lead);
   const score = leadScore(lead);
   const tier = scoreTier(score);
+  const source = rowSource(lead);
 
   return (
     <li className="border-t border-border/70 first:border-t-0">
@@ -688,6 +747,11 @@ const LeadRow = memo(function LeadRow({
                 {name}
               </span>
             </span>
+            {lead.contactName && (
+              <span className="mt-0.5 block truncate text-[11.5px] text-muted-foreground">
+                {lead.contactTitle ? `${lead.contactName} · ${lead.contactTitle}` : lead.contactName}
+              </span>
+            )}
             {lead.campaign && (
               <span className="mt-1 flex min-w-0">
                 <span
@@ -697,6 +761,19 @@ const LeadRow = memo(function LeadRow({
                   <span className="truncate">{lead.campaign}</span>
                 </span>
               </span>
+            )}
+          </span>
+
+          {/* ── Source: where the row came from, with the brand mark ──── */}
+          <span className="flex min-w-0 items-center">
+            <CellLabel>Source</CellLabel>
+            {source ? (
+              <span title={source.label} className="inline-flex min-w-0 items-center gap-1.5">
+                {isBrand(source.slug) && <ChannelMark brand={source.slug} />}
+                <span className="truncate text-[11.5px] text-foreground">{source.label}</span>
+              </span>
+            ) : (
+              <span className="font-mono text-[10px] text-muted-foreground/60">—</span>
             )}
           </span>
 
@@ -1416,6 +1493,7 @@ export function TelemetryPage() {
           unsubscribes: [],
           facebook: EMPTY_SOURCE,
           google: EMPTY_SOURCE,
+          linkedin: EMPTY_SOURCE,
           services: toServiceClicks([]),
           unsubscribesTotal: 0,
           // No database, so the opt-out list is unknown rather than empty.
@@ -1478,6 +1556,7 @@ export function TelemetryPage() {
         unsubscribes,
         facebook: toSourceBucket(sum.bySource, "facebook"),
         google: toSourceBucket(sum.bySource, "google"),
+        linkedin: toSourceBucket(sum.bySource, "linkedin"),
         services: toServiceClicks(sum.byService),
         // The exact total can exceed what the route sends; never let the KPI
         // read lower than the rows the table is actually showing either.
@@ -1666,7 +1745,7 @@ export function TelemetryPage() {
     channel !== ALL_CHANNELS && channels.includes(channel) ? channel : ALL_CHANNELS;
 
   // Funnel gauges: engaged leads → clicks → browsing → conversions, then the
-  // two channel/outcome dials (Facebook promotion traffic, opt-outs).
+  // channel dials (Facebook, Google, LinkedIn traffic) and opt-outs.
   const stats = useMemo<TelemetryStat[]>(() => {
     if (!ready) return [];
     const t = ready.totals;
@@ -1748,6 +1827,23 @@ export function TelemetryPage() {
         },
       },
       {
+        id: "linkedin",
+        label: "LinkedIn",
+        // Portal visits stamped source=linkedin — a linkedin.com / lnkd.in
+        // Referer or ?utm_source=linkedin. Same unit as Facebook and Google.
+        // (LinkedIn-sourced LEADS who click an email count under Email clicks.)
+        value: ready.linkedin.views,
+        icon: LinkedInLogo,
+        caption:
+          ready.linkedin.visitors === 1
+            ? "portal visits · 1 visitor"
+            : `portal visits · ${formatInt(ready.linkedin.visitors)} visitors`,
+        ratio: {
+          value: ratio(ready.linkedin.inquiries, ready.linkedin.views),
+          label: "became enquiries",
+        },
+      },
+      {
         id: "unsubscribed",
         label: "Unsubscribed",
         // Zero and "we couldn't read the list" must not look the same on a
@@ -1797,7 +1893,7 @@ export function TelemetryPage() {
     const byRecency = (a: ActivityRow, b: ActivityRow) =>
       a.lastSeen < b.lastSeen ? 1 : a.lastSeen > b.lastSeen ? -1 : 0;
     let filtered =
-      activeChannel === ALL_CHANNELS ? rows : rows.filter((r) => r.channel === activeChannel);
+      activeChannel === ALL_CHANNELS ? rows : rows.filter((r) => inChannel(r, activeChannel));
     if (activeSector !== ALL_SECTORS) {
       filtered = filtered.filter((r) => r.category === activeSector);
     }
@@ -2065,12 +2161,15 @@ export function TelemetryPage() {
                                 onClick={() => setChannel(c)}
                                 aria-pressed={activeChannel === c}
                                 className={cn(
-                                  "rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
+                                  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
                                   activeChannel === c
                                     ? "border-primary/40 bg-primary/10 text-foreground"
                                     : "border-border bg-background text-muted-foreground hover:text-foreground",
                                 )}
                               >
+                                {c !== ALL_CHANNELS && isBrand(c) && (
+                                  <ChannelMark brand={c} />
+                                )}
                                 {c === ALL_CHANNELS ? "All" : sourceLabel(c)}
                               </button>
                             ))}

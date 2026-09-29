@@ -359,3 +359,13 @@ export function isUuid(v: unknown): v is string {
 export function isMissingBatchColumn(detail: string): boolean {
   return /(batch|category)/i.test(detail) && /(does not exist|could not find|PGRST204)/i.test(detail);
 }
+
+/** True when a PostgREST error body says one of the LinkedIn-source columns
+ *  (`contact_name`, `contact_title`, `source`) is missing — i.e.
+ *  supabase/linkedin-source.sql hasn't been run yet. */
+export function isMissingLinkedInColumn(detail: string): boolean {
+  return /(contact_name|contact_title|\bsource\b)/i.test(detail) && /(does not exist|could not find|PGRST204)/i.test(detail);
+}
+
+/** What a LinkedIn upload says when its columns aren't there yet. */
+export const LINKEDIN_MIGRATION_ERROR = "LinkedIn leads need a one-time migration — run supabase/linkedin-source.sql.";

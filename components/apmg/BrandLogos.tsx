@@ -18,6 +18,19 @@ const GOOGLE_PATHS: ReadonlyArray<readonly [fill: string, d: string]> = [
   ["#34A853", "M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"],
 ];
 
+/** LinkedIn's "in" bug (#0A66C2). The path is the square with the letters cut
+ *  out; the white square behind it is what shows through them, so the "in"
+ *  stays white on a dark card — the same trick as the Facebook disc. */
+const LINKEDIN_PATH =
+  "M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z";
+
+/** The traffic sources that have a brand mark. */
+export type Brand = "facebook" | "google" | "linkedin";
+
+export function isBrand(v: string): v is Brand {
+  return v === "facebook" || v === "google" || v === "linkedin";
+}
+
 export function FacebookLogo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" className={className} aria-hidden focusable="false">
@@ -37,12 +50,31 @@ export function GoogleLogo({ className }: { className?: string }) {
   );
 }
 
+export function LinkedInLogo({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} aria-hidden focusable="false">
+      <rect x="1.5" y="1.5" width="21" height="21" rx="2" fill="#fff" />
+      <path fill="#0A66C2" d={LINKEDIN_PATH} />
+    </svg>
+  );
+}
+
+/** Brand → its React mark, for callers that pick the logo by source slug. */
+export const BRAND_LOGO: Record<Brand, typeof FacebookLogo> = {
+  facebook: FacebookLogo,
+  google: GoogleLogo,
+  linkedin: LinkedInLogo,
+};
+
 /** The same marks as SVG markup, for documents built as HTML strings (the
  *  Telemetry PDF report renders in a bare window, with no React). */
-export function brandLogoSvg(brand: "facebook" | "google", size: number): string {
+export function brandLogoSvg(brand: Brand, size: number): string {
   const attrs = `width="${size}" height="${size}" aria-hidden="true" style="vertical-align:-2px"`;
   if (brand === "facebook") {
     return `<svg viewBox="0 0 24 24" ${attrs}><circle cx="12" cy="12" r="11.5" fill="#fff"/><path fill="#0866FF" d="${FACEBOOK_PATH}"/></svg>`;
+  }
+  if (brand === "linkedin") {
+    return `<svg viewBox="0 0 24 24" ${attrs}><rect x="1.5" y="1.5" width="21" height="21" rx="2" fill="#fff"/><path fill="#0A66C2" d="${LINKEDIN_PATH}"/></svg>`;
   }
   return `<svg viewBox="0 0 48 48" ${attrs}>${GOOGLE_PATHS.map(([fill, d]) => `<path fill="${fill}" d="${d}"/>`).join("")}</svg>`;
 }

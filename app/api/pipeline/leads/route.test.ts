@@ -32,7 +32,7 @@ vi.mock("@/lib/pipeline/server", async (importOriginal) => {
 vi.mock("@/lib/portal/server", () => ({ countEmailsSentByLead: async () => new Map() }));
 
 import { requirePermission } from "@/lib/rbac/server";
-import { DELETE } from "./route";
+import { DELETE, GET } from "./route";
 
 const mockGuard = vi.mocked(requirePermission);
 
@@ -142,5 +142,36 @@ describe("DELETE /api/pipeline/leads", () => {
 
     expect(res.status).toBe(403);
     expect(seen).toHaveLength(0);
+  });
+});
+
+describe("GET /api/pipeline/leads — LinkedIn columns", () => {
+  const getReq = () =>
+    new Request("http://localhost/api/pipeline/leads", { headers: { origin: "http://localhost", host: "localhost" } });
+
+  it("reads the contact + source columns", async () => {
+    const seen = captureFetch([{ id: "1", name: "Harbour Care", contact_name: "Ada Brook", source: "linkedin" }]);
+    const res = await GET(getReq());
+    const data = await res.json();
+    expect(res.status).toBe(200);
+    expect(seen[0]).toContain("contact_name,contact_title,source");
+    expect(data.rows[0]).toMatchObject({ contact_name: "Ada Brook", source: "linkedin" });
+  });
+
+  it("retries without them before linkedin-source.sql has been run", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      seen.push(String(url));
+      if (String(url).includes("contact_name")) {
+        return Response.json({ code: "42703", message: "column leads.contact_name does not exist" }, { status: 400 });
+      }
+      return Response.json([{ id: "1", name: "Acme" }]);
+    });
+    const res = await GET(getReq());
+    const data = await res.json();
+    expect(res.status).toBe(200);
+    expect(data.rows).toHaveLength(1);
+    expect(seen[1]).not.toContain("contact_name");
+    expect(seen[1]).toContain("batch,category");
   });
 });

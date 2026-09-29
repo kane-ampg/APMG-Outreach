@@ -1,5 +1,6 @@
 import {
   isMissingBatchColumn,
+  isMissingLinkedInColumn,
   isUuid,
   requireLiveSupabase,
   safeBatchName,
@@ -26,6 +27,8 @@ const LIMIT = 10000;
 const COLS_BASE =
   "id,name,address,featured_image,bing_maps_url,rating,website,phone,emails,social_medias,facebook,instagram,twitter,created_at";
 const COLS = `${COLS_BASE},batch,category`;
+// + the LinkedIn-source columns (supabase/linkedin-source.sql)
+const COLS_LINKEDIN = `${COLS},contact_name,contact_title,source`;
 
 type Target = { base: string; key: string };
 
@@ -98,10 +101,17 @@ export async function GET(req: Request): Promise<Response> {
   const filter = batchFilter(new URL(req.url).searchParams.get("batch"));
 
   // Track the column set that succeeds so follow-up pages request the same one.
-  let cols = COLS;
+  let cols = COLS_LINKEDIN;
   let res: Response;
   try {
     res = await fetchLeads(target, cols, filter);
+    // linkedin-source.sql not run yet: read without its columns rather than
+    // fail. clone() so the handling below can still read this body if it's
+    // some other error.
+    if (!res.ok && isMissingLinkedInColumn(await res.clone().text().catch(() => ""))) {
+      cols = COLS;
+      res = await fetchLeads(target, cols, filter);
+    }
   } catch (e) {
     console.error("[pipeline/leads] fetch to Supabase failed:", e);
     return Response.json({ ok: false, mode: "live", rows: [], total: 0, error: "Could not reach the database." }, { status: 502 });

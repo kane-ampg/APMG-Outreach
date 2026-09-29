@@ -1762,8 +1762,19 @@ function FlatLeads() {
 const MIGRATION_SQL =
   "alter table public.leads add column if not exists batch text;\nalter table public.leads add column if not exists category text;\ncreate index if not exists leads_batch_idx on public.leads (batch);";
 
-/** Shown when the `batch` column is missing — guides the one-time migration. */
-export function MigrationCard() {
+/** supabase/linkedin-source.sql, for a LinkedIn upload that hit the missing columns. */
+const LINKEDIN_MIGRATION_SQL =
+  "alter table public.leads add column if not exists contact_name  text;\nalter table public.leads add column if not exists contact_title text;\nalter table public.leads add column if not exists source        text;\nnotify pgrst, 'reload schema';";
+
+const MIGRATIONS = {
+  folders: { title: "Enable folders", why: "group leads by import", sql: MIGRATION_SQL },
+  linkedin: { title: "Enable LinkedIn leads", why: "store LinkedIn contacts and their source", sql: LINKEDIN_MIGRATION_SQL },
+} as const;
+
+/** Shown when a later-added column is missing — guides the one-time migration.
+ *  `folders` (the default) is the `batch` column; `linkedin` is linkedin-source.sql. */
+export function MigrationCard({ kind = "folders" }: { kind?: keyof typeof MIGRATIONS }) {
+  const m = MIGRATIONS[kind];
   return (
     <div className="rounded-lg border border-primary/30 bg-primary/[0.04] p-4">
       <div className="flex items-center gap-2.5">
@@ -1771,14 +1782,14 @@ export function MigrationCard() {
           <Database className="h-4 w-4" aria-hidden />
         </span>
         <div className="min-w-0">
-          <div className="text-[13px] font-semibold text-foreground">Enable folders</div>
+          <div className="text-[13px] font-semibold text-foreground">{m.title}</div>
           <div className="font-mono text-[10.5px] text-muted-foreground">
-            One-time: run this in Supabase → SQL Editor to group leads by import
+            One-time: run this in Supabase → SQL Editor to {m.why}
           </div>
         </div>
       </div>
       <pre className="mt-3 overflow-x-auto rounded-md border border-border bg-background/60 p-3 font-mono text-[11px] leading-relaxed text-foreground">
-        {MIGRATION_SQL}
+        {m.sql}
       </pre>
     </div>
   );

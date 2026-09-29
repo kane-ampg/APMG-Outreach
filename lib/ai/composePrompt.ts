@@ -10,6 +10,8 @@
  * viewable on the Sector Playbooks tab.
  */
 
+import { contactFirstName } from "@/lib/pipeline/campaign";
+
 export const DEFAULT_MODEL = "claude-opus-4-8";
 
 // Only models that support structured outputs (output_config.format) — an
@@ -31,6 +33,9 @@ export interface ComposeLeadFacts {
   business: string;
   category?: string | null;
   website?: string | null;
+  /** LinkedIn leads: the person the email is written to, and their role */
+  contactName?: string | null;
+  contactTitle?: string | null;
 }
 
 export interface DraftedEmail {
@@ -115,6 +120,26 @@ export function renderLeadPrompt(template: string, f: ComposeLeadFacts): string 
     .filter((l): l is string => l !== null)
     .join("\n")
     .trim();
+}
+
+/**
+ * The recipient block for a lead that names a person (a LinkedIn contact), or
+ * "" for a company lead — whose cold prompt then stands completely unchanged.
+ *
+ * Appended to the per-lead USER message, never the system prompt: the saved
+ * compose_prompt row (which says to greet the business) stays untouched, and
+ * this later, more specific instruction is the one that wins.
+ */
+export function buildRecipientPrompt(f: ComposeLeadFacts): string {
+  const name = (f.contactName ?? "").trim();
+  if (!name) return "";
+  const title = (f.contactTitle ?? "").trim();
+  const who = `Recipient: ${name}${title ? `, ${title}` : ""} at ${f.business.trim()}.`;
+  const first = contactFirstName(name);
+  const greeting = first
+    ? `Write to this person, not to the business: open the greeting with their first name exactly — "Hi ${first}," — `
+    : "Write to this person, not to the business: ";
+  return `${who}\n${greeting}and pitch at the level of their role. Every other rule above still applies.`;
 }
 
 export function leadPrompt(f: ComposeLeadFacts): string {

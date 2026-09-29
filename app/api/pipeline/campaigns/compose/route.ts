@@ -80,7 +80,15 @@ function sanitizeLead(input: unknown): ComposeLeadInput | null {
         .filter(isEmail)
         .slice(0, MAX_DRAFT_EMAILS)
     : [];
-  return { id, name, website: str(o.website), category: str(o.category), emails };
+  return {
+    id,
+    name,
+    website: str(o.website),
+    category: str(o.category),
+    emails,
+    contact_name: str(o.contact_name),
+    contact_title: str(o.contact_title),
+  };
 }
 
 /** Build a lead's reviewable draft: the deterministic template supplies the
@@ -97,7 +105,13 @@ async function draftForLead(
 ): Promise<{ draft: ComposeDraft; ai: boolean }> {
   const base = demoDraft(lead, service, history !== null);
   const drafted = await draftEmail(
-    { business: lead.name, category: lead.category, website: lead.website },
+    {
+      business: lead.name,
+      category: lead.category,
+      website: lead.website,
+      contactName: lead.contact_name,
+      contactTitle: lead.contact_title,
+    },
     kb,
     promptCfg,
     angle,

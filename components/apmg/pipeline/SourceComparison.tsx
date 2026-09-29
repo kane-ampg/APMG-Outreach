@@ -72,13 +72,13 @@ export function SourceComparison({ refreshSignal = 0 }: { refreshSignal?: number
   return (
     <section
       className="overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10"
-      aria-label="Lead counts by scraper source"
+      aria-label="Lead counts by source"
     >
       <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2.5">
         <div className="flex items-center gap-2">
           <BarChart3 className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
           <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Sources · Google vs Bing
+            Sources · Google · Bing · LinkedIn
           </span>
         </div>
         <Button
@@ -100,7 +100,7 @@ export function SourceComparison({ refreshSignal = 0 }: { refreshSignal?: number
       <div className="px-4 py-3">
         {state.status === "idle" && (
           <p className="font-mono text-[11px] text-muted-foreground">
-            Counts every stored lead by the scraper it came from. Runs on demand — it is not part of
+            Counts every stored lead by the source it came from. Runs on demand — it is not part of
             the live poll.
           </p>
         )}
@@ -173,8 +173,8 @@ export function SourceComparison({ refreshSignal = 0 }: { refreshSignal?: number
             </div>
 
             <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
-              Source is read from each lead&apos;s maps URL, so these cover every row ever imported.
-              Send outcomes per source (sent / clicked / replied) are not here — that needs a join to
+              Google and Bing are read from each lead&apos;s maps URL, so they cover every row ever
+              imported; LinkedIn is recorded on the lead when it is imported. Send outcomes per source (sent / clicked / replied) are not here — that needs a join to
               portal_events, which has no key back to leads.
               {!state.engagedAvailable && " Engaged is unavailable until the portal telemetry migration runs."}
             </p>

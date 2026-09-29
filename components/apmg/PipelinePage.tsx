@@ -54,18 +54,20 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 function nextBatchSeq(batches: Array<{ batch: string }> | undefined): number {
   let max = 0;
   for (const b of batches ?? []) {
-    const m = /^leads-(\d+)-/.exec(b.batch);
+    // one running number across maps and LinkedIn folders
+    const m = /^(?:leads|linkedin)-(\d+)-/.exec(b.batch);
     if (m) max = Math.max(max, Number(m[1]));
   }
   return max + 1;
 }
 
-/** Folder name for an import, e.g. leads-0001-20260629-073700. */
-function makeBatchName(seq: number): string {
+/** Folder name for an import, e.g. leads-0001-20260629-073700 — or
+ *  linkedin-0002-… for a LinkedIn contact file, so it reads apart in the list. */
+function makeBatchName(seq: number, prefix: "leads" | "linkedin" = "leads"): string {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   const ts = `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-  return `leads-${String(seq).padStart(4, "0")}-${ts}`;
+  return `${prefix}-${String(seq).padStart(4, "0")}-${ts}`;
 }
 
 type PipelineSub = "leads" | "campaigns" | "unsubscribed";
@@ -240,7 +242,8 @@ function PipelineLeads() {
   // bumped after a successful import so the stored-leads view refetches
   const [refreshSignal, setRefreshSignal] = useState(0);
   // true when the `batch` column is missing (folders migration not yet run)
-  const [needsMigration, setNeedsMigration] = useState(false);
+  // which one-time SQL the last write hit the absence of, if any
+  const [needsMigration, setNeedsMigration] = useState<false | "folders" | "linkedin">(false);
 
   // Live database counts shown above the flow — the shared store polls every 15s
   // (and on focus) so the numbers stay realtime; also refreshed the instant an
@@ -393,20 +396,20 @@ function PipelineLeads() {
     setPhase("uploading");
     setSelected(2); // follow the flow to the Push to Supabase node
 
-    // auto-name this import's folder: leads-0001-<timestamp>
+    // auto-name this import's folder: leads-0001-<timestamp> (linkedin-… for LinkedIn)
     let seq = 1;
     try {
       const br = await fetch("/api/pipeline/batches", { cache: "no-store" });
       const bd = (await br.json().catch(() => null)) as
         | { ok?: boolean; batches?: Array<{ batch: string }>; needsMigration?: boolean }
         | null;
-      if (bd?.needsMigration) setNeedsMigration(true);
+      if (bd?.needsMigration) setNeedsMigration("folders");
       if (bd?.ok) seq = nextBatchSeq(bd.batches);
     } catch {
       /* best-effort; default to seq 1 */
     }
     if (!live()) return;
-    const batchName = makeBatchName(seq);
+    const batchName = makeBatchName(seq, parsed?.sources.linkedin ? "linkedin" : "leads");
 
     const chunks = chunk(rows, BATCH_SIZE);
     let inserted = 0;
@@ -425,12 +428,25 @@ function PipelineLeads() {
         return;
       }
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; inserted?: number; mode?: UploadMode; error?: string; needsMigration?: boolean }
+        | {
+            ok?: boolean;
+            inserted?: number;
+            mode?: UploadMode;
+            error?: string;
+            needsMigration?: boolean;
+            migration?: "linkedin";
+          }
         | null;
       if (!live()) return;
       if (data?.needsMigration) {
-        setNeedsMigration(true);
-        fail(2, "Folders need a one-time migration — see the SQL under Push to Supabase.");
+        const linkedin = data.migration === "linkedin";
+        setNeedsMigration(linkedin ? "linkedin" : "folders");
+        fail(
+          2,
+          linkedin
+            ? "LinkedIn leads need a one-time migration — see the SQL under Push to Supabase."
+            : "Folders need a one-time migration — see the SQL under Push to Supabase.",
+        );
         return;
       }
       if (!res.ok || !data?.ok) {
@@ -569,7 +585,7 @@ function PipelineLeads() {
       );
     }
     // selected === 2 (Push to Supabase)
-    if (needsMigration) return <MigrationCard />;
+    if (needsMigration) return <MigrationCard kind={needsMigration} />;
     if (phase === "uploading") {
       return <UploadingPanel uploaded={uploaded} total={total} reduce={reduce} />;
     }
@@ -628,7 +644,7 @@ function PipelineLeads() {
         <PipelineStats state={statsState} />
       </Reveal>
 
-      {/* Google vs Bing lead quality — loads on demand, off the polling path */}
+      {/* per-source lead quality (Google / Bing / LinkedIn) — loads on demand, off the polling path */}
       <Reveal delay={0.045} className="mb-3">
         <SourceComparison refreshSignal={refreshSignal} />
       </Reveal>
@@ -847,7 +863,7 @@ function IdlePanel({
           <UploadCloud className="h-6 w-6" aria-hidden />
         </span>
         <span className="text-sm font-semibold text-foreground">
-          Drop your Bing Maps Scraper CSV
+          Drop a Google Maps, Bing Maps or LinkedIn CSV
         </span>
         <span className="font-mono text-[11px] text-muted-foreground">
           or <span className="text-primary underline-offset-2 group-hover:underline">browse</span>{" "}
@@ -1057,7 +1073,7 @@ function ParsedView({
 }
 
 /**
- * What the parse decided, stated plainly: which scraper the file came from,
+ * What the parse decided, stated plainly: which source the file came from,
  * what was dropped and why, and — the one that decides whether this import is
  * sendable at all — whether any row carries an email address.
  */
@@ -1065,6 +1081,9 @@ function ImportNotes({ parsed }: { parsed: ParsedCsv }) {
   const present = LEAD_SOURCES.filter((s) => parsed.sources[s] > 0);
   const count = parsed.rows.length;
   const noEmails = count > 0 && parsed.withEmail === 0;
+  // a LinkedIn file is one person per row, not one business per listing
+  const linkedin = parsed.sources.linkedin > 0;
+  const withoutEmail = count - parsed.withEmail;
 
   return (
     <div className="flex flex-col gap-2">
@@ -1086,15 +1105,16 @@ function ImportNotes({ parsed }: { parsed: ParsedCsv }) {
         <p className="font-mono text-[10.5px] text-muted-foreground">
           {parsed.duplicates > 0 && (
             <>
-              {parsed.duplicates.toLocaleString("en-US")} duplicate listing
-              {parsed.duplicates === 1 ? "" : "s"} dropped (the same business repeated in this file)
+              {parsed.duplicates.toLocaleString("en-US")} duplicate {linkedin ? "contact" : "listing"}
+              {parsed.duplicates === 1 ? "" : "s"} dropped (the same {linkedin ? "person" : "business"} repeated
+              in this file)
               {parsed.skipped > 0 ? " · " : "."}
             </>
           )}
           {parsed.skipped > 0 && (
             <>
               {parsed.skipped.toLocaleString("en-US")} row
-              {parsed.skipped === 1 ? "" : "s"} skipped (no business name).
+              {parsed.skipped === 1 ? "" : "s"} skipped ({linkedin ? "no company" : "no business name"}).
             </>
           )}
         </p>
@@ -1104,9 +1124,17 @@ function ImportNotes({ parsed }: { parsed: ParsedCsv }) {
         <p className="flex items-start gap-1.5 font-mono text-[10.5px] text-muted-foreground">
           <AlertTriangle className="mt-px h-3 w-3 shrink-0 text-destructive" aria-hidden />
           <span>
-            No email addresses in this file — a maps export carries none. These leads are storable
-            and callable, but not sendable until enrichment finds an address for them.
+            {linkedin
+              ? "No usable email addresses in this file. These leads are storable, but not sendable until an address is found for them."
+              : "No email addresses in this file — a maps export carries none. These leads are storable and callable, but not sendable until enrichment finds an address for them."}
           </span>
+        </p>
+      )}
+
+      {linkedin && !noEmails && withoutEmail > 0 && (
+        <p className="font-mono text-[10.5px] text-muted-foreground">
+          {withoutEmail.toLocaleString("en-US")} contact{withoutEmail === 1 ? " has" : "s have"} no usable
+          email (blank or malformed) — stored, but they land in the folder&apos;s No email list.
         </p>
       )}
     </div>

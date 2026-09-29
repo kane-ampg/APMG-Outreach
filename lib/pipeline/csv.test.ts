@@ -195,3 +195,138 @@ describe("leadSource", () => {
     expect(sourceFilter("unknown")).toContain("bing_maps_url.is.null");
   });
 });
+
+describe("LinkedIn contact export", () => {
+  // Synthetic rows in the prospecting tool's 12-column shape, one per edge case
+  // seen in the first real export (2026-09-28). BOM included — Excel-saved.
+  const HEADER =
+    "First Name,Last Name,Full Name,Job Title,Company,Contact Type,Email,Secondary Email,Phone (Masked),Industry,Sub-Industry,Source";
+  const csv =
+    "﻿" +
+    [
+      HEADER,
+      "Ada,Brook,Ada Brook,Director,Harbour Care,Decision Makers,ada@harbourcare.com.au,,+61 438•••••••,Healthcare,Community & Home Healthcare Services,LinkedIn",
+      // secondary on a DIFFERENT organisation's domain — must not be stored
+      "Cy,Dale,Cy Dale,Vice Chair,Rural Health Network,Decision Makers,cy.dale@rhn.org.au,cy.dale@health.nsw.gov.au,,Healthcare,Community & Home Healthcare Services,LinkedIn",
+      // secondary on the SAME domain — kept
+      "Eve,Fox,Eve Fox,Managing Director,Fox Therapy,Decision Makers,eve@foxtherapy.com.au,eve.fox@foxtherapy.com.au,,Healthcare,Community & Home Healthcare Services,LinkedIn",
+      // curly apostrophe: not a valid address, and must not be cut down to "brien@…"
+      "Gil,O’Brien,Gil O’Brien,Non-Executive Director,Fairway House,Decision Makers,go’brien@fairway.org.au,go@otherorg.org.au,,Healthcare,Community & Home Healthcare Services,LinkedIn",
+      // two people at one company are two leads; quoted comma in the title
+      'Hal,Iver,Hal Iver,"Founder, Chief Executive Officer",Nordic Care,Decision Makers,hal.iver@nordiccare.se,,,Healthcare,Community & Home Healthcare Services,LinkedIn',
+      "Ivy,Jansson,Ivy Jansson,Head of Operations,Nordic Care,Decision Makers,ivy.jansson@nordiccare.se,,,Healthcare,Community & Home Healthcare Services,LinkedIn",
+      // exact repeat of an earlier person — dropped as a duplicate
+      "Ada,Brook,Ada Brook,Director,Harbour Care,Decision Makers,ADA@harbourcare.com.au,,,Healthcare,Community & Home Healthcare Services,LinkedIn",
+      // no company — skipped
+      "Jo,Kay,Jo Kay,Director,,Decision Makers,jo@kay.com.au,,,Healthcare,Community & Home Healthcare Services,LinkedIn",
+      // no Full Name — built from First + Last; no Sub-Industry — falls back to Industry
+      "Lu,Moss,,Director,Moss Clinics,Decision Makers,lu@mossclinics.com.au,,+61 3 9111 2222,Healthcare,,LinkedIn",
+    ].join("\r\n");
+
+  const parsed = parseLeadsCsv(csv);
+  const byContact = (name: string): LeadImportRow => {
+    const hit = parsed.rows.find((r) => r.contact_name === name);
+    if (!hit) throw new Error(`no row for ${name}`);
+    return hit;
+  };
+
+  it("files the company as the lead and keeps the person", () => {
+    const r = byContact("Ada Brook");
+    expect(r.name).toBe("Harbour Care");
+    expect(r.contact_title).toBe("Director");
+    expect(r.source).toBe("linkedin");
+    expect(parsed.headers[0]).toBe("First Name");
+  });
+
+  it("counts every kept row as a LinkedIn lead, none as maps sources", () => {
+    expect(parsed.sources.linkedin).toBe(parsed.rows.length);
+    expect(parsed.sources.google).toBe(0);
+    expect(parsed.sources.bing).toBe(0);
+    expect(parsed.sources.unknown).toBe(0);
+  });
+
+  it("uses the specific Sub-Industry as the category, else Industry", () => {
+    expect(byContact("Ada Brook").category).toBe("Community & Home Healthcare Services");
+    expect(byContact("Lu Moss").category).toBe("Healthcare");
+  });
+
+  it("builds the contact name from First + Last when Full Name is blank", () => {
+    expect(byContact("Lu Moss").name).toBe("Moss Clinics");
+  });
+
+  it("stores a secondary email only when it is on the primary's domain", () => {
+    expect(byContact("Cy Dale").emails).toEqual(["cy.dale@rhn.org.au"]);
+    expect(byContact("Eve Fox").emails).toEqual(["eve@foxtherapy.com.au", "eve.fox@foxtherapy.com.au"]);
+  });
+
+  it("rejects a malformed address outright instead of extracting a wrong one", () => {
+    const r = byContact("Gil O’Brien");
+    expect(r.emails).toEqual([]);
+    expect(r.name).toBe("Fairway House");
+  });
+
+  it("drops masked phone numbers but keeps real ones", () => {
+    expect(byContact("Ada Brook").phone).toBeNull();
+    expect(byContact("Lu Moss").phone).toBe("+61 3 9111 2222");
+  });
+
+  it("keeps one lead per person, de-dups a repeated person, skips rows with no company", () => {
+    expect(parsed.rows.filter((r) => r.name === "Nordic Care")).toHaveLength(2);
+    expect(parsed.rows.filter((r) => r.contact_name === "Ada Brook")).toHaveLength(1);
+    expect(parsed.duplicates).toBe(1);
+    expect(parsed.skipped).toBe(1);
+    expect(parsed.totalRows).toBe(9);
+    expect(parsed.rows).toHaveLength(7);
+    expect(byContact("Hal Iver").contact_title).toBe("Founder, Chief Executive Officer");
+  });
+
+  it("stores nothing maps-shaped on a LinkedIn lead", () => {
+    const r = byContact("Ada Brook");
+    expect(r.bing_maps_url).toBeNull();
+    expect(r.address).toBeNull();
+    expect(r.rating).toBeNull();
+    expect(r.website).toBeNull();
+    expect(parsed.withEmail).toBe(6);
+  });
+
+  it("files a LinkedIn profile URL column under social profiles", () => {
+    const withUrl = parseLeadsCsv(
+      [
+        "Full Name,Job Title,Company,Email,LinkedIn URL",
+        "Ada Brook,Director,Harbour Care,ada@harbourcare.com.au,https://www.linkedin.com/in/ada-brook",
+      ].join("\n"),
+    );
+    expect(withUrl.rows[0].social_medias).toEqual(["https://www.linkedin.com/in/ada-brook"]);
+    expect(withUrl.rows[0].source).toBe("linkedin");
+  });
+
+  it("leaves maps exports on the maps mapper (no person columns → no contact, no stored source)", () => {
+    const bing = parseLeadsCsv(
+      ['"Name","Bing Maps URL","Emails"', '"Acme","https://www.bing.com/maps?ss=ypid.YN1","a@acme.com.au"'].join("\n"),
+    );
+    expect(bing.rows[0].contact_name ?? null).toBeNull();
+    expect(bing.rows[0].source ?? null).toBeNull();
+    expect(bing.sources.linkedin).toBe(0);
+  });
+});
+
+describe("leadSource with a stored source", () => {
+  it("prefers a known stored source over the URL", () => {
+    expect(leadSource(null, "linkedin")).toBe("linkedin");
+    expect(leadSource(undefined, "LinkedIn")).toBe("linkedin");
+  });
+
+  it("falls back to the URL for legacy rows and unknown stored values", () => {
+    expect(leadSource("https://www.bing.com/maps?ss=ypid.YN123", null)).toBe("bing");
+    expect(leadSource("https://www.google.com/maps/place/Foo", "someday-source")).toBe("google");
+    expect(leadSource(null, "")).toBe("unknown");
+  });
+
+  it("filters LinkedIn on the stored column and keeps it out of Unknown", () => {
+    expect(sourceFilter("linkedin")).toBe("source=eq.linkedin");
+    expect(sourceFilter("unknown")).toContain("source.is.null");
+    // before the migration there is no `source` column to filter on
+    expect(sourceFilter("unknown", { legacy: true })).not.toContain("source.");
+    expect(sourceFilter("google", { legacy: true })).toBe(sourceFilter("google"));
+  });
+});

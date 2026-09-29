@@ -273,6 +273,22 @@ export interface ComposeLeadInput {
   website?: string | null;
   category?: string | null;
   emails?: string[] | null;
+  /** LinkedIn leads: the person to greet, and their role */
+  contact_name?: string | null;
+  contact_title?: string | null;
+}
+
+const HONORIFICS = new Set(["dr", "mr", "mrs", "ms", "miss", "mx", "prof", "professor"]);
+
+/**
+ * The first name to greet a contact by ("Hi Ada,"), or null when there isn't a
+ * usable one — a bare initial ("A.") reads worse than the business greeting.
+ */
+export function contactFirstName(name: string | null | undefined): string | null {
+  const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  const first = words.find((w) => !HONORIFICS.has(w.toLowerCase().replace(/\.$/, "")));
+  if (!first) return null;
+  return (first.match(/\p{L}/gu)?.length ?? 0) >= 2 ? first : null;
 }
 
 /** Where a draft's addresses came from. */
@@ -388,6 +404,9 @@ export function demoDraft(
   const category = (lead.category ?? "").trim() || null;
   const trade = sectorPhrase(category);
   const business = escapeHtml(lead.name.trim() || "there");
+  // a LinkedIn contact is greeted by first name; a company lead by its name
+  const firstName = contactFirstName(lead.contact_name);
+  const greet = firstName ? escapeHtml(firstName) : business;
   const base = {
     id: lead.id,
     business: lead.name,
@@ -411,7 +430,7 @@ export function demoDraft(
         `APMG Services handles painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe with one licensed local team, ` +
         `which means ${escapeHtml(trade)} sites like yours have a single number to call instead of chasing separate contractors.</p>`;
     const html =
-      `<p>Hi ${business},</p>` +
+      `<p>Hi ${greet},</p>` +
       pitch +
       `<p>If it&rsquo;s useful, we&rsquo;re happy to come out, take a look and put a quote together, no obligation. ` +
       `Who&rsquo;s the best person to speak to about maintenance at your site?</p>` +
@@ -428,11 +447,11 @@ export function demoDraft(
     return {
       ...base,
       subject: service.subject.slice(0, 120),
-      html: service.html.split("{{business}}").join(business),
+      html: service.html.replace("<p>Hi {{business}},</p>", `<p>Hi ${greet},</p>`).split("{{business}}").join(business),
     };
   }
   const html =
-    `<p>Hi ${business},</p>` +
+    `<p>Hi ${greet},</p>` +
     `<p>APMG Services is a Melbourne-based multi-trade property maintenance partner covering painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe, all handled by one licensed team. ` +
     `We keep ${escapeHtml(trade)} facilities like yours safe, compliant and well maintained, working around your operations so the people who rely on them are never disrupted. ` +
     `Whether it&rsquo;s scheduled upkeep or an urgent repair, you get one reliable partner instead of chasing multiple contractors.</p>` +

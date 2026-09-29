@@ -1,11 +1,14 @@
 import type { LeadImportRow } from "@/lib/pipeline/csv";
 import {
   isMissingBatchColumn,
+  isMissingLinkedInColumn,
+  LINKEDIN_MIGRATION_ERROR,
   requireLiveSupabase,
   safeBatchName,
   sameOrigin,
   supabaseTarget,
 } from "@/lib/pipeline/server";
+import { storedSource } from "@/lib/pipeline/source";
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Receives a batch of parsed leads from the Pipeline tool and inserts them into
@@ -24,13 +27,18 @@ interface UploadResult {
   mode: UploadMode;
   batch?: string | null;
   needsMigration?: boolean;
+  /** which one-time SQL is missing, when needsMigration — absent = folders */
+  migration?: "linkedin";
   error?: string;
 }
 
 /**
- * Whitelist a client row down to the 13 stored columns. `id`/`created_at`/`batch`
+ * Whitelist a client row down to the stored columns. `id`/`created_at`/`batch`
  * are never taken from the row (the DB defaults / the request's top-level batch
  * win), so a caller can't forge them. Returns null for rows without a name.
+ *
+ * The LinkedIn columns (contact_name / contact_title / source) are only kept
+ * when present; withLinkedInKeys() decides per request whether they are sent.
  */
 function sanitizeRow(input: unknown): LeadImportRow | null {
   if (!input || typeof input !== "object") return null;
@@ -64,7 +72,25 @@ function sanitizeRow(input: unknown): LeadImportRow | null {
     facebook: str(o.facebook),
     instagram: str(o.instagram),
     twitter: str(o.twitter),
+    contact_name: str(o.contact_name),
+    contact_title: str(o.contact_title),
+    source: storedSource(o.source),
   };
+}
+
+/**
+ * PostgREST's bulk insert takes its column list from the rows, so every row in
+ * one request must carry the same keys. A request with no LinkedIn row sends
+ * none of the LinkedIn columns at all — which is also what keeps Google/Bing
+ * imports working on a database where linkedin-source.sql hasn't been run.
+ */
+function withLinkedInKeys(rows: LeadImportRow[]): LeadImportRow[] {
+  const any = rows.some((r) => r.source || r.contact_name || r.contact_title);
+  return rows.map(({ contact_name, contact_title, source, ...rest }) =>
+    any
+      ? { ...rest, contact_name: contact_name ?? null, contact_title: contact_title ?? null, source: source ?? null }
+      : rest,
+  );
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -100,7 +126,7 @@ export async function POST(req: Request): Promise<Response> {
   if (sanitized.length === 0) {
     return json({ ok: true, inserted: 0, mode: "noop", batch });
   }
-  const rows = sanitized.map((r) => ({ ...r, batch }));
+  const rows = withLinkedInKeys(sanitized).map((r) => ({ ...r, batch }));
 
   const target = supabaseTarget();
   // Never claim an import that did not land. On a deployed runtime an
@@ -138,6 +164,12 @@ export async function POST(req: Request): Promise<Response> {
     // Log upstream detail server-side only — never leak PostgREST schema internals.
     const detail = await res.text().catch(() => "");
     console.error(`[pipeline/upload] Supabase ${res.status}:`, detail.slice(0, 1000));
+    if (isMissingLinkedInColumn(detail)) {
+      return json(
+        { ok: false, inserted: 0, mode: "live", needsMigration: true, migration: "linkedin", error: LINKEDIN_MIGRATION_ERROR },
+        422,
+      );
+    }
     if (isMissingBatchColumn(detail)) {
       return json(
         { ok: false, inserted: 0, mode: "live", needsMigration: true, error: "Folders need a one-time migration." },

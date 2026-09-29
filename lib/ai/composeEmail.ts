@@ -1,6 +1,11 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
-import { renderLeadPrompt, type ComposeLeadFacts, type DraftedEmail } from "./composePrompt";
+import {
+  buildRecipientPrompt,
+  renderLeadPrompt,
+  type ComposeLeadFacts,
+  type DraftedEmail,
+} from "./composePrompt";
 import {
   loadComposePrompt,
   resolveModel,
@@ -68,14 +73,19 @@ export async function draftEmail(
   // (and the saved compose_prompt DB override keeps working) while same-sector
   // emails still come out varied / service-led.
   //
+  // A named recipient (LinkedIn contact) comes after those: it overrides the
+  // generic "address the recipient's business" greeting with their first name.
+  //
   // The follow-up block goes LAST: it is the instruction most likely to
   // conflict with the generic ones above it ("open by addressing the
   // recipient's business" vs "open by acknowledging your earlier email"), and
   // the later instruction is the one that should win.
+  const recipient = buildRecipientPrompt(facts);
   const leadMessage =
     renderLeadPrompt(cfg.leadPromptTemplate, facts) +
     (serviceFocus ? `\n${serviceFocus}` : "") +
     (angle ? `\nAngle to lead with (for variety across this batch): ${angle}` : "") +
+    (recipient ? `\n\n${recipient}` : "") +
     (followUp ? `\n\n${followUp}` : "");
 
   // Bound a single hung/slow draft (the compose route runs a small worker pool

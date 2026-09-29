@@ -22,6 +22,7 @@
  */
 
 import { bestEmail } from "@/lib/pipeline/campaign";
+import { leadSource, SOURCE_LABEL } from "@/lib/pipeline/source";
 import type { LeadView } from "@/components/apmg/pipeline/LeadsTable";
 
 /* ── column model (shared by CSV + XLSX) ─────────────────────────────────── */
@@ -44,6 +45,9 @@ const asRating = (v: LeadView["rating"]): string | number | null => {
 
 export const LEAD_EXPORT_COLUMNS: ExportColumn[] = [
   { header: "Business", width: 32, value: (r) => r.name || null },
+  { header: "Contact", width: 24, value: (r) => r.contact_name ?? null },
+  { header: "Contact title", width: 28, value: (r) => r.contact_title ?? null },
+  { header: "Source", width: 10, value: (r) => SOURCE_LABEL[leadSource(r.bing_maps_url, r.source)] },
   { header: "Address", width: 42, value: (r) => r.address ?? null },
   { header: "Website", width: 32, value: (r) => r.website ?? null },
   { header: "Phone", width: 16, value: (r) => r.phone ?? null },
@@ -408,7 +412,7 @@ function buildLeadsPdfHtml(rows: LeadView[], scope: string): string {
     const socials = (r.social_medias ?? []).filter(Boolean).length;
     return `<tr>
         <td class="r num mut">${i + 1}</td>
-        <td><b>${htmlEsc(r.name)}</b>${r.address ? `<span class="sub">${htmlEsc(r.address)}</span>` : ""}</td>
+        <td><b>${htmlEsc(r.name)}</b>${r.contact_name ? `<span class="sub">${htmlEsc(r.contact_title ? `${r.contact_name} · ${r.contact_title}` : r.contact_name)}</span>` : ""}${r.address ? `<span class="sub">${htmlEsc(r.address)}</span>` : ""}</td>
         <td class="wrap">${r.website ? htmlEsc(prettyUrl(r.website)) : "—"}</td>
         <td class="num">${r.phone ? htmlEsc(r.phone) : "—"}</td>
         <td class="wrap">${email ? htmlEsc(email) : "—"}</td>

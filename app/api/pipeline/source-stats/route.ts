@@ -3,14 +3,15 @@ import { LEAD_SOURCES, sourceFilter, type LeadSource } from "@/lib/pipeline/sour
 import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 /**
- * Lead inventory split by the scraper it came from — Google Maps vs Bing Maps —
- * so the two sources can be compared on the thing that actually decides their
- * worth: how many of their leads are contactable at all.
+ * Lead inventory split by where it came from — Google Maps, Bing Maps or
+ * LinkedIn — so the sources can be compared on the thing that actually decides
+ * their worth: how many of their leads are contactable at all.
  *
- * NO MIGRATION. There is no `source` column and none is added: a lead's
- * provenance is already in its maps URL, so each figure here is a `count=exact`
- * HEAD probe with an ilike on `bing_maps_url` (see lib/pipeline/source.ts).
- * That makes the split work retroactively on every row already imported.
+ * Each figure is a `count=exact` HEAD probe (see lib/pipeline/source.ts).
+ * Google/Bing are an ilike on `bing_maps_url`, so their split works
+ * retroactively on every row ever imported; LinkedIn is the stored
+ * `source = 'linkedin'` (supabase/linkedin-source.sql), since a contact has no
+ * maps URL to read.
  *
  * DELIBERATELY NOT POLLED. This is its own route rather than extra fields on
  * /api/pipeline/stats because that one is polled by three mounted components;
@@ -97,9 +98,14 @@ export async function GET(req: Request): Promise<Response> {
   // that reads as "nobody ever engaged".
   let engagedAvailable = true;
 
+  // Before supabase/linkedin-source.sql there is no `source` column: the
+  // LinkedIn probe errors (null), so LinkedIn is left out and the Unknown
+  // filter must not name the column either.
+  const legacy = (await countWhere(target, [sourceFilter("linkedin")])) === null;
+
   const sources = await Promise.all(
-    LEAD_SOURCES.map(async (source): Promise<SourceStat> => {
-      const where = sourceFilter(source);
+    LEAD_SOURCES.filter((s) => !(legacy && s === "linkedin")).map(async (source): Promise<SourceStat> => {
+      const where = sourceFilter(source, { legacy });
       const [total, withEmail, withWebsite, withPhone, engaged] = await Promise.all([
         countWhere(target, [where]),
         countWhere(target, [where, HAS_EMAIL]),

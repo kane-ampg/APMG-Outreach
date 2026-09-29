@@ -33,6 +33,11 @@ export interface LeadView {
   twitter?: string | null;
   batch?: string | null;
   created_at?: string | null;
+  /** LinkedIn leads: the person the lead is addressed to, and their role */
+  contact_name?: string | null;
+  contact_title?: string | null;
+  /** stored source — only set for LinkedIn (see lib/pipeline/source.ts) */
+  source?: string | null;
   /** how many outreach emails we've sent this lead (email_sent ledger) */
   emails_sent?: number | null;
 }
@@ -54,19 +59,21 @@ function prettyUrl(url: string): string {
   return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
-/** Which scraper this lead came from, read off its maps URL — see
- *  lib/pipeline/source.ts for why it is derived rather than stored. */
-function SourceBadge({ url }: { url?: string | null }) {
-  const source = leadSource(url);
+/** Where this lead came from: the stored source (LinkedIn), else read off its
+ *  maps URL — see lib/pipeline/source.ts. */
+function SourceBadge({ url, stored }: { url?: string | null; stored?: string | null }) {
+  const source = leadSource(url, stored);
   if (source === "unknown") return <Dash />;
   return (
     <span
-      title={`Scraped from ${SOURCE_LABEL[source]} Maps`}
+      title={source === "linkedin" ? "Imported from a LinkedIn contact list" : `Scraped from ${SOURCE_LABEL[source]} Maps`}
       className={cn(
         "inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[11px] font-semibold ring-1 ring-inset",
         source === "google"
           ? "bg-primary/10 text-primary ring-primary/20"
-          : "bg-muted text-muted-foreground ring-border",
+          : source === "linkedin"
+            ? "bg-foreground/[0.06] text-foreground ring-foreground/20"
+            : "bg-muted text-muted-foreground ring-border",
       )}
     >
       {SOURCE_LABEL[source]}
@@ -221,6 +228,12 @@ export function LeadsTableView({
                 )}
                 <TableCell className="max-w-[260px]">
                   <div className="truncate text-[15px] text-foreground">{r.name}</div>
+                  {r.contact_name && (
+                    <div className="mt-px truncate text-[12.5px] text-foreground/80">
+                      {r.contact_name}
+                      {r.contact_title && <span className="text-muted-foreground"> · {r.contact_title}</span>}
+                    </div>
+                  )}
                   {r.address && (
                     <div className="mt-px truncate font-mono text-[12px] text-muted-foreground">
                       {r.address}
@@ -228,7 +241,7 @@ export function LeadsTableView({
                   )}
                 </TableCell>
                 <TableCell>
-                  <SourceBadge url={r.bing_maps_url} />
+                  <SourceBadge url={r.bing_maps_url} stored={r.source} />
                 </TableCell>
                 <TableCell className="max-w-[220px]">
                   {r.website ? (

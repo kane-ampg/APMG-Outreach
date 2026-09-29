@@ -808,6 +808,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
               website: r.website ?? null,
               category: r.category ?? null,
               emails: r.emails ?? [],
+              contact_name: r.contact_name ?? null,
+              contact_title: r.contact_title ?? null,
             })),
           }),
         });

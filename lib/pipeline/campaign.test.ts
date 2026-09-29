@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { demoDraft, type ComposeLeadInput } from "./campaign";
+import { contactFirstName, demoDraft, type ComposeLeadInput } from "./campaign";
 import { serviceBySlug } from "./services";
 
 /**
@@ -79,5 +79,42 @@ describe("demoDraft", () => {
     const d = demoDraft({ ...LEAD, name: '<script>x</script> & Co' }, null, true);
     expect(d.html).not.toContain("<script>");
     expect(d.html).toContain("&amp;");
+  });
+});
+
+describe("contactFirstName", () => {
+  it("takes the first name, skipping an honorific", () => {
+    expect(contactFirstName("Ada Brook")).toBe("Ada");
+    expect(contactFirstName("Dr Jane Smith")).toBe("Jane");
+    expect(contactFirstName("Scott J")).toBe("Scott");
+    expect(contactFirstName("Stéphane Decloix")).toBe("Stéphane");
+  });
+
+  it("returns null when there is nothing greetable", () => {
+    expect(contactFirstName(null)).toBeNull();
+    expect(contactFirstName("")).toBeNull();
+    expect(contactFirstName("A.")).toBeNull();
+  });
+});
+
+describe("demoDraft for a LinkedIn contact", () => {
+  const CONTACT: ComposeLeadInput = { ...LEAD, contact_name: "Ada Brook", contact_title: "Director" };
+
+  it("greets the person by first name instead of the business", () => {
+    expect(demoDraft(CONTACT).html).toMatch(/^<p>Hi Ada,<\/p>/);
+    expect(demoDraft(CONTACT, null, true).html).toMatch(/^<p>Hi Ada,<\/p>/);
+  });
+
+  it("greets a service-template draft by first name too", () => {
+    const svc = serviceBySlug("painting");
+    expect(svc).toBeTruthy();
+    const html = demoDraft(CONTACT, svc).html;
+    expect(html).toMatch(/^<p>Hi Ada,<\/p>/);
+    // the business name still appears wherever else the template uses it
+    expect(html).not.toContain("{{business}}");
+  });
+
+  it("keeps the business greeting for a company lead", () => {
+    expect(demoDraft(LEAD).html).toMatch(/^<p>Hi Rosebank Aged Care,<\/p>/);
   });
 });

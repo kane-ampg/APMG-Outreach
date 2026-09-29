@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { isUuid } from "@/lib/pipeline/server";
+import type { LeadSource } from "@/lib/pipeline/source";
 import { normalizeSource, SOURCE_COOKIE } from "@/lib/portal/source";
 
 // Server-only helpers shared by the client-portal API routes (/api/portal/*)
@@ -104,6 +105,13 @@ export interface LeadActivity {
   category: string | null;
   /** most recent non-null campaign slug seen on this lead's events */
   campaign: string | null;
+  /** where we got the lead — lib/pipeline/source.ts (stored LinkedIn source,
+   *  else derived from the maps URL); null when the lead row is gone.
+   *  Optional: only the lead-activity route reads it. */
+  leadSource?: LeadSource | null;
+  /** LinkedIn leads: the person behind the row, and their role */
+  contactName?: string | null;
+  contactTitle?: string | null;
   firstSeen: string;
   lastSeen: string;
   /** chronological ASC; capped to the MOST RECENT 50 events */

@@ -314,3 +314,84 @@ describe("GET /api/portal/lead-activity — access", () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe("GET /api/portal/lead-activity — LinkedIn-sourced leads", () => {
+  /** One attributed click for LEAD_ID; the leads lookup answers via `leads`. */
+  function stubTrail(leads: (url: string) => Response) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        calls.push(url);
+        if (url.includes("/leads?")) return leads(url);
+        if (url.includes("portal_events") && url.includes("lead_id=not.is.null")) {
+          return Response.json([
+            {
+              event: "attribution_click",
+              props: {},
+              lead_id: LEAD_ID,
+              campaign: null,
+              category: null,
+              created_at: "2026-09-28T01:00:00Z",
+            },
+          ]);
+        }
+        if (url.includes("email_suppression")) {
+          return new Response("[]", { status: 200, headers: { "content-range": "*/0" } });
+        }
+        return Response.json([]);
+      }),
+    );
+  }
+
+  it("carries the lead's stored source and contact onto its row", async () => {
+    stubTrail(() =>
+      Response.json([
+        {
+          id: LEAD_ID,
+          name: "Harbour Care",
+          category: "Community & Home Healthcare Services",
+          source: "linkedin",
+          contact_name: "Ada Brook",
+          contact_title: "Director",
+        },
+      ]),
+    );
+    const body = await (await GET(req())).json();
+    expect(body.leads[0]).toMatchObject({
+      leadId: LEAD_ID,
+      business: "Harbour Care",
+      leadSource: "linkedin",
+      contactName: "Ada Brook",
+      contactTitle: "Director",
+    });
+    expect(calls.find((u) => u.includes("/leads?"))).toContain("bing_maps_url,source,contact_name,contact_title");
+  });
+
+  it("derives Google / Bing leads off the maps URL", async () => {
+    stubTrail(() =>
+      Response.json([{ id: LEAD_ID, name: "Acme", category: null, bing_maps_url: "https://www.google.com/maps/place/Acme", source: null }]),
+    );
+    const body = await (await GET(req())).json();
+    expect(body.leads[0].leadSource).toBe("google");
+  });
+
+  it("still names leads before linkedin-source.sql has been run", async () => {
+    stubTrail((url) =>
+      url.includes("contact_name")
+        ? Response.json({ code: "42703", message: "column leads.contact_name does not exist" }, { status: 400 })
+        : Response.json([
+            { id: LEAD_ID, name: "Acme Childcare", category: "Childcare", bing_maps_url: "https://www.bing.com/maps?ss=ypid.YN1" },
+          ]),
+    );
+    const body = await (await GET(req())).json();
+    // the maps URL is an original column, so Bing still resolves pre-migration
+    expect(body.leads[0]).toMatchObject({ business: "Acme Childcare", leadSource: "bing", contactName: null });
+  });
+
+  it("ignores a stored source value the app doesn't recognise", async () => {
+    stubTrail(() => Response.json([{ id: LEAD_ID, name: "Acme", category: null, source: "made-up" }]));
+    const body = await (await GET(req())).json();
+    expect(body.leads[0].leadSource).toBe("unknown");
+  });
+});

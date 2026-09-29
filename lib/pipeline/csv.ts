@@ -28,8 +28,15 @@
 // socials, because nothing about finding them depends on the header. Layer 1
 // is only a fast path — if Google renames its CSS classes tomorrow, layer 2
 // still lands every field except the business name.
+//
+// LINKEDIN CONTACT EXPORTS
+// ────────────────────────
+// A third input, detected by its person-name + company headers, goes through
+// its own small mapper (mapLinkedInLeads below): the row is a PERSON at a
+// company, so the company is the lead and the person rides along as
+// contact_name / contact_title. Same LeadImportRow out, same upload after.
 
-import { leadSource, type LeadSource } from "@/lib/pipeline/source";
+import { leadSource, type LeadSource, type StoredSource } from "@/lib/pipeline/source";
 
 export interface LeadImportRow {
   name: string;
@@ -48,6 +55,12 @@ export interface LeadImportRow {
   facebook: string | null;
   instagram: string | null;
   twitter: string | null;
+  /** LinkedIn only: the person this lead is addressed to, and their role. */
+  contact_name?: string | null;
+  contact_title?: string | null;
+  /** Set only for a source the maps URL can't identify — today "linkedin".
+   *  Google/Bing rows leave it unset and are derived (lib/pipeline/source.ts). */
+  source?: StoredSource | null;
 }
 
 export interface ParsedCsv {
@@ -61,7 +74,7 @@ export interface ParsedCsv {
   duplicates: number;
   /** header names found, in file order */
   headers: string[];
-  /** how many kept rows came from each scraper, by their maps URL */
+  /** how many kept rows came from each source (maps URL, or stored source) */
   sources: Record<LeadSource, number>;
   /** kept rows carrying at least one email address (i.e. sendable today) */
   withEmail: number;
@@ -523,6 +536,157 @@ function identityKey(row: LeadImportRow): string | null {
   return null;
 }
 
+// ── LinkedIn contact exports ─────────────────────────────────────────────────
+
+type LinkedInField =
+  | "first"
+  | "last"
+  | "full"
+  | "title"
+  | "company"
+  | "email"
+  | "secondary"
+  | "phone"
+  | "industry"
+  | "subindustry"
+  | "profile";
+
+/** Person-name headers. A plain "Name" is deliberately absent: in a maps
+ *  export that is the business, and it must not make the file read as LinkedIn. */
+const PERSON_HEADERS = ["firstname", "givenname", "lastname", "surname", "familyname", "fullname", "contactname", "personname"];
+
+const LINKEDIN_ALIASES: Record<LinkedInField, readonly string[]> = {
+  first: ["firstname", "givenname"],
+  last: ["lastname", "surname", "familyname"],
+  full: ["fullname", "contactname", "personname"],
+  title: ["jobtitle", "title", "position", "role"],
+  company: ["company", "companyname", "organisation", "organization", "employer", "accountname"],
+  email: ["email", "emailaddress", "workemail", "businessemail", "primaryemail"],
+  secondary: ["secondaryemail", "personalemail", "otheremail", "alternateemail", "email2"],
+  phone: ["phone", "phonemasked", "phonenumber", "mobile", "directphone"],
+  industry: ["industry"],
+  subindustry: ["subindustry", "specialty", "speciality"],
+  profile: ["linkedin", "linkedinurl", "linkedinprofile", "linkedinprofileurl", "profileurl"],
+};
+
+/** A LinkedIn contact file names a person AND a company. Maps exports never
+ *  carry a person-name column. */
+function isLinkedInExport(headers: string[]): boolean {
+  const norm = new Set(headers.map(normHeader));
+  const person = PERSON_HEADERS.some((h) => norm.has(h));
+  return person && LINKEDIN_ALIASES.company.some((h) => norm.has(h));
+}
+
+/**
+ * A cell that is ONE whole address, lowercased — else null. Stricter than the
+ * maps scan's EMAIL_RE on purpose: `go’brien@fairway.org.au` (curly apostrophe)
+ * would otherwise be cut down to `brien@fairway.org.au`, a live-looking address
+ * belonging to someone else.
+ */
+function wholeEmail(v: string | undefined): string | null {
+  const t = clean(v);
+  return t && /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(t) ? t.toLowerCase() : null;
+}
+
+const emailDomain = (e: string): string => e.slice(e.lastIndexOf("@") + 1);
+
+/**
+ * Map a LinkedIn contact grid → leads. The company is the lead (`name`, which
+ * the client guard, folders and send flow all key on); the person is stored
+ * alongside so the email can greet them.
+ *
+ *  - category: Sub-Industry, else Industry — the specific one feeds the sector KB.
+ *  - emails: the primary, plus the secondary ONLY on the primary's domain. In
+ *    the first export the secondaries were mostly other employers, and the send
+ *    top-up would otherwise mail an unrelated organisation.
+ *  - phone: only a real number — the tool exports masked ones (`+61 438•••••••`).
+ *  - one lead per person; a repeated person (same email, else same name +
+ *    company) is dropped, first occurrence wins.
+ */
+function mapLinkedInLeads(grid: string[][], headers: string[]): ParsedCsv {
+  const norm = headers.map(normHeader);
+  const col: Partial<Record<LinkedInField, number>> = {};
+  const claimed = new Set<number>();
+  for (const [field, aliases] of Object.entries(LINKEDIN_ALIASES) as [LinkedInField, readonly string[]][]) {
+    const i = norm.findIndex((h, idx) => !claimed.has(idx) && aliases.includes(h));
+    if (i >= 0) {
+      col[field] = i;
+      claimed.add(i);
+    }
+  }
+
+  const rows: LeadImportRow[] = [];
+  const seen = new Set<string>();
+  let totalRows = 0;
+  let skipped = 0;
+  let duplicates = 0;
+  let withEmail = 0;
+
+  for (let r = 1; r < grid.length; r++) {
+    const cells = grid[r];
+    if (cells.every((c) => c.trim() === "")) continue;
+    totalRows++;
+    const at = (f: LinkedInField) => (col[f] != null ? cells[col[f] as number] : undefined);
+
+    const company = clean(at("company"));
+    if (!company) {
+      skipped++;
+      continue;
+    }
+    const contact =
+      clean(at("full")) ?? ([clean(at("first")), clean(at("last"))].filter(Boolean).join(" ") || null);
+
+    const emails: string[] = [];
+    const primary = wholeEmail(at("email"));
+    if (primary) {
+      emails.push(primary);
+      const secondary = wholeEmail(at("secondary"));
+      if (secondary && secondary !== primary && emailDomain(secondary) === emailDomain(primary)) emails.push(secondary);
+    }
+
+    const phoneCell = clean(at("phone"));
+    const profileCell = clean(at("profile"));
+    const profileUrl = profileCell ? asUrl(profileCell) : null;
+    const socials = profileCell && profileUrl && /(^|\.)linkedin\.com$/i.test(profileUrl.hostname) ? [profileCell] : [];
+
+    const key = primary
+      ? `email:${primary}`
+      : contact
+        ? `person:${contact.toLowerCase()}|${company.toLowerCase()}`
+        : null;
+    if (key) {
+      if (seen.has(key)) {
+        duplicates++;
+        continue;
+      }
+      seen.add(key);
+    }
+
+    rows.push({
+      name: company,
+      address: null,
+      featured_image: null,
+      bing_maps_url: null,
+      rating: null,
+      category: clean(at("subindustry")) ?? clean(at("industry")),
+      website: null,
+      phone: phoneCell && isPhoneLike(phoneCell) ? phoneCell : null,
+      emails,
+      social_medias: socials,
+      facebook: null,
+      instagram: null,
+      twitter: null,
+      contact_name: contact,
+      contact_title: clean(at("title")),
+      source: "linkedin",
+    });
+    if (emails.length) withEmail++;
+  }
+
+  const sources: Record<LeadSource, number> = { google: 0, bing: 0, linkedin: rows.length, unknown: 0 };
+  return { rows, totalRows, skipped, duplicates, headers, sources, withEmail };
+}
+
 /**
  * Map a parsed grid → the 13 kept columns. Rows without a business name are
  * dropped (header junk / blank lines), as are repeats of a business an earlier
@@ -540,17 +704,18 @@ export function mapLeads(grid: string[][]): ParsedCsv {
     skipped: 0,
     duplicates: 0,
     headers: [],
-    sources: { google: 0, bing: 0, unknown: 0 },
+    sources: { google: 0, bing: 0, linkedin: 0, unknown: 0 },
     withEmail: 0,
   };
   if (grid.length === 0) return empty;
 
   const headers = grid[0].map((h) => h.trim());
+  if (isLinkedInExport(headers)) return mapLinkedInLeads(grid, headers);
   const { col, claimed } = resolveColumns(headers);
 
   const rows: LeadImportRow[] = [];
   const seen = new Set<string>();
-  const sources: Record<LeadSource, number> = { google: 0, bing: 0, unknown: 0 };
+  const sources: Record<LeadSource, number> = { google: 0, bing: 0, linkedin: 0, unknown: 0 };
   let totalRows = 0;
   let skipped = 0;
   let duplicates = 0;
