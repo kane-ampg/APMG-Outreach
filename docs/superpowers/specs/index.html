@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APMG Services — Every trade, one partner | Melbourne &amp; Victoria</title>
+<meta name="description" content="Electrical, plumbing, painting, carpentry, flooring, grounds, handyman and 24/7 make-safe work across Melbourne and Victoria, run by one team.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=Bitter:wght@600;700&display=swap">
+<style>
+:root{
+  --ivory:#F7F5F1; --paper:#FFFFFF; --sand:#EFEBE5;
+  --ink:#171614; --ink-2:#3D3932; --muted:#57524A;
+  --line:#E2DDD5; --line-2:#C9C2B8;
+  --char:#131210; --char-2:#1E1C19; --char-line:#4A453E;
+  --on-dark:#CFC9C0; --on-dark-dim:#A49D94;
+  --red:#B3121D; --red-hover:#8C0D16; --red-bright:#E23B3F;
+  --serif:Bitter,Georgia,"Times New Roman",serif;
+  --sans:Archivo,"Helvetica Neue",Helvetica,Arial,sans-serif;
+  --pad:64px;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--ivory);color:var(--ink);font-family:var(--sans);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+h1,h2,h3,h4{font-family:var(--serif);margin:0;letter-spacing:-.015em;line-height:1.12}
+p{margin:0}
+a{color:var(--red);text-decoration:none}
+a:hover{color:var(--red-hover)}
+img{max-width:100%;display:block}
+:focus-visible{outline:3px solid var(--red-bright);outline-offset:2px}
+.wrap{padding-inline:var(--pad)}
+.section{padding-top:88px}
+.eyebrow{font-size:13px;letter-spacing:.16em;text-transform:uppercase;font-weight:700;color:var(--muted)}
+.lede{font-size:16px;line-height:1.6;color:var(--muted)}
+
+/* buttons */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:52px;padding:0 26px;font-size:16px;font-weight:600;border:0;font-family:inherit;cursor:pointer}
+.btn-primary{background:var(--red);color:#fff}
+.btn-primary:hover{background:var(--red-hover);color:#fff}
+.btn-lg{min-height:62px;padding:0 34px;font-size:17px}
+.btn-ghost{border:1px solid var(--char-line);color:var(--ivory);background:transparent}
+.btn-ghost:hover{color:#fff;border-color:#6d6760}
+.underlink{font-size:16px;font-weight:600;color:var(--ink);border-bottom:2px solid var(--line);padding-bottom:2px}
+.underlink:hover{color:var(--ink);border-color:var(--red)}
+
+/* utility bar + header */
+.util{display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;min-height:40px;padding-block:8px;background:var(--char);color:#B9B2A8;font-size:13px}
+.util a{color:#E8E4DE;font-weight:600}
+.util-right{display:flex;gap:28px;flex-wrap:wrap}
+.hdr{display:flex;align-items:center;justify-content:space-between;gap:32px;flex-wrap:wrap;min-height:88px;padding-block:16px;background:var(--paper);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:14px;color:var(--ink)}
+.brand:hover{color:var(--ink)}
+.brand-mark{display:flex;align-items:center;justify-content:center;width:46px;height:46px;background:var(--char);color:#fff;font-family:var(--serif);font-size:16px;font-weight:700}
+.brand-name{font-family:var(--serif);font-size:20px;font-weight:700;line-height:1.1;display:block}
+.brand-sub{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.nav{display:flex;gap:34px;font-size:15px;font-weight:500}
+.nav a{color:var(--muted)}
+.nav a:hover{color:var(--ink)}
+.nav a[aria-current="page"]{color:var(--ink);border-bottom:2px solid var(--red);padding-bottom:4px}
+.hdr-actions{display:flex;align-items:center;gap:22px}
+.tel{font-family:var(--serif);font-size:19px;font-weight:700;color:var(--ink)}
+.tel:hover{color:var(--red)}
+
+/* hero */
+.hero{display:grid;grid-template-columns:minmax(0,650px) minmax(0,1fr);gap:56px;padding-block:84px;background:var(--char);color:var(--ivory)}
+.hero .eyebrow{color:var(--red-bright)}
+.hero h1{font-size:clamp(40px,5vw,70px);line-height:1.02;letter-spacing:-.02em}
+.hero p{font-size:20px;line-height:1.55;color:var(--on-dark);max-width:590px}
+.hero-col{display:flex;flex-direction:column;gap:28px}
+.hero-actions{display:flex;gap:16px;flex-wrap:wrap}
+.fineprint{font-size:14px;color:var(--on-dark-dim)}
+.ph{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:24px}
+.ph-label{font-size:12px;letter-spacing:.16em;text-transform:uppercase}
+.ph-dark{border:1px dashed var(--char-line);background:var(--char-2);min-height:380px;color:var(--on-dark)}
+.ph-dark .ph-label{color:var(--on-dark-dim)}
+.ph-light{border:1px dashed var(--line-2);background:var(--sand);color:var(--muted)}
+.ph-text{font-size:15px;line-height:1.5;max-width:300px}
+
+/* trust strip */
+.trust{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:var(--paper);border-bottom:1px solid var(--line)}
+.trust>div{display:flex;flex-direction:column;gap:6px;padding:26px 40px;border-left:1px solid var(--line)}
+.trust>div:first-child{border-left:0}
+.trust b{font-family:var(--serif);font-size:22px;font-weight:700}
+.trust span{font-size:14px;color:var(--muted)}
+
+/* services */
+.sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:64px;flex-wrap:wrap}
+.sec-head h2{font-size:clamp(30px,3.4vw,46px)}
+.stack{display:flex;flex-direction:column;gap:14px;max-width:760px}
+.lead-card{display:grid;grid-template-columns:600px minmax(0,1fr);background:var(--paper);border:1px solid var(--line);margin-top:36px}
+.lead-card .ph-light{border:0;border-right:1px solid var(--line);min-height:380px}
+.lead-body{display:flex;flex-direction:column;gap:20px;padding:48px}
+.tag{align-self:flex-start;padding:6px 12px;background:var(--char);color:#fff;font-size:11px;letter-spacing:.14em;text-transform:uppercase;font-weight:600}
+.lead-body h3{font-size:clamp(28px,3vw,40px)}
+.lead-body>p{font-size:18px;line-height:1.6;color:var(--ink-2);max-width:540px}
+.chips{display:flex;flex-wrap:wrap;gap:10px}
+.chips span{padding:8px 14px;border:1px solid var(--line);font-size:14px;color:var(--ink-2)}
+.lead-actions{display:flex;gap:24px;align-items:center;flex-wrap:wrap;margin-top:auto}
+.grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin-top:24px}
+.card{display:flex;flex-direction:column;gap:12px;padding:32px;background:var(--paper);border:1px solid var(--line);min-height:214px}
+.card h3{font-size:26px;line-height:1.15}
+.card p{font-size:15px;line-height:1.6;color:var(--muted)}
+.card a{margin-top:auto;font-size:15px;font-weight:600}
+.makesafe{display:flex;align-items:center;justify-content:space-between;gap:48px;flex-wrap:wrap;padding:40px 48px;background:var(--char);color:var(--ivory);margin-top:24px}
+.makesafe .eyebrow{color:var(--red-bright)}
+.makesafe h3{font-size:30px}
+.makesafe p{font-size:16px;line-height:1.6;color:var(--on-dark);max-width:700px}
+.makesafe-actions{display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.makesafe-actions .underlink{color:var(--ivory);border-color:var(--char-line)}
+
+/* process */
+.steps{list-style:none;margin:40px 0 0;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:32px}
+.steps li{display:flex;flex-direction:column;gap:12px;padding-top:22px;border-top:3px solid var(--char)}
+.steps b{font-family:var(--serif);font-size:15px;color:var(--red)}
+.steps h3{font-size:22px;line-height:1.2}
+.steps p{font-size:15px;line-height:1.6;color:var(--muted)}
+
+/* reviews */
+.reviews{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin-top:36px}
+.review{margin:0;display:flex;flex-direction:column;gap:18px;padding:32px;background:var(--paper);border:1px solid var(--line)}
+.stars{font-size:18px;letter-spacing:.1em;color:var(--red)}
+.review blockquote{margin:0;font-family:var(--serif);font-size:19px;line-height:1.5}
+.review figcaption{font-size:14px;color:var(--muted);margin-top:auto}
+.logos{display:flex;align-items:center;gap:40px;flex-wrap:wrap;padding:26px 32px;background:var(--sand);border:1px solid var(--line);margin-top:24px}
+.logos-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:20px;flex:1 1 560px}
+.logos-grid span{display:flex;align-items:center;justify-content:center;height:52px;border:1px dashed var(--line-2);font-size:13px;color:var(--muted)}
+
+/* enquiry */
+.enquiry{display:grid;grid-template-columns:minmax(0,460px) minmax(0,1fr);gap:72px;padding:56px;background:var(--char);color:var(--ivory);margin-top:96px}
+.enquiry h2{font-size:clamp(28px,3vw,38px)}
+.enquiry p{font-size:17px;line-height:1.6;color:var(--on-dark)}
+.enquiry-side{display:flex;flex-direction:column;gap:20px}
+.enquiry-contact{display:flex;flex-direction:column;gap:10px;font-size:15px;color:var(--on-dark)}
+.enquiry-contact a{color:#fff;font-weight:600}
+.form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.field{display:flex;flex-direction:column;gap:8px}
+.field.wide{grid-column:span 2}
+.field label{font-size:13px;letter-spacing:.1em;text-transform:uppercase;color:var(--on-dark);font-weight:600}
+.field input,.field select,.field textarea{min-height:52px;padding:14px 16px;background:var(--char-2);border:1px solid var(--char-line);color:var(--ivory);font-family:inherit;font-size:16px;border-radius:0}
+.field textarea{resize:vertical}
+.form-foot{grid-column:span 2;display:flex;align-items:center;gap:24px;flex-wrap:wrap}
+.form-foot span{font-size:14px;color:var(--on-dark-dim)}
+
+/* footer */
+.ftr{margin-top:96px;padding-block:56px 40px;background:var(--paper);border-top:1px solid var(--line)}
+.ftr-cols{display:flex;justify-content:space-between;gap:64px;flex-wrap:wrap}
+.ftr-col{display:flex;flex-direction:column;gap:12px}
+.ftr-col a{font-size:15px;color:var(--ink)}
+.ftr-col a:hover{color:var(--red)}
+.ftr h4{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-family:var(--sans);font-weight:700}
+.ftr-about{max-width:320px;display:flex;flex-direction:column;gap:12px}
+.ftr-about b{font-family:var(--serif);font-size:22px}
+.ftr-about p{font-size:15px;line-height:1.6;color:var(--muted)}
+.ftr-base{display:flex;justify-content:space-between;align-items:center;gap:32px;flex-wrap:wrap;padding-top:24px;margin-top:32px;border-top:1px solid var(--line);font-size:14px;color:var(--muted)}
+.ftr-base a{color:var(--muted)}
+.ftr-links{display:flex;gap:24px;flex-wrap:wrap}
+
+@media (max-width:1180px){
+  :root{--pad:40px}
+  .hero{grid-template-columns:1fr}
+  .hero .ph-dark{min-height:280px}
+  .lead-card{grid-template-columns:1fr}
+  .lead-card .ph-light{border-right:0;border-bottom:1px solid var(--line);min-height:280px}
+  .lead-body{padding:36px}
+  .trust{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .trust>div:nth-child(3){border-left:0}
+  .trust>div:nth-child(n+3){border-top:1px solid var(--line)}
+  .grid-3,.reviews{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .steps{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .enquiry{grid-template-columns:1fr;gap:40px;padding:40px}
+}
+@media (max-width:720px){
+  :root{--pad:20px}
+  .section{padding-top:56px}
+  .hdr{position:static}
+  .nav{gap:20px;order:3;width:100%;overflow:auto}
+  .hero{padding-block:56px;gap:32px}
+  .trust,.grid-3,.reviews,.steps,.form,.logos-grid{grid-template-columns:1fr}
+  .trust>div{border-left:0;border-top:1px solid var(--line);padding:22px 0}
+  .trust>div:first-child{border-top:0}
+  .field.wide,.form-foot{grid-column:span 1}
+  .makesafe{padding:32px 24px}
+  .enquiry{padding:32px 24px;margin-top:56px}
+  .ftr{margin-top:56px}
+  .btn{width:100%}
+  .hero-actions .btn,.makesafe-actions .btn{width:auto;flex:1 1 220px}
+}
+</style>
+</head>
+<body>
+
+<div class="util wrap">
+  <span>Melbourne &amp; regional Victoria · Mon–Sat, 7am–5pm</span>
+  <div class="util-right">
+    <span>ABN 63 633 883 897</span>
+    <span style="color:#E8E4DE">24/7 make-safe: <a href="tel:1300979740">1300 97 97 40</a></span>
+  </div>
+</div>
+
+<header class="hdr wrap">
+  <a class="brand" href="index.html">
+    <span class="brand-mark" aria-hidden="true">AP</span>
+    <span>
+      <span class="brand-name">APMG Services</span>
+      <span class="brand-sub">Property maintenance group</span>
+    </span>
+  </a>
+  <nav class="nav" aria-label="Main">
+    <a href="#services" aria-current="page">Services</a>
+    <a href="#process">How we work</a>
+    <a href="#reviews">Reviews</a>
+    <a href="#team">Team</a>
+  </nav>
+  <div class="hdr-actions">
+    <a class="tel" href="tel:1300979740">1300 97 97 40</a>
+    <a class="btn btn-primary" href="#enquiry">Get a quote</a>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero wrap">
+    <div class="hero-col">
+      <span class="eyebrow">Commercial · Strata · Insurance · Residential</span>
+      <h1>Every trade,<br>one partner.</h1>
+      <p>Electrical, plumbing, painting, carpentry, flooring, grounds, handyman and make-safe work across Melbourne and Victoria — run by one team, from the first call to the job signed off.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary btn-lg" href="#enquiry">Tell us what needs doing <span aria-hidden="true">→</span></a>
+        <a class="btn btn-ghost btn-lg" href="tel:1300979740">1300 97 97 40</a>
+      </div>
+      <p class="fineprint">Quoted within one business day · No call-out fee on quoted work</p>
+    </div>
+    <div class="ph ph-dark">
+      <span class="ph-label">Photo</span>
+      <span class="ph-text">[HERO IMAGE — APMG crew and branded fleet on site]</span>
+    </div>
+  </section>
+
+  <div class="trust wrap">
+    <div><b>Eight trades in-house</b><span>One point of contact, one invoice</span></div>
+    <div><b>[4.9] ★ Google</b><span>From [NN] verified reviews</span></div>
+    <div><b>Licensed &amp; insured</b><span>REC [NUMBER] · Plumbing lic [NUMBER]</span></div>
+    <div><b>24/7 make-safe</b><span>On site within [N] hours</span></div>
+  </div>
+
+  <section class="section wrap" id="services">
+    <div class="sec-head">
+      <div class="stack">
+        <span class="eyebrow">What needs doing</span>
+        <h2>Pick the trade, or let us work it out for you.</h2>
+      </div>
+      <p class="lede" style="max-width:330px">Most jobs touch more than one trade. Tell us the problem and we scope the whole thing in a single visit.</p>
+    </div>
+
+    <article class="lead-card">
+      <div class="ph ph-light">
+        <span class="ph-label">Photo</span>
+        <span class="ph-text">[PAINTING — exterior spray work, Melbourne]</span>
+      </div>
+      <div class="lead-body">
+        <span class="tag">Most requested</span>
+        <h3>Painting</h3>
+        <p>Interior and exterior, prepared properly and finished with care — repaints, remedial work and full commercial programmes.</p>
+        <div class="chips">
+          <span>Interior &amp; exterior</span>
+          <span>Surface prep, repair, priming</span>
+          <span>Line marking</span>
+          <span>Protective coatings</span>
+        </div>
+        <div class="lead-actions">
+          <a class="btn btn-primary" href="painting.html">See painting in detail <span aria-hidden="true">→</span></a>
+          <a class="underlink" href="#enquiry">Get a painting quote</a>
+        </div>
+      </div>
+    </article>
+
+    <div class="grid-3">
+      <article class="card">
+        <h3>Electrical</h3>
+        <p>Fault-finding, switchboards, lighting, power and test-and-tag for tenanted sites. REC [NUMBER].</p>
+        <a href="painting.html">Tell me more <span aria-hidden="true">→</span></a>
+      </article>
+      <article class="card">
+        <h3>Plumbing</h3>
+        <p>Leaks, blockages, hot water, roof plumbing and backflow testing. Licence [NUMBER].</p>
+        <a href="painting.html">Tell me more <span aria-hidden="true">→</span></a>
+      </article>
+      <article class="card">
+        <h3>Carpentry &amp; joinery</h3>
+        <p>Doors, frames, partitions, decking and made-to-measure joinery, on site or in the workshop.</p>
+        <a href="painting.html">Tell me more <span aria-hidden="true">→</span></a>
+      </article>
+      <article class="card">
+        <h3>Flooring</h3>
+        <p>Vinyl, carpet tile, timber and safety flooring — supplied, laid and made good.</p>
+        <a href="painting.html">Tell me more <span aria-hidden="true">→</span></a>
+      </article>
+      <article class="card">
+        <h3>Gardening &amp; grounds</h3>
+        <p>Scheduled grounds maintenance, pruning, mulching and green-waste removal for managed sites.</p>
+        <a href="painting.html">Tell me more <span aria-hidden="true">→</span></a>
+      </article>
+      <article class="card">
+        <h3>Handyman</h3>
+        <p>The small-works list — patching, fixings, hardware, adjustments — cleared in one visit.</p>
+        <a href="painting.html">Tell me more <span aria-hidden="true">→</span></a>
+      </article>
+    </div>
+
+    <article class="makesafe">
+      <div class="stack">
+        <span class="eyebrow">Emergency</span>
+        <h3>Property make-safe, 24 hours a day</h3>
+        <p>Board-up, water damage, storm and impact events — secured, documented and reported for your insurer.</p>
+      </div>
+      <div class="makesafe-actions">
+        <a class="btn btn-primary btn-lg" href="tel:1300979740">Call 1300 97 97 40</a>
+        <a class="underlink" href="painting.html">What we cover</a>
+      </div>
+    </article>
+  </section>
+
+  <section class="section wrap" id="process">
+    <div class="stack" style="max-width:720px">
+      <span class="eyebrow">How we work</span>
+      <h2 style="font-size:clamp(28px,3vw,40px)">Four steps, and you only make one call.</h2>
+    </div>
+    <ol class="steps">
+      <li><b>01</b><h3>Tell us the problem</h3><p>Phone, form or email. No need to know which trade it is.</p></li>
+      <li><b>02</b><h3>Site check &amp; fixed quote</h3><p>We scope it on site and price it in writing within one business day.</p></li>
+      <li><b>03</b><h3>Booked crew, booked date</h3><p>One supervisor coordinates every trade so the site isn't disturbed twice.</p></li>
+      <li><b>04</b><h3>Sign-off &amp; photos</h3><p>Completion report with before-and-after photos, plus a [N]-year workmanship warranty.</p></li>
+    </ol>
+  </section>
+
+  <section class="section wrap" id="reviews">
+    <div class="sec-head">
+      <div class="stack" style="max-width:720px">
+        <span class="eyebrow">Reviews</span>
+        <h2 style="font-size:clamp(28px,3vw,40px)">[4.9] out of 5, across [NN] Google reviews.</h2>
+      </div>
+      <a class="underlink" href="[GOOGLE REVIEWS URL]">Read them on Google <span aria-hidden="true">→</span></a>
+    </div>
+    <div class="reviews">
+      <figure class="review">
+        <span class="stars" aria-label="Five out of five">★★★★★</span>
+        <blockquote>[REVIEW QUOTE — a strata or facilities client, on coordination across trades]</blockquote>
+        <figcaption>[NAME] · [COMPANY], [SUBURB]</figcaption>
+      </figure>
+      <figure class="review">
+        <span class="stars" aria-label="Five out of five">★★★★★</span>
+        <blockquote>[REVIEW QUOTE — a make-safe or emergency job, on response time]</blockquote>
+        <figcaption>[NAME] · [COMPANY], [SUBURB]</figcaption>
+      </figure>
+      <figure class="review">
+        <span class="stars" aria-label="Five out of five">★★★★★</span>
+        <blockquote>[REVIEW QUOTE — a painting programme, on finish quality and clean-up]</blockquote>
+        <figcaption>[NAME] · [COMPANY], [SUBURB]</figcaption>
+      </figure>
+    </div>
+    <div class="logos">
+      <span class="eyebrow" style="white-space:nowrap">Working for</span>
+      <div class="logos-grid">
+        <span>[CLIENT LOGO]</span><span>[CLIENT LOGO]</span><span>[CLIENT LOGO]</span><span>[CLIENT LOGO]</span><span>[CLIENT LOGO]</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="enquiry wrap" id="enquiry">
+    <div class="enquiry-side">
+      <h2>Not sure which trade you need?</h2>
+      <p>Describe the job in a sentence. We'll tell you what's involved and book the site check — usually the same week.</p>
+      <div class="enquiry-contact">
+        <span>Or call <a href="tel:1300979740">1300 97 97 40</a></span>
+        <span>Email <a href="mailto:kane@apmgservices.com.au">kane@apmgservices.com.au</a></span>
+      </div>
+    </div>
+    <form class="form" action="[FORM ENDPOINT]" method="post">
+      <div class="field">
+        <label for="name">Your name</label>
+        <input id="name" name="name" type="text" autocomplete="name" required>
+      </div>
+      <div class="field">
+        <label for="phone">Phone</label>
+        <input id="phone" name="phone" type="tel" autocomplete="tel" required>
+      </div>
+      <div class="field wide">
+        <label for="site">Site address or suburb</label>
+        <input id="site" name="site" type="text" autocomplete="street-address">
+      </div>
+      <div class="field wide">
+        <label for="job">What needs doing?</label>
+        <textarea id="job" name="job" rows="3"></textarea>
+      </div>
+      <div class="form-foot">
+        <button class="btn btn-primary btn-lg" type="submit">Send enquiry</button>
+        <span>We reply within one business day. No obligation.</span>
+      </div>
+    </form>
+  </section>
+
+</main>
+
+<footer class="ftr wrap" id="team">
+  <div class="ftr-cols">
+    <div class="ftr-about">
+      <b>APMG Services</b>
+      <p>Property maintenance across Melbourne and regional Victoria. ABN 63 633 883 897.</p>
+    </div>
+    <div class="ftr-col">
+      <h4>Trades</h4>
+      <a href="painting.html">Painting</a>
+      <a href="painting.html">Electrical</a>
+      <a href="painting.html">Plumbing</a>
+      <a href="painting.html">Carpentry &amp; joinery</a>
+    </div>
+    <div class="ftr-col">
+      <h4>More</h4>
+      <a href="painting.html">Flooring</a>
+      <a href="painting.html">Gardening &amp; grounds</a>
+      <a href="painting.html">Handyman</a>
+      <a href="painting.html">Property make-safe</a>
+    </div>
+    <div class="ftr-col">
+      <h4>Contact</h4>
+      <a href="tel:1300979740">1300 97 97 40</a>
+      <a href="mailto:kane@apmgservices.com.au">kane@apmgservices.com.au</a>
+      <a href="https://apmgservices.com.au">apmgservices.com.au</a>
+      <a href="[WHATSAPP URL]">WhatsApp</a>
+    </div>
+  </div>
+  <div class="ftr-base">
+    <span>© 2026 APMG Services</span>
+    <div class="ftr-links">
+      <a href="[TERMS URL]">Terms</a>
+      <a href="[PRIVACY URL]">Privacy</a>
+      <a href="[UNSUBSCRIBE URL]">Unsubscribe from emails</a>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

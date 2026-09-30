@@ -1,34 +1,64 @@
 "use client";
 
-import { ProcessSteps } from "../kit";
-import { PROCESS } from "../data";
-import { PageBlock } from "./PageBlock";
+import { APPROACH, PROCESS, numberWord } from "../data";
 
 /**
- * /portal/process — what happens after an enquiry.
+ * "How we work": the sequence after an enquiry, then the standing commitments,
+ * on one screen.
  *
- * The rail is unchanged from the scrolling page: five stages on one rule with a
- * red line running its length. It is the one section where the ORDER is the
- * content, which is why it is drawn rather than tiled, and it happens to be the
- * section that suits a page of its own best — on the old page it sat between
- * the services grid and the approach cards, where a visitor scrolling for
- * trades passed straight over it.
+ * The steps keep the reference's charcoal rule and red numerals, because the
+ * order is the information: a facility manager reading this is deciding
+ * whether contacting us costs them anything. The commitments run underneath as
+ * one hairline row, not a boxed panel: they are things a client can hold us to,
+ * not stages six to eight, and the box's padding was most of what kept this
+ * section off a single screen.
+ *
+ * `#approach` is the redirect target for the retired /portal/approach route.
  */
-export function ProcessSection({ fill = false }: { fill?: boolean }) {
+export function ProcessSection() {
   return (
-    <PageBlock
-      fill={fill}
-      eyebrow="How it works"
-      heading="What happens after you enquire"
-      lede="The same five stages whether it's one dripping tap or a maintenance programme across a campus."
-      cta="That first step costs you nothing."
+    <section
+      id="process"
+      className="section screen wrap"
+      tabIndex={-1}
+      aria-labelledby="process-title"
     >
-      {/* On a white sheet: the rail is the page's one drawn object, and set on
-          the paper ground it floated. The sheet gives the rule a surface to be
-          drawn on. */}
-      <div className="rounded-lg bg-white px-5 py-7 shadow-[0_1px_2px_rgba(15,17,19,0.05),0_10px_30px_-14px_rgba(15,17,19,0.22)] ring-1 ring-paper-edge/80 sm:px-8 lg:px-10 lg:py-9 short:lg:py-6">
-        <ProcessSteps steps={PROCESS} />
+      <div className="stack">
+        <span className="eyebrow">How we work</span>
+        <h2 id="process-title" className="serif h2-sm">
+          {numberWord(PROCESS.length)} steps, and you only make one call.
+        </h2>
       </div>
-    </PageBlock>
+
+      <ol className="steps">
+        {PROCESS.map((item, i) => (
+          <li key={item.step} className="step">
+            <span className="step-num" aria-hidden>
+              {String(i + 1).padStart(2, "0")}
+            </span>
+            <h3 className="serif step-title">{item.step}</h3>
+            <p className="step-copy">{item.body}</p>
+          </li>
+        ))}
+      </ol>
+
+      <div id="approach" className="hold" tabIndex={-1}>
+        <div className="hold-intro">
+          <h3 className="serif hold-title">What you can hold us to</h3>
+          <p className="hold-lede">
+            Almost nobody picks a maintenance contractor on the trade work itself. These are the
+            things that separate a job that lands on time from one that doesn&rsquo;t.
+          </p>
+        </div>
+        <ul className="hold-list">
+          {APPROACH.map((item) => (
+            <li key={item.heading} className="hold-item">
+              <h4 className="serif hold-item-title">{item.heading}</h4>
+              <p>{item.body}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </section>
   );
 }

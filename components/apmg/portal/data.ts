@@ -19,23 +19,32 @@ import photoFlooring from "@/app/services/flooring.png";
 import photoGardening from "@/app/services/gardening.png";
 import photoHandyman from "@/app/services/handyman.png";
 import photoMakeSafe from "@/app/services/make-safe.png";
-import type { ProcessIconName } from "./process-icons";
+import farbod from "@/app/team/farbod-mollaei.jpg";
+import zac from "@/app/team/zac-karannagoda.jpg";
+import fred from "@/app/team/fred-mollaei.jpg";
+import craig from "@/app/team/craig-billing.jpg";
+import ashley from "@/app/team/ashley-rankin.jpg";
+import simon from "@/app/team/simon-taranek.jpg";
+import chamz from "@/app/team/chamz-abeyratne.jpg";
+import jack from "@/app/team/jack-wilson.jpg";
 
 /**
- * The portal's content, extracted verbatim from ServicesPortal.tsx when the
- * 2026-09-22 rebuild split that one scrolling page into five routes. Every
- * section now lives in its own file under portal/sections, and all five of
- * them — plus the internal dashboard tab — read their copy from here, so the
- * services list has exactly one definition rather than one per page.
+ * The portal's content. Every section of the one-page portal (and the
+ * console's "Our Services" preview of it) reads its copy from here, so the
+ * services list, the process and the team each have exactly one definition.
  *
  * Data only, no "use client": a server component that just needs the service
- * list (app/portal/page.tsx, which picks the random spotlight) can import it
- * without pulling a client boundary along with it.
+ * list (app/portal/page.tsx, which picks the random featured trade) can import
+ * it without pulling a client boundary along with it.
  */
 
 export interface Service {
   slug: string;
   name: string;
+  /** The trade on its own, as a card heading and inside sentences ("Get a
+   *  painting quote"). `name` stays the full service title, which is what the
+   *  enquiry modal and the stored enquiry carry. */
+  short: string;
   blurb: string;
   icon: LucideIcon;
   /** Card banner — a real APMG job-site photo. Optional so the pseudo-service
@@ -59,6 +68,7 @@ export interface Service {
 export const GENERAL_SERVICE: Service = {
   slug: "general",
   name: "General enquiry",
+  short: "General enquiry",
   blurb: "Not sure which trade you need? Tell us what's going on and we'll sort the rest.",
   icon: MessageSquare,
 };
@@ -77,6 +87,7 @@ export const SERVICES: Service[] = [
   {
     slug: "electrical",
     name: "Electrical Services",
+    short: "Electrical",
     blurb: "Safe, licensed electrical work — from new power points to full rewires.",
     icon: Zap,
     photo: photoElectrical,
@@ -94,6 +105,7 @@ export const SERVICES: Service[] = [
   {
     slug: "painting",
     name: "Painting Services",
+    short: "Painting",
     blurb: "Interior and exterior painting, prepared properly and finished with care.",
     icon: Paintbrush,
     photo: photoPainting,
@@ -110,6 +122,7 @@ export const SERVICES: Service[] = [
   {
     slug: "plumbing",
     name: "Plumbing Services",
+    short: "Plumbing",
     blurb: "Leaks, blocked drains, installs and urgent repairs — handled properly.",
     icon: Droplets,
     photo: photoPlumbing,
@@ -127,6 +140,7 @@ export const SERVICES: Service[] = [
   {
     slug: "carpentry",
     name: "Carpentry & Joinery",
+    short: "Carpentry & joinery",
     blurb: "Repairs, installations and custom timberwork — doors, frames, cabinetry.",
     icon: Hammer,
     photo: photoCarpentry,
@@ -144,6 +158,7 @@ export const SERVICES: Service[] = [
   {
     slug: "flooring",
     name: "Flooring Services",
+    short: "Flooring",
     blurb: "Timber, vinyl, laminate and carpet — repairs, replacement and new floors.",
     icon: Layers,
     photo: photoFlooring,
@@ -161,6 +176,7 @@ export const SERVICES: Service[] = [
   {
     slug: "gardening",
     name: "Gardening & Grounds Maintenance",
+    short: "Gardening & grounds",
     blurb: "Lawns, gardens and grounds kept safe, tidy and presentable.",
     icon: Sprout,
     photo: photoGardening,
@@ -177,6 +193,7 @@ export const SERVICES: Service[] = [
   {
     slug: "handyman",
     name: "Handyman Services",
+    short: "Handyman",
     blurb: "The odd jobs and small repairs — all handled in a single call.",
     icon: Wrench,
     photo: photoHandyman,
@@ -195,6 +212,7 @@ export const SERVICES: Service[] = [
   {
     slug: "make-safe",
     name: "Property Make Safe Services",
+    short: "Property make-safe",
     blurb: "Securing and making sites safe after storm damage, faults or break-ins.",
     icon: ShieldCheck,
     photo: photoMakeSafe,
@@ -211,55 +229,77 @@ export const SERVICES: Service[] = [
 ];
 
 /* ------------------------------------------------------------------ */
+/* Featured trade                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The trades the large featured card can show. Make-safe is left out because
+ * it always has its own charcoal emergency band directly under the grid, and
+ * it would otherwise appear twice. Leaving it out also keeps the grid below the
+ * featured card at exactly six trades, two full rows of three, whichever trade
+ * is featured.
+ */
+export const FEATURABLE: readonly Service[] = SERVICES.filter((s) => s.slug !== "make-safe");
+
+/** The make-safe service, for the emergency band. */
+export const MAKE_SAFE: Service = SERVICES.find((s) => s.slug === "make-safe")!;
+
+/* ------------------------------------------------------------------ */
 /* Page copy                                                            */
 /* ------------------------------------------------------------------ */
 
-/** Trading since. The one date the proof band and the figures strip both
- *  derive from, so they can never disagree. Substantiated in
- *  knowledgebase/business.md ("Est. 2015"). */
+/** Trading since. Substantiated in knowledgebase/business.md ("Est. 2015"). */
 export const FOUNDED = 2015;
 
-/** How `Service.description` separates its paragraphs. Named because the lead
- *  service card shows only the first one. */
+/** How `Service.description` separates its paragraphs. */
 export const PARAGRAPH_BREAK = "\n\n";
+
+const WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine", "Ten"];
+
+/** 8 -> "Eight". For the counts the page derives from its own data (trades in
+ *  house, steps in the process), so a heading can never disagree with the list
+ *  under it. Falls back to digits past ten. */
+export function numberWord(n: number): string {
+  return WORDS[n] ?? String(n);
+}
 
 /**
  * What happens after an enquiry. The sequence IS the information — a facility
  * manager reading this is deciding whether contacting us costs them anything,
  * so each step names who does what and when.
  */
-export const PROCESS: readonly { step: string; body: string; icon: ProcessIconName }[] = [
+export const PROCESS: readonly { step: string; body: string }[] = [
   {
-    icon: "enquiry",
     step: "You tell us what's wrong",
     body: "A photo and a sentence is enough to start. Pick the trade if you know it, or send a general enquiry and we'll work out which trades the job needs.",
   },
   {
-    icon: "site-visit",
     step: "We come and look",
     body: "We attend before quoting. Scope, access and the hours we're allowed on site get established rather than assumed — which is what stops a quote turning into a variation.",
   },
   {
-    icon: "quote",
     step: "An itemised quote",
     body: "Labour, materials and scheduling broken out separately, so whoever approves the spend can see what they're approving. Multi-site work is priced per location.",
   },
   {
-    icon: "delivery",
     step: "Work around your operations",
     body: "Staged zone by zone, after hours or on weekends where the space has to stay in use. Aged care and childcare sites are scheduled around residents and sessions.",
   },
   {
-    icon: "handover",
     step: "Handed back clean",
     body: "Each area cleaned down and returned as it finishes rather than everything at the end, so you get the use of the space back progressively.",
   },
 ];
 
 /**
- * How the work is actually run. Each item summarises something already true of
- * the business — none of these is a claim of quality, they are descriptions of
- * method a client can hold us to.
+ * How the work is actually run: the standing commitments that are NOT already
+ * a step in PROCESS. Each describes something true of the business, a method a
+ * client can hold us to rather than a claim of quality.
+ *
+ * Three items went on 2026-09-29, when the process and these commitments first
+ * shared one section: site visit before a number, itemised pricing, and working
+ * around occupied buildings are steps 02, 03 and 04 above, and on one page they
+ * read twice.
  */
 export const APPROACH: readonly { heading: string; body: string }[] = [
   {
@@ -267,65 +307,66 @@ export const APPROACH: readonly { heading: string; body: string }[] = [
     body: "Eight trades under one point of contact. The gap between contractors is what usually stalls a job, so the electrician, plumber and carpenter are scheduled against the same programme.",
   },
   {
-    heading: "The building keeps running",
-    body: "Aged care homes are occupied around the clock and childcare rooms are full all day. Work is staged, isolated or run after hours so the site never closes a space for us.",
-  },
-  {
-    heading: "We attend before we quote",
-    body: "Preparation and access are the largest variables in any maintenance job and neither can be judged from a photograph. A site visit comes before a number.",
-  },
-  {
     heading: "Reactive and preventative",
     body: "Make-safe callouts when something breaks, and scheduled programmes so it breaks less. Most clients start with the first and move to the second.",
   },
   {
-    heading: "Licensed, and checkable",
+    // Not "checkable": no licence numbers are published, so the only thing a
+    // visitor can actually check is the reviews.
+    heading: "Licensed, and reviewed in public",
     body: "Licensed multi-trade professionals working across Melbourne and regional Victoria. Our Google reviews are on this page, unedited, straight from Google.",
-  },
-  {
-    heading: "Priced line by line",
-    body: "An itemised breakdown rather than one figure, so a committee or a budget holder can approve part of a list now and hold the rest for the next cycle.",
   },
 ];
 
-/**
- * The four substantiated facts, built rather than stored because two of them
- * are derived: years trading counts from FOUNDED against the current year, and
- * the trade count is the length of SERVICES, so neither can drift out of step
- * with the rest of the page the way a hardcoded string would.
- *
- * Every value must be substantiated (knowledgebase/business.md) — this band is
- * the most quotable thing on the portal, so an unbacked "500+ jobs" style claim
- * cannot be allowed to live here. Each figure carries a detail line precise
- * enough to defend on its own.
- *
- * Read by /portal/approach (the compact band) and by PortalFooter (the tall
- * band, on the internal dashboard tab).
- */
-export function portalFacts(): readonly { figure: string; label: string; detail: string }[] {
-  const yearsTrading = new Date().getFullYear() - FOUNDED;
-  return [
-    {
-      label: "In business",
-      figure: `${yearsTrading} years`,
-      detail: `Australian Property Maintenance Group has been trading since ${FOUNDED}.`,
-    },
-    {
-      label: "Trades in-house",
-      figure: String(SERVICES.length),
-      detail:
-        "Electrical through make-safe, scheduled against one programme instead of eight contractors.",
-    },
-    {
-      label: "Where we work",
-      figure: "Victoria",
-      detail: "Metropolitan Melbourne and regional Victoria, worked from Chirnside Park.",
-    },
-    {
-      label: "How we work",
-      figure: "Both",
-      detail:
-        "Reactive make-safe callouts, and preventative programmes so there are fewer of them.",
-    },
-  ];
+/* ------------------------------------------------------------------ */
+/* Team                                                                 */
+/* ------------------------------------------------------------------ */
+
+export interface TeamMember {
+  name: string;
+  role: string;
+  /** Headshot, normalised to a 640x640 square crop and self-hosted under
+   *  app/team so a trust page never depends on APMG's WordPress CDN. */
+  photo: StaticImageData;
+  /** Public LinkedIn profile, where the person lists one: a checkable
+   *  third-party identity, which is the real trust signal on a face. */
+  linkedin?: string;
 }
+
+/** The customer-facing roster, most senior first. Moved here from the retired
+ *  TeamSection component with the 2026-09-29 one-page rebuild. */
+export const TEAM: readonly TeamMember[] = [
+  {
+    name: "Farbod Mollaei",
+    role: "Managing Director",
+    photo: farbod,
+    linkedin: "https://www.linkedin.com/in/farbod-mollaei-0298199b/",
+  },
+  {
+    name: "Zac Karannagoda",
+    role: "Assistant General Manager",
+    photo: zac,
+    linkedin: "https://www.linkedin.com/in/zac-karannagoda-ba8a6368/",
+  },
+  { name: "Fred Mollaei", role: "Project Manager", photo: fred },
+  {
+    name: "Craig Billing",
+    role: "Head of Projects",
+    photo: craig,
+    linkedin: "https://www.linkedin.com/in/craig-billing-b2583061/",
+  },
+  {
+    name: "Ash Rankin",
+    role: "Service Manager",
+    photo: ashley,
+    linkedin: "https://www.linkedin.com/in/ashley-rankin-4bb900255/",
+  },
+  { name: "Simon Taranek", role: "Senior Business Development Manager", photo: simon },
+  {
+    name: "Chamz Abeyratne",
+    role: "Human Resources Manager",
+    photo: chamz,
+    linkedin: "https://www.linkedin.com/in/chamika-a-26a56682/",
+  },
+  { name: "Jack Wilson", role: "Account Manager — Reactive", photo: jack },
+];

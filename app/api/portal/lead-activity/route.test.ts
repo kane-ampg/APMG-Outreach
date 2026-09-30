@@ -395,3 +395,66 @@ describe("GET /api/portal/lead-activity — LinkedIn-sourced leads", () => {
     expect(body.leads[0].leadSource).toBe("unknown");
   });
 });
+
+describe("GET /api/portal/lead-activity — hot leads whose folder was deleted", () => {
+  /** One service open for LEAD_ID; `leads` and `saved` answer their lookups. */
+  function stubHotTrail(opts: { leads: unknown[]; saved: Response }) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        calls.push(url);
+        if (url.includes("/leads?")) return Response.json(opts.leads);
+        if (url.includes("saved_hot_leads?")) return opts.saved;
+        if (url.includes("portal_events") && url.includes("lead_id=not.is.null")) {
+          return Response.json([
+            {
+              event: "portal_service_open",
+              props: { service: "plumbing" },
+              lead_id: LEAD_ID,
+              campaign: null,
+              category: "Childcare",
+              created_at: "2026-09-28T01:00:00Z",
+            },
+          ]);
+        }
+        if (url.includes("email_suppression")) {
+          return new Response("[]", { status: 200, headers: { "content-range": "*/0" } });
+        }
+        return Response.json([]);
+      }),
+    );
+  }
+
+  it("names the lead from its saved copy once the leads row is gone", async () => {
+    stubHotTrail({
+      leads: [],
+      saved: Response.json([
+        { lead_id: LEAD_ID, name: "Jenny's ELC", category: "Childcare", bing_maps_url: "https://www.google.com/maps/place/x" },
+      ]),
+    });
+    const body = await (await GET(req())).json();
+    expect(body.leads[0]).toMatchObject({ leadId: LEAD_ID, business: "Jenny's ELC", leadSource: "google" });
+    expect(calls.find((u) => u.includes("saved_hot_leads?"))).toContain(LEAD_ID);
+  });
+
+  it("prefers the live leads row over the saved copy", async () => {
+    stubHotTrail({
+      leads: [{ id: LEAD_ID, name: "Renamed ELC", category: "Childcare" }],
+      saved: Response.json([{ lead_id: LEAD_ID, name: "Jenny's ELC", category: "Childcare" }]),
+    });
+    const body = await (await GET(req())).json();
+    expect(body.leads[0].business).toBe("Renamed ELC");
+  });
+
+  it("still lists the trail before saved-hot-leads.sql has been run", async () => {
+    stubHotTrail({
+      leads: [],
+      saved: Response.json({ code: "PGRST205", message: "Could not find the table" }, { status: 404 }),
+    });
+    const res = await GET(req());
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.leads[0]).toMatchObject({ leadId: LEAD_ID, business: null, category: "Childcare" });
+  });
+});

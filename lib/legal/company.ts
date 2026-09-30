@@ -35,6 +35,9 @@ export interface CompanyIdentity {
   googleReviewsUrl: string;
   /** Public website. */
   website: string;
+  /** The group's main website, linked from the customer portal's utility bar
+   *  and footer beside `website` (Kane, 2026-09-29). */
+  mainWebsite: string;
   /** Public social profiles, in display order. Live pages only — a dead social
    *  link on a trust surface reads worse than no link at all. */
   socials: { network: "facebook" | "instagram" | "tiktok"; label: string; url: string }[];
@@ -62,6 +65,7 @@ export const COMPANY: CompanyIdentity = {
   googleReviewsUrl:
     "https://www.google.com/search?q=APMG+Services#lrd=0x6ad6319e6f7bafcf:0xca054939c7c38206,1,,,,",
   website: "https://www.apmgservices.com.au/",
+  mainWebsite: "https://www.commercialpaintersau.com.au/",
   socials: [
     {
       network: "facebook",

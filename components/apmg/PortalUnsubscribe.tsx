@@ -18,8 +18,10 @@ const EMAIL_RE = /^[^\s@?&=#]+@[^\s@?&=#]+\.[^\s@?&=#]+$/;
  * no new backend, no n8n change. Navigating there renders the existing branded
  * "Sorry to see you go" confirmation page.
  *
- * Rendered on the customer host only (see ServicesPortal `standalone`), so the
- * internal "Our Services" demo tab never shows an opt-out control.
+ * Rendered on the customer host only (see SiteFooter), so the console's "Our
+ * Services" preview never shows an opt-out control. Styled by the portal's
+ * scoped classes in app/portal/portal-world.css, since it only ever renders
+ * inside `.portal-world`.
  */
 export function PortalUnsubscribe() {
   const [open, setOpen] = useState(false);
@@ -80,7 +82,7 @@ export function PortalUnsubscribe() {
           // name instead.
           aria-expanded={open}
           data-track="portal_unsubscribe_open"
-          className="rounded py-1 text-xs text-white/60 underline underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+          className="ftr-small"
         >
           Prefer not to receive our emails? Unsubscribe
         </button>
@@ -109,12 +111,12 @@ export function PortalUnsubscribe() {
       // main/nav/contentinfo, where it would read as a major region.
       role="group"
       aria-label="Unsubscribe from our emails"
-      className="flex flex-col gap-2"
+      className="unsub-form"
     >
-      <label htmlFor="portal-unsub-email" className="text-xs text-white/60">
+      <label htmlFor="portal-unsub-email" className="ftr-small">
         Enter your email and we&rsquo;ll take you off our list.
       </label>
-      <div className="flex w-full max-w-xs items-center gap-2">
+      <div className="unsub-row">
         <input
           id="portal-unsub-email"
           ref={emailRef}
@@ -134,7 +136,7 @@ export function PortalUnsubscribe() {
           // rendered — the same wiring as ServiceInquiryModal's email input.
           aria-invalid={showError || undefined}
           aria-describedby={showError ? "portal-unsub-error" : undefined}
-          className="h-9 flex-1 rounded border border-white/25 bg-white/5 px-3 text-[13px] text-white outline-none placeholder:text-white/40 focus-visible:ring-2 focus-visible:ring-brand-400"
+          className="unsub-input"
         />
         <button
           type="submit"
@@ -147,7 +149,7 @@ export function PortalUnsubscribe() {
           // makes the validation message reachable by the visitor who needs it.
           // (`transition-opacity disabled:opacity-50` went with the `disabled`
           // attribute — nothing fades any more, so both are gone.)
-          className="h-9 shrink-0 rounded bg-brand-600 px-3 text-[13px] font-semibold text-white transition-colors hover:bg-brand-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+          className="unsub-btn"
         >
           Unsubscribe
         </button>
@@ -159,7 +161,7 @@ export function PortalUnsubscribe() {
            else would speak. The id wires it to the input above. Empty and
            malformed get different wording: "that doesn't look valid" is
            nonsense for a required field the visitor never filled in. */
-        <p id="portal-unsub-error" role="alert" className="text-xs font-semibold text-brand-400">
+        <p id="portal-unsub-error" role="alert" className="unsub-error">
           {email.trim() === ""
             ? "Enter the email address you’d like removed."
             : "That doesn’t look like a valid email address."}

@@ -1,14 +1,13 @@
 import { test, expect } from "@playwright/test";
 
-import { PORTAL_PAGES } from "@/components/apmg/portal/pages";
-
 /**
  * sitemap.xml actually answers, on the host that publishes it.
  *
- * This exists because it already broke once, silently. PORTAL_PAGES was moved
- * into PortalNav -- a client component -- and the server-rendered sitemap then
- * received a client-reference proxy instead of the array, so sitemap.xml
- * returned 500 in production while robots.txt went on pointing crawlers at it.
+ * This exists because it already broke once, silently. The page list it was
+ * built from was moved into a client component, and the server-rendered
+ * sitemap then received a client-reference proxy instead of the array, so
+ * sitemap.xml returned 500 in production while robots.txt went on pointing
+ * crawlers at it.
  * Nothing caught it: it builds, it typechecks, and a unit test importing the
  * same module passes, because vitest has no server/client boundary to cross.
  * Only a real request over HTTP shows it.
@@ -27,12 +26,12 @@ test("sitemap.xml lists every portal page on the customer host", async ({ reques
   expect(res.status()).toBe(200);
   const xml = await res.text();
 
-  for (const page of PORTAL_PAGES) {
-    expect(xml).toContain(`https://${CUSTOMER_HOST}${page.href}</loc>`);
-  }
-  // The legal pages are hand-listed in sitemap.ts and are not in PORTAL_PAGES.
+  expect(xml).toContain(`https://${CUSTOMER_HOST}/portal</loc>`);
   expect(xml).toContain(`https://${CUSTOMER_HOST}/portal/privacy</loc>`);
   expect(xml).toContain(`https://${CUSTOMER_HOST}/portal/terms</loc>`);
+  // The retired sub-pages are 308s now, and a redirect has no place in a sitemap.
+  expect(xml).not.toContain("/portal/process</loc>");
+  expect(xml).not.toContain("/portal/team</loc>");
 });
 
 test("robots.txt points at a sitemap that resolves", async ({ request }) => {

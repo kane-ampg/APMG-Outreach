@@ -1,0 +1,579 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-30T03:50:27.374Z",
+  "title": "Design System: APMG Services Customer Portal",
+  "extensions": {
+    "scope": "Customer portal only (/portal and the console's Our Services preview). The internal console is a separate dark-first world documented in ui-standards.md.",
+    "colorMeta": {
+      "ivory": {
+        "role": "neutral",
+        "displayName": "Ivory",
+        "canonical": "#f7f5f1",
+        "oklch": "oklch(97.1% 0.006 84.6)",
+        "tonalRamp": [
+          "#0c0b09",
+          "#262522",
+          "#43423f",
+          "#63615e",
+          "#84827e",
+          "#a7a5a1",
+          "#cbc9c5",
+          "#f0eeea"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#ffffff",
+        "oklch": "oklch(100.0% 0.000 89.9)",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#252525",
+          "#424242",
+          "#616161",
+          "#828282",
+          "#a5a5a5",
+          "#c9c9c9",
+          "#eeeeee"
+        ]
+      },
+      "sand": {
+        "role": "neutral",
+        "displayName": "Sand",
+        "canonical": "#efebe5",
+        "oklch": "oklch(94.2% 0.009 78.3)",
+        "tonalRamp": [
+          "#0d0b07",
+          "#272520",
+          "#45413d",
+          "#64615c",
+          "#85827c",
+          "#a8a49f",
+          "#ccc8c3",
+          "#f2eee8"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#171614",
+        "oklch": "oklch(20.1% 0.004 84.6)",
+        "tonalRamp": [
+          "#0c0b09",
+          "#262523",
+          "#43423f",
+          "#62615e",
+          "#83827f",
+          "#a6a5a2",
+          "#cac9c6",
+          "#f0eeeb"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink Soft",
+        "canonical": "#3d3932",
+        "oklch": "oklch(34.6% 0.013 81.7)",
+        "tonalRamp": [
+          "#0e0b06",
+          "#28251e",
+          "#46413a",
+          "#656159",
+          "#86827a",
+          "#a9a49c",
+          "#cdc8c0",
+          "#f3eee5"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Stone",
+        "canonical": "#57524a",
+        "oklch": "oklch(44.1% 0.014 79.7)",
+        "tonalRamp": [
+          "#0e0a05",
+          "#29241d",
+          "#46413a",
+          "#666058",
+          "#878279",
+          "#aaa49b",
+          "#cec8bf",
+          "#f4eee4"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e2ddd5",
+        "oklch": "oklch(89.9% 0.012 79.8)",
+        "tonalRamp": [
+          "#0e0b06",
+          "#28241f",
+          "#45413b",
+          "#65615a",
+          "#86827a",
+          "#a9a49d",
+          "#cdc8c1",
+          "#f3eee6"
+        ]
+      },
+      "line-2": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "#c9c2b8",
+        "oklch": "oklch(81.7% 0.016 77.1)",
+        "tonalRamp": [
+          "#0f0a05",
+          "#29241c",
+          "#474139",
+          "#666057",
+          "#888178",
+          "#aba49a",
+          "#cfc8be",
+          "#f5ede3"
+        ]
+      },
+      "char": {
+        "role": "neutral",
+        "displayName": "Charcoal",
+        "canonical": "#131210",
+        "oklch": "oklch(18.3% 0.004 84.6)",
+        "tonalRamp": [
+          "#0c0b09",
+          "#262523",
+          "#43423f",
+          "#62615e",
+          "#83827f",
+          "#a6a5a2",
+          "#cac9c6",
+          "#f0eeeb"
+        ]
+      },
+      "char-2": {
+        "role": "neutral",
+        "displayName": "Charcoal Raised",
+        "canonical": "#1e1c19",
+        "oklch": "oklch(22.8% 0.006 78.2)",
+        "tonalRamp": [
+          "#0d0b08",
+          "#272522",
+          "#44423e",
+          "#63615d",
+          "#84827e",
+          "#a7a5a1",
+          "#cbc9c4",
+          "#f1eeea"
+        ]
+      },
+      "char-line": {
+        "role": "neutral",
+        "displayName": "Charcoal Rule",
+        "canonical": "#4a453e",
+        "oklch": "oklch(39.3% 0.013 76.5)",
+        "tonalRamp": [
+          "#0e0a06",
+          "#29241e",
+          "#46413a",
+          "#666059",
+          "#87817a",
+          "#aaa49c",
+          "#cec8c0",
+          "#f4ede5"
+        ]
+      },
+      "char-line-hover": {
+        "role": "neutral",
+        "displayName": "Charcoal Rule Hover",
+        "canonical": "#6d6760",
+        "oklch": "oklch(51.7% 0.013 71.8)",
+        "tonalRamp": [
+          "#0f0a06",
+          "#29241e",
+          "#47413a",
+          "#666059",
+          "#87817a",
+          "#aaa49c",
+          "#cfc8c0",
+          "#f4ede5"
+        ],
+        "note": "Literal #6d6760 in portal-world.css; hover border of ghost buttons and dark inputs."
+      },
+      "on-dark": {
+        "role": "neutral",
+        "displayName": "On-Dark",
+        "canonical": "#cfc9c0",
+        "oklch": "oklch(83.8% 0.014 78.3)",
+        "tonalRamp": [
+          "#0e0a05",
+          "#29241d",
+          "#46413a",
+          "#666058",
+          "#878179",
+          "#aaa49b",
+          "#cec8bf",
+          "#f4eee4"
+        ]
+      },
+      "on-dark-strong": {
+        "role": "neutral",
+        "displayName": "On-Dark Strong",
+        "canonical": "#e8e4de",
+        "oklch": "oklch(92.0% 0.009 78.3)",
+        "tonalRamp": [
+          "#0d0b07",
+          "#282520",
+          "#45413d",
+          "#64615b",
+          "#85827c",
+          "#a8a49f",
+          "#ccc8c3",
+          "#f2eee8"
+        ],
+        "note": "Literal #e8e4de in portal-world.css (not a custom property); reused for utility-bar links and the hero sector line."
+      },
+      "on-dark-dim": {
+        "role": "neutral",
+        "displayName": "On-Dark Dim",
+        "canonical": "#a49d94",
+        "oklch": "oklch(69.9% 0.015 74.4)",
+        "tonalRamp": [
+          "#0f0a05",
+          "#2a241d",
+          "#474139",
+          "#676058",
+          "#888178",
+          "#aba49b",
+          "#cfc8be",
+          "#f5ede4"
+        ]
+      },
+      "red": {
+        "role": "primary",
+        "displayName": "Brick Red",
+        "canonical": "#b3121d",
+        "oklch": "oklch(48.9% 0.190 25.9)",
+        "tonalRamp": [
+          "#1f0001",
+          "#4b0306",
+          "#7e0911",
+          "#b4151e",
+          "#dd4541",
+          "#fe736b",
+          "#feb3ab",
+          "#ffe9e6"
+        ]
+      },
+      "red-hover": {
+        "role": "primary",
+        "displayName": "Kiln Red",
+        "canonical": "#8c0d16",
+        "oklch": "oklch(40.9% 0.158 25.6)",
+        "tonalRamp": [
+          "#1e0001",
+          "#4c0206",
+          "#7f0511",
+          "#a82f2e",
+          "#d0554f",
+          "#f87970",
+          "#feb3ab",
+          "#fee9e6"
+        ]
+      },
+      "red-bright": {
+        "role": "primary",
+        "displayName": "Signal Red on Charcoal",
+        "canonical": "#ec5256",
+        "oklch": "oklch(64.9% 0.190 22.7)",
+        "tonalRamp": [
+          "#1f0002",
+          "#4b030b",
+          "#7e0819",
+          "#b41329",
+          "#dd434a",
+          "#fe7272",
+          "#feb3af",
+          "#ffe9e7"
+        ]
+      },
+      "on-dark-muted": {
+        "role": "neutral",
+        "displayName": "On Dark Muted",
+        "canonical": "#b9b2a8",
+        "purpose": "Utility bar text on charcoal, from the reference."
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The hero headline only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "The lead section heading (Services)."
+      },
+      "headline-sm": {
+        "displayName": "Headline Small",
+        "purpose": "How we work, Reviews and Team headings; featured trade name."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Trade card names and the commitments panel heading."
+      },
+      "title-md": {
+        "displayName": "Title Medium",
+        "purpose": "Trust strip facts, process step names, footer company name."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Source lines, review captions, roles, chips, fine print."
+      },
+      "button": {
+        "displayName": "Button",
+        "purpose": "Every button."
+      },
+      "button-lg": {
+        "displayName": "Button Large",
+        "purpose": "Large buttons; also enquiry copy size."
+      },
+      "title-sm": {
+        "displayName": "Title Small",
+        "purpose": "Commitment items and team member names."
+      },
+      "quote": {
+        "displayName": "Quote",
+        "purpose": "Verbatim Google review text."
+      },
+      "body-lg": {
+        "displayName": "Body Large",
+        "purpose": "Hero copy only."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Ledes and general copy."
+      },
+      "body-sm": {
+        "displayName": "Body Small",
+        "purpose": "Card, step and commitment copy; footer links."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Uppercase section eyebrows and (at 600 / 0.1em) form field labels."
+      },
+      "label-sm": {
+        "displayName": "Label Small",
+        "purpose": "The featured tag and the brand sub-line."
+      },
+      "headline-xs": {
+        "displayName": "Headline Extra Small",
+        "purpose": "The enquiry heading."
+      },
+      "body-lead": {
+        "displayName": "Body Lead",
+        "purpose": "Featured card copy; hero copy on phones; the review stars glyph."
+      },
+      "label-xs": {
+        "displayName": "Label Extra Small",
+        "purpose": "Footer column heads."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "The portal's one easing curve (--ease-out): hero entrance, nav rule, arrow nudge, photo scale."
+      },
+      {
+        "name": "state-transition",
+        "value": "160ms ease",
+        "purpose": "Colour, background and border steps on buttons, links, nav links and inputs. Cards use 200ms."
+      },
+      {
+        "name": "hero-rise",
+        "value": "700ms var(--ease-out); delay calc(var(--i) * 70ms + 60ms); translateY(18px) and opacity 0 to rest",
+        "purpose": "Hero copy entrance, motion-safe only."
+      },
+      {
+        "name": "hero-shutter",
+        "value": "1100ms var(--ease-out) 120ms; clip-path inset(0 100% 0 0) to inset(0 0 0 0)",
+        "purpose": "Hero fleet photo opens from its left edge, motion-safe only."
+      },
+      {
+        "name": "nav-rule-slide",
+        "value": "transform and width 420ms var(--ease-out); opacity 200ms ease",
+        "purpose": "The red rule sliding under the current section's nav link, motion-safe only."
+      },
+      {
+        "name": "arrow-nudge",
+        "value": "translateX(3px), 220ms var(--ease-out)",
+        "purpose": "Trailing arrow on buttons and card CTAs, on hover."
+      },
+      {
+        "name": "photo-scale",
+        "value": "scale(1.035), 900ms var(--ease-out)",
+        "purpose": "Trade and featured card photographs, on card hover."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "tablet",
+        "value": "1180px"
+      },
+      {
+        "name": "header-tel",
+        "value": "900px"
+      },
+      {
+        "name": "phone",
+        "value": "720px"
+      }
+    ],
+    "focus": {
+      "value": "outline: 3px solid var(--red-bright); outline-offset: 2px",
+      "purpose": "Every focusable element; inputs use offset 0; trade cards draw it around the whole card."
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one red action per region: Get a quote, hero CTA, featured card action, enquiry submit.",
+      "html": "<div class=\"ds-root\"><button class=\"ds-btn-primary\">Tell us what needs doing <span class=\"ds-arrow\" aria-hidden=\"true\">&rarr;</span></button></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-btn-primary{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;display:inline-flex;align-items:center;gap:10px;min-height:52px;padding:0 26px;font-size:16px;font-weight:600;line-height:1.2;background:var(--red);color:#fff;border:0;border-radius:0;cursor:pointer;transition:background-color 160ms ease}.ds-btn-primary:hover{background:var(--red-hover)}.ds-btn-primary:focus-visible{outline:3px solid var(--red-bright);outline-offset:2px}.ds-arrow{display:inline-block;transition:transform 220ms cubic-bezier(0.16,1,0.3,1)}.ds-btn-primary:hover .ds-arrow{transform:translateX(3px)}"
+    },
+    {
+      "name": "Ghost Button (on charcoal)",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "The hero's phone-number button beside the primary; charcoal surfaces only.",
+      "html": "<div class=\"ds-root ds-slab\"><a class=\"ds-btn-ghost\" href=\"#\">1300 97 97 40</a></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-slab{background:var(--char);padding:24px}.ds-btn-ghost{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;display:inline-flex;align-items:center;min-height:62px;padding:0 34px;font-size:17px;font-weight:600;text-decoration:none;border:1px solid var(--char-line);color:var(--ivory);background:transparent;border-radius:0;transition:color 160ms ease,border-color 160ms ease}.ds-btn-ghost:hover{color:#fff;border-color:#6d6760}.ds-btn-ghost:focus-visible{outline:3px solid var(--red-bright);outline-offset:2px}"
+    },
+    {
+      "name": "Underlink",
+      "kind": "button",
+      "refersTo": "underlink",
+      "description": "Secondary text action beside a primary, with a hairline underline that turns red.",
+      "html": "<div class=\"ds-root\"><button class=\"ds-underlink\">Or describe the whole job</button></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-underlink{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:16px;font-weight:600;color:var(--ink);background:none;border:0;border-bottom:2px solid var(--line);padding:0 0 2px;cursor:pointer;transition:border-color 160ms ease}.ds-underlink:hover{border-color:var(--red)}.ds-underlink:focus-visible{outline:3px solid var(--red-bright);outline-offset:2px}"
+    },
+    {
+      "name": "Trade Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Photo-led trade card; the whole card is the target via a stretched button.",
+      "html": "<div class=\"ds-root ds-ground\"><article class=\"ds-card\"><div class=\"ds-card-photo\"></div><div class=\"ds-card-body\"><h3 class=\"ds-card-title\">Plumbing</h3><p class=\"ds-card-copy\">Leaks, blocked drains, hot water and fixture work across occupied sites.</p><button class=\"ds-card-cta\">Tell me more <span class=\"ds-arrow\" aria-hidden=\"true\">&rarr;</span></button></div></article></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-ground{background:var(--ivory);padding:24px}.ds-card{position:relative;display:flex;flex-direction:column;max-width:380px;background:var(--paper);border:1px solid var(--line);transition:border-color 200ms ease}.ds-card:hover{border-color:var(--line-2)}.ds-card:has(.ds-card-cta:focus-visible){outline:3px solid var(--red-bright);outline-offset:2px}.ds-card-photo{aspect-ratio:16/10;background:var(--sand);border-bottom:1px solid var(--line)}.ds-card-body{display:flex;flex-direction:column;gap:10px;padding:26px 30px 30px}.ds-card-title{font-family:Bitter,Georgia,'Times New Roman',serif;margin:0;font-size:26px;line-height:1.15;font-weight:700;letter-spacing:-0.015em;color:var(--ink)}.ds-card-copy{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;margin:0;font-size:15px;line-height:1.6;color:var(--muted)}.ds-card-cta{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;align-self:flex-start;padding:10px 0 0;background:none;border:0;font-size:15px;font-weight:600;color:var(--red);cursor:pointer}.ds-card-cta::after{content:\"\";position:absolute;inset:0}.ds-card-cta:focus-visible{outline:none}.ds-card:hover .ds-card-cta{color:var(--red-hover)}.ds-arrow{display:inline-block;transition:transform 220ms cubic-bezier(0.16,1,0.3,1)}.ds-card:hover .ds-arrow{transform:translateX(3px)}"
+    },
+    {
+      "name": "Tag and Chips",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "The single Featured trade tag and the featured card's non-interactive includes chips.",
+      "html": "<div class=\"ds-root ds-paper\"><span class=\"ds-tag\">Featured trade</span><ul class=\"ds-chips\"><li>Switchboard upgrades</li><li>Lighting</li><li>Test and tag</li></ul></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-paper{background:var(--paper);padding:24px;display:flex;flex-direction:column;gap:16px;align-items:flex-start}.ds-tag{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;padding:6px 12px;background:var(--char);color:#fff;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;font-weight:600}.ds-chips{display:flex;flex-wrap:wrap;gap:10px;margin:0;padding:0;list-style:none}.ds-chips li{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;padding:8px 14px;border:1px solid var(--line);font-size:14px;color:var(--ink-2)}"
+    },
+    {
+      "name": "Enquiry Field (on charcoal)",
+      "kind": "input",
+      "refersTo": "input-dark",
+      "description": "Labelled field on the charcoal enquiry slab; Signal Red focus ring and error border.",
+      "html": "<div class=\"ds-root ds-slab\"><label class=\"ds-field\"><span class=\"ds-label\">Email <span class=\"ds-req\">*</span></span><input class=\"ds-input\" type=\"email\" placeholder=\"you@company.com.au\"></label></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-slab{background:var(--char);padding:24px}.ds-field{display:flex;flex-direction:column;gap:8px;max-width:360px}.ds-label{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:13px;letter-spacing:0.1em;text-transform:uppercase;color:var(--on-dark);font-weight:600}.ds-req{color:var(--red-bright)}.ds-input{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;min-height:52px;padding:14px 16px;background:var(--char-2);border:1px solid var(--char-line);border-radius:0;color:var(--ivory);font-size:16px;transition:border-color 160ms ease}.ds-input:hover{border-color:#6d6760}.ds-input:focus-visible{outline:3px solid var(--red-bright);outline-offset:0;border-color:var(--char-2)}.ds-input[aria-invalid=\"true\"]{border-color:var(--red-bright)}"
+    },
+    {
+      "name": "Header Navigation",
+      "kind": "nav",
+      "refersTo": "nav",
+      "description": "Sticky paper header; scroll-spy marks the current section and one red rule slides beneath it.",
+      "html": "<div class=\"ds-root\"><header class=\"ds-hdr\"><span class=\"ds-brand\">APMG Services</span><nav class=\"ds-nav\"><a class=\"ds-nav-link\" href=\"#\">Services</a><a class=\"ds-nav-link\" aria-current=\"true\" href=\"#\">How we work</a><a class=\"ds-nav-link\" href=\"#\">Reviews</a><a class=\"ds-nav-link\" href=\"#\">Team</a><span class=\"ds-nav-bar\"></span></nav></header></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-hdr{display:flex;align-items:center;justify-content:space-between;gap:32px;min-height:88px;padding:14px 32px;background:var(--paper);border-bottom:1px solid var(--line)}.ds-brand{font-family:Bitter,Georgia,'Times New Roman',serif;font-size:20px;font-weight:700;color:var(--ink)}.ds-nav{position:relative;display:flex;gap:34px;font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:15px;font-weight:500}.ds-nav-link{display:block;padding-block:6px;color:var(--muted);text-decoration:none;transition:color 160ms ease}.ds-nav-link:hover,.ds-nav-link[aria-current=\"true\"]{color:var(--ink)}.ds-nav-link:focus-visible{outline:3px solid var(--red-bright);outline-offset:2px}.ds-nav-bar{position:absolute;left:0;bottom:-2px;height:2px;width:92px;transform:translateX(96px);background:var(--red);transition:transform 420ms cubic-bezier(0.16,1,0.3,1),width 420ms cubic-bezier(0.16,1,0.3,1)}"
+    },
+    {
+      "name": "Trust Strip",
+      "kind": "custom",
+      "refersTo": "trust",
+      "description": "Four checkable facts on paper, hairline-divided, Bitter fact over Archivo source line.",
+      "html": "<div class=\"ds-root\"><dl class=\"ds-trust\"><div class=\"ds-ti\"><dt>Eight trades in-house</dt><dd>One point of contact for all of them</dd></div><div class=\"ds-ti\"><dt>5.0 <span class=\"ds-star\">&#9733;</span> on Google</dt><dd>From 22 reviews</dd></div><div class=\"ds-ti\"><dt>Est. 2015</dt><dd>Licensed, multi-trade professionals</dd></div><div class=\"ds-ti\"><dt>24/7 make-safe</dt><dd>Storm, break-in and impact damage</dd></div></dl></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-trust{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:0;background:var(--paper);border-bottom:1px solid var(--line)}.ds-ti{display:flex;flex-direction:column;gap:6px;padding:26px 28px;border-left:1px solid var(--line)}.ds-ti:first-child{border-left:0}.ds-ti dt{font-family:Bitter,Georgia,'Times New Roman',serif;font-size:22px;font-weight:700;line-height:1.2;color:var(--ink)}.ds-ti dd{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;margin:0;font-size:14px;color:var(--muted)}.ds-star{color:var(--red)}"
+    },
+    {
+      "name": "Make-safe Band",
+      "kind": "custom",
+      "refersTo": "makesafe",
+      "description": "The emergency trade in its own charcoal band with a large red call button.",
+      "html": "<div class=\"ds-root\"><article class=\"ds-ms\"><div class=\"ds-ms-photo\"></div><div class=\"ds-ms-text\"><span class=\"ds-eyebrow\">Emergency</span><h3 class=\"ds-ms-title\">Property make-safe, 24 hours a day</h3></div><div class=\"ds-ms-actions\"><a class=\"ds-btn-lg\" href=\"#\">Call 1300 97 97 40</a></div></article></div>",
+      "css": ".ds-root{--ivory:#f7f5f1;--paper:#fff;--sand:#efebe5;--ink:#171614;--ink-2:#3d3932;--muted:#57524a;--line:#e2ddd5;--line-2:#c9c2b8;--char:#131210;--char-2:#1e1c19;--char-line:#4a453e;--on-dark:#cfc9c0;--red:#b3121d;--red-hover:#8c0d16;--red-bright:#ec5256;}.ds-ms{display:grid;grid-template-columns:200px 1fr auto;align-items:center;gap:32px;background:var(--char);color:var(--ivory)}.ds-ms-photo{align-self:stretch;min-height:160px;background:var(--char-2)}.ds-ms-text{display:flex;flex-direction:column;gap:14px;padding-block:32px}.ds-eyebrow{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;font-size:13px;letter-spacing:0.16em;text-transform:uppercase;font-weight:700;color:var(--red-bright)}.ds-ms-title{font-family:Bitter,Georgia,'Times New Roman',serif;margin:0;font-size:30px;font-weight:700;line-height:1.12;letter-spacing:-0.015em}.ds-ms-actions{padding:32px 32px 32px 0}.ds-btn-lg{font-family:Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif;display:inline-flex;align-items:center;min-height:62px;padding:0 34px;font-size:17px;font-weight:600;background:var(--red);color:#fff;text-decoration:none;transition:background-color 160ms ease}.ds-btn-lg:hover{background:var(--red-hover)}.ds-btn-lg:focus-visible{outline:3px solid var(--red-bright);outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Yard Ledger",
+    "overview": "The portal reads like a well-run trade business's own paperwork set in daylight: an ivory ground, charcoal slabs where the business speaks with authority (the utility bar, the hero, the make-safe band and the enquiry), one deep red for the next action, and real photographs of APMG's own fleet, jobs and people doing the persuading. It is pinned to the reference Kane supplied (`docs/superpowers/specs/index.html`), and its class names follow that file so the two can be read side by side. It is deliberately not a SaaS landing page. There are no gradients, no glass, no illustration, no rounded cards and no shadows. Every surface is a rectangle drawn with a 1px warm hairline.\n\nThe density is editorial rather than dashboard-like. Sections breathe (88px apart on desktop), content caps at a 1312px measure while the charcoal slabs run full bleed behind it, and the type pairing does the hierarchy work: Bitter, a sturdy slab-leaning serif, for anything that is a claim or a name, and Archivo for everything that explains. Uppercase, widely tracked eyebrows mark the start of each section, as a ledger's column heads would.\n\nThe page earns trust with checkable facts, not adjectives. The visual system is built so that proof (a Google rating, a founding year, a photo of the actual van) carries the weight a decorative flourish would carry elsewhere. The page's truthfulness is a design rule, not only a copy rule: see the Proof Before Polish Rule below.",
+    "keyCharacteristics": [
+      "Pinned light. Ivory and white surfaces, charcoal slabs, never theme-switched.",
+      "One accent: deep red on light, a brighter red on charcoal.",
+      "Bitter display over Archivo body. Serif for claims and names, sans for explanation.",
+      "Square corners everywhere, 1px warm hairlines, no shadows.",
+      "Real APMG photography in every card, with a sand placeholder while it loads.",
+      "Two authored motions only (hero entrance and the nav rule), both motion-safe. Hover responses stay small."
+    ],
+    "rules": [
+      {
+        "name": "The One Red Rule",
+        "body": "Red is the only chromatic colour in the portal. It marks action, the current section, and the few ratings and numbers that carry proof (stars and step numbers). A second accent hue does not exist; if a new element needs emphasis, use Charcoal, weight or Bitter, not a new colour.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Reds Rule",
+        "body": "Brick Red belongs on light surfaces and Signal Red belongs on charcoal. Small red text on charcoal is always Signal Red; filled red buttons stay Brick Red on both, because white-on-Brick is what passes.",
+        "section": "colors"
+      },
+      {
+        "name": "The Pinned Light Rule",
+        "body": "The portal owns its tokens under `.portal-world` in plain CSS and never reads the console's semantic Tailwind variables. A staff member's dark-mode preference must not move a single pixel of the customer page.",
+        "section": "colors"
+      },
+      {
+        "name": "The Serif Claims Rule",
+        "body": "Bitter sets things a visitor could check or quote: headings, trade and people names, facts in the trust strip, the phone number in the header, and review text. Archivo sets everything that explains or instructs. Do not set body paragraphs in Bitter or headings in Archivo.",
+        "section": "typography"
+      },
+      {
+        "name": "The Font Wrapper Rule",
+        "body": "The `portal-fonts` class remaps the app-wide `--font-sans` and `--font-display` to Archivo and Bitter. It sits on a wrapper outside `.portal-world`, so the shared Tailwind pieces rendered beside the page (enquiry modal, chat, legal modals) also set in the portal's faces rather than the console's Inter and Fraunces. Any new portal-adjacent overlay must mount inside that wrapper.",
+        "section": "typography"
+      },
+      {
+        "name": "The Measure Rule",
+        "body": "Content caps at 1312px while slabs stay full bleed. A trade card never grows past the reference's own 1440px composition.",
+        "section": "layout"
+      },
+      {
+        "name": "The Hairline, Not Shadow Rule",
+        "body": "If a surface needs to lift, it goes one tone lighter (ivory to paper, charcoal to charcoal-raised) and takes a 1px hairline. Hover raises a hairline to Hairline Strong. It never grows a shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do scope every rule as `.portal-world .some-class`. Target classes, never bare elements (`a`, `p`, `h2`, `button`). The legal modals and the unsubscribe control render inside the scope with their own Tailwind utilities, and a bare-element rule would outrank and repaint them.",
+      "Do mount the enquiry modal, the chat and any future overlay outside `.portal-world` but inside the `portal-fonts` wrapper, as `PortalShell` does. Outside, so scoped rules can never repaint their Tailwind styling. Inside the wrapper, so they still set in Bitter and Archivo.",
+      "Do back every figure and claim on the page with PRODUCT.md's Evidence on Hand. Derive counts from data (the trade count is `SERVICES.length`, the rating and count come from the transcribed Google listing, the year is `FOUNDED`), and quote reviews and trade descriptions verbatim.",
+      "Do roll the featured trade on the server per request (`force-dynamic` in `app/portal/page.tsx`) and pass it down as `spotlight`. Never re-roll it on the client, because the largest card on the page would reflow after hydration.",
+      "Do take funnel event names from `useEnquiry().openEvent` and gate customer-only behaviour on `standalone`. The customer host emits `portal_service_open` and `portal_view`; the console preview emits `services_card_open` and never writes customer events, a skip link, a second `main`, or the unsubscribe.",
+      "Do use real APMG photography for every photographic frame (fleet, crew, one job photo per trade, headshots), each on a sand or charcoal-raised placeholder.",
+      "Do use Signal Red for any small red text on charcoal, and the 3px Signal Red ring for every focus state.",
+      "Do gate every animation behind `prefers-reduced-motion: no-preference`, with the finished page as the resting state."
+    ],
+    "donts": [
+      "Don't add `box-shadow`, gradients or rounded corners to anything inside `.portal-world`.",
+      "Don't introduce a second accent hue, or put Brick Red text on charcoal.",
+      "Don't consume the console's Tailwind semantic colour variables or its `dark` theme inside the portal. The portal is pinned light.",
+      "Don't add any figure the evidence does not hold: licence numbers, warranty lengths, \"on site within N hours\", client logos, insurance claims or job counts. Nothing unbacked goes in the trust strip.",
+      "Don't use stock photography, illustration or icon grids in place of the real photographs.",
+      "Don't fold make-safe into the trade grid or let it rotate into the featured card. The grid stays at exactly six.",
+      "Don't add new authored motion beyond the hero entrance and the nav rule. Small hover responses (the arrow nudge, the photo scale, colour and border steps) are part of the world, and that is where motion stops.",
+      "Don't treat the 1px Charcoal Rule border as a sufficient input boundary for new controls on charcoal. At rest it measures 1.8:1 against Charcoal Raised, below the 3:1 non-text target. The existing fields rely on their labels and fill; that is a known gap, not a pattern to copy."
+    ]
+  }
+}

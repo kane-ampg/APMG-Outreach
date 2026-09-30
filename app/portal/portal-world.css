@@ -1,646 +1,2098 @@
 /* ===========================================================================
- * CUSTOMER PORTAL — the APMG Painting visual world
+ * CUSTOMER PORTAL — the 2026-09-29 world
  * ===========================================================================
  *
- * Imported by app/portal/layout.tsx and by the "Our Services" dashboard tab, so
- * both hosts of ServicesPortal get it. Every rule is scoped to `.portal-world`,
- * the class the portal's root column carries — the internal console around it is
- * dark-first and is untouched by everything here.
+ * Ported from the reference Kane supplied (docs/superpowers/specs/index.html):
+ * ivory ground, charcoal slabs, one deep red, Bitter over Archivo, square
+ * corners, hairline borders and no shadows. The class names are the
+ * reference's own where a block has a direct equivalent, so the two files can
+ * be read side by side.
  *
- * WHY THIS FILE EXISTS. The 2026-08-24 port brought the painting site's PALETTE
- * across (ink / paper / brand in tailwind.config.ts) and stopped there. But most
- * of what makes apmg-painting.vercel.app look like itself lives in its CSS
- * layer, not its colour scale — the corner scale, the display face's real
- * weight, the scroll reveal, and the process rail. Copying the class names
- * without these rules produced a page with the right colours and the wrong
- * character.
+ * WHY PLAIN CSS AND NOT TAILWIND. The portal is pinned light and the console
+ * around it is dark-first. Its look must not move because a staff member
+ * toggled a theme somewhere else, so it owns its tokens here instead of
+ * borrowing the console's semantic variables.
  *
- * The reference sets the first two GLOBALLY: a `borderRadius` override and a
- * `.font-display { font-weight: 600 }` rule. This project cannot do either — the
- * console depends on Tailwind's default radii and on its own heading face — so
- * they are scoped here instead. The radius values themselves deliberately differ
- * from the reference's; see the Corners section below.
+ * SCOPE. Every rule hangs off `.portal-world`, and every rule targets a CLASS,
+ * never a bare element. That is load-bearing: the legal modals and the
+ * unsubscribe control render inside this scope with Tailwind classes of their
+ * own, and a `.portal-world a { color }` would outrank their utilities and
+ * repaint them.
+ *
+ * Imported by PortalShell (the customer host) and by ServicesPortal (the
+ * console's preview), which renders the same scope without the customer
+ * chrome.
  */
 
-/* ---------------------------------------------------------------------------
- * Corners
- * ---------------------------------------------------------------------------
- *
- * A DELIBERATE DEPARTURE FROM THE REFERENCE, at the operator's request.
- *
- * apmg-painting.vercel.app zeroes every step of `borderRadius` in its Tailwind
- * config, and argues the case at length there: a painting contractor's work is
- * masking tape, straight edges and cut lines, so soft corners read as generic
- * SaaS and fight a palette that is at its best when it is structural. This
- * portal was built square first and then rounded back, so the departure is a
- * decision rather than a drift — and reversing it again means editing the three
- * values below, nothing else.
- *
- * They are set here rather than left to Tailwind's defaults because the defaults
- * are not a scale anyone chose: `rounded-lg` is 8px, which on a card the size of
- * the lead service tile is close enough to square that it reads as a rendering
- * artefact rather than as rounding.
- *
- *   chips, small anchors, focus targets    6px
- *   buttons and inputs                     8px
- *   cards and panels                      12px
- *
- * 12px is not arbitrary. It is what the SHARED components already use for their
- * cards — `rounded-xl` on the Google review tiles and the team tiles — so the
- * portal's own cards now land on exactly the same corner as the two blocks it
- * hosts, with the enquiry dialog keeping its 16px above them. One scale across
- * the whole surface, rather than three that happen to coexist.
- *
- * ONLY those three utilities are remapped. `rounded-xl`, `rounded-2xl` and
- * `rounded-full` are left exactly as authored, which is what keeps the review
- * and team tiles, the enquiry dialog, the chat and every genuine circle
- * untouched — and is why the chat needs no exemption here, where it needed one
- * from the blanket square-corner reset this replaces.
- *
- * `~=` matches a whole whitespace-separated class token, so `[class~="rounded"]`
- * catches `rounded` and never `rounded-md`. `!important` is load-bearing: these
- * targets are Tailwind utilities of equal specificity, and this file's position
- * in the built stylesheet is not guaranteed to fall after theirs.
- */
-.portal-world [class~="rounded"] {
-  border-radius: 0.375rem !important;
+/* Points the app-wide font variables at the portal's faces for everything
+   rendered beside the page too (modal, chat, legal modals). See fonts.ts. */
+.portal-fonts {
+  --font-sans: var(--font-portal-sans), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: var(--font-portal-serif), Georgia, "Times New Roman", serif;
 }
 
-.portal-world [class~="rounded-md"] {
-  border-radius: 0.5rem !important;
+.portal-world {
+  --ivory: #f7f5f1;
+  --paper: #ffffff;
+  --sand: #efebe5;
+  --ink: #171614;
+  --ink-2: #3d3932;
+  --muted: #57524a;
+  --line: #e2ddd5;
+  --line-2: #c9c2b8;
+  --char: #131210;
+  --char-2: #1e1c19;
+  --char-line: #4a453e;
+  --on-dark: #cfc9c0;
+  --on-dark-dim: #a49d94;
+  --red: #b3121d;
+  --red-hover: #8c0d16;
+  /* One step brighter than the reference's #E23B3F: the eyebrows set in it are
+     13px, and #E23B3F on charcoal measures 4.4:1, just under AA for small
+     text. This measures 5.2:1. */
+  --red-bright: #ec5256;
+  --serif: var(--font-portal-serif), Georgia, "Times New Roman", serif;
+  --sans: var(--font-portal-sans), "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --pad: 64px;
+  /* The content measure. The reference runs edge to edge, so on a 2560px
+     monitor a trade card would stretch to a metre of screen; this caps the
+     content at the reference's own 1440px composition while the slabs behind
+     it stay full bleed. */
+  --measure: 1312px;
+  --hdr-h: 88px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  min-height: 100dvh;
+  background: var(--ivory);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: clip;
 }
 
-.portal-world [class~="rounded-lg"] {
-  border-radius: 0.75rem !important;
+.portal-world .wrap {
+  padding-inline: max(var(--pad), calc((100% - var(--measure)) / 2));
 }
 
-/* ---------------------------------------------------------------------------
- * The ground
- * ---------------------------------------------------------------------------
- *
- * The portal is a framed column (see `portalFrame` in kit.tsx), so the page
- * behind it needs to read as a surface rather than as leftover white. A warm
- * paper, a touch off the kit's neutral sunken grey, with one soft light pooled
- * behind the header — enough that white cards and panels lift off it, not so
- * much that it becomes a colour of its own.
- *
- * Literal values for the same reason as the rail below: this file sits outside
- * Tailwind's pipeline.
- */
-.portal-world.portal-ground,
-.portal-world .portal-ground {
-  background-color: #f6f5f2;
-  background-image:
-    radial-gradient(ellipse 90% 55% at 50% -10%, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0) 70%),
-    linear-gradient(180deg, #f8f7f5 0%, #f3f2ee 100%);
+.portal-world .section {
+  padding-top: 88px;
+  scroll-margin-top: calc(var(--hdr-h) + 8px);
 }
 
-/* ---------------------------------------------------------------------------
- * Light tokens, pinned
- * ---------------------------------------------------------------------------
- *
- * The review and team blocks are SHARED with the internal console, and they
- * paint through its semantic tokens (bg-card, text-foreground, ring-foreground).
- * On the customer host <html> is light, so those resolve light. Inside the
- * dashboard's "Our Services" preview <html> carries `.dark`, and the same blocks
- * came out as graphite cards in the middle of a white page — the preview no
- * longer looked like the thing it previews.
- *
- * So the portal scope re-declares the light values under `.dark`. Custom
- * properties inherit, so this one block flips every shared component inside
- * the portal and nothing outside it. The values mirror `:root` in
- * app/globals.css; keep them in step if that palette moves.
- */
-.dark .portal-world {
-  --background: 40 30% 97%;
-  --foreground: 240 6% 10%;
-  --card: 0 0% 100%;
-  --card-foreground: 240 6% 10%;
-  --muted: 40 16% 93%;
-  --muted-foreground: 240 4% 40%;
-  --secondary: 40 16% 93%;
-  --secondary-foreground: 240 6% 10%;
-  --accent: 6 86% 96%;
-  --accent-foreground: 4 76% 40%;
-  --primary: 4 76% 46%;
-  --primary-foreground: 0 0% 100%;
-  --primary-solid: 4 76% 46%;
-  --destructive: 4 76% 46%;
-  --destructive-foreground: 0 0% 100%;
-  --border: 36 12% 86%;
-  --input: 36 8% 52%;
-  --ring: 4 80% 50%;
-  color-scheme: light;
+.portal-world .serif {
+  font-family: var(--serif);
+  letter-spacing: -0.015em;
+  line-height: 1.12;
+  margin: 0;
+  text-wrap: balance;
 }
 
-/* ---------------------------------------------------------------------------
- * The display face
- * ---------------------------------------------------------------------------
- *
- * Fraunces is subset to 600 and 700 in app/layout.tsx — the only two weights
- * this surface sets. Without this rule every `font-display` heading inherits
- * 400, which is not in the subset, so the browser either falls through to
- * Georgia or synthesises a weight. The headline is the loudest element on the
- * page and therefore the one that shows it. The reference carries the identical
- * rule for the identical reason.
- */
-.portal-world .font-display {
+.portal-world .eyebrow {
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.portal-world .lede {
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0;
+}
+
+.portal-world .stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 760px;
+}
+
+.portal-world .focusable:focus-visible,
+.portal-world .btn:focus-visible,
+.portal-world .underlink:focus-visible,
+.portal-world .plainlink:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+.portal-world .skip {
+  position: fixed;
+  left: 16px;
+  top: -80px;
+  z-index: 100;
+  padding: 12px 18px;
+  background: var(--paper);
+  color: var(--ink);
   font-weight: 600;
+  border: 2px solid var(--red);
 }
 
-.portal-world .font-display.font-bold {
+.portal-world .skip:focus {
+  top: 16px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Buttons and links
+ * ------------------------------------------------------------------------- */
+
+.portal-world .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 0 26px;
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+  text-align: center;
+  text-decoration: none;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.portal-world .btn-primary {
+  background: var(--red);
+  color: #fff;
+}
+
+.portal-world .btn-primary:hover {
+  background: var(--red-hover);
+  color: #fff;
+}
+
+.portal-world .btn-primary:disabled {
+  background: var(--red-hover);
+  cursor: progress;
+}
+
+.portal-world .btn-lg {
+  min-height: 62px;
+  padding: 0 34px;
+  font-size: 17px;
+}
+
+.portal-world .btn-ghost {
+  border: 1px solid var(--char-line);
+  color: var(--ivory);
+  background: transparent;
+}
+
+.portal-world .btn-ghost:hover {
+  color: #fff;
+  border-color: #6d6760;
+}
+
+.portal-world .btn .arrow {
+  display: inline-block;
+  transition: transform 220ms var(--ease-out);
+}
+
+.portal-world .btn:hover .arrow {
+  transform: translateX(3px);
+}
+
+.portal-world .underlink {
+  font-family: var(--sans);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  background: none;
+  border: 0;
+  border-bottom: 2px solid var(--line);
+  padding: 0 0 2px;
+  cursor: pointer;
+  text-decoration: none;
+  transition: border-color 160ms ease;
+}
+
+.portal-world .underlink:hover {
+  color: var(--ink);
+  border-color: var(--red);
+}
+
+.portal-world .plainlink {
+  color: var(--red);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.portal-world .plainlink:hover {
+  color: var(--red-hover);
+}
+
+/* ---------------------------------------------------------------------------
+ * Utility bar and header
+ * ------------------------------------------------------------------------- */
+
+.portal-world .util {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 24px;
+  flex-wrap: wrap;
+  min-height: 40px;
+  padding-block: 8px;
+  background: var(--char);
+  color: #b9b2a8;
+  font-size: 13px;
+}
+
+.portal-world .util-right {
+  display: flex;
+  gap: 8px 28px;
+  flex-wrap: wrap;
+}
+
+.portal-world .util-link {
+  color: #e8e4de;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.portal-world .util-link:hover {
+  color: #fff;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.portal-world .util-strong {
+  color: #e8e4de;
+}
+
+.portal-world .hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 32px;
+  flex-wrap: wrap;
+  min-height: var(--hdr-h);
+  padding-block: 14px;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.portal-world .brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  color: var(--ink);
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.portal-world .brand-logo {
+  width: auto;
+  height: 50px;
+}
+
+.portal-world .brand-name {
+  font-family: var(--serif);
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1.1;
+  display: block;
+  text-align: left;
+}
+
+.portal-world .brand-sub {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-align: left;
+}
+
+.portal-world .nav {
+  position: relative;
+  display: flex;
+  gap: 34px;
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.portal-world .nav-link {
+  display: block;
+  padding-block: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 160ms ease;
+}
+
+.portal-world .nav-link:hover,
+.portal-world .nav-link[aria-current="true"] {
+  color: var(--ink);
+}
+
+/* The one moving part in the chrome: a single red rule that slides to the
+   section being read, rather than one underline per link blinking on and off.
+   Its position and width are written by SiteHeader as custom properties. */
+.portal-world .nav-bar {
+  position: absolute;
+  left: 0;
+  bottom: -2px;
+  height: 2px;
+  width: var(--bar-w, 0px);
+  transform: translateX(var(--bar-x, 0px));
+  background: var(--red);
+  opacity: var(--bar-o, 0);
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .portal-world .nav-bar {
+    transition:
+      transform 420ms var(--ease-out),
+      width 420ms var(--ease-out),
+      opacity 200ms ease;
+  }
+}
+
+.portal-world .hdr-actions {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+
+.portal-world .tel {
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.portal-world .tel:hover {
+  color: var(--red);
+}
+
+/* ---------------------------------------------------------------------------
+ * Hero
+ * ------------------------------------------------------------------------- */
+
+.portal-world .hero {
+  position: relative;
+  /* Its own layer, so the down button on its bottom edge paints over the
+     trust strip that follows. */
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 650px) minmax(0, 1fr);
+  gap: 56px;
+  min-height: 560px;
+  padding-block: 84px;
+  background: var(--char);
+  color: var(--ivory);
+  /* Where the copy column ends, measured from the section's left edge: the
+     point the legibility wash starts to ease off (see .hero-scrim). */
+  --copy-end: calc(max(var(--pad), (100% - var(--measure)) / 2) + 650px);
+}
+
+/* The copy sits above the reel and its wash. */
+.portal-world .hero-col {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 28px;
+}
+
+/* Ivory, not red, over the reel: the footage opens on a hazy white sky, and
+   13px red text cannot hold contrast over it through any wash that still
+   lets the video show. The red survives as the short rule in front. */
+.portal-world .hero .eyebrow {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  color: var(--on-dark-strong);
+}
+
+/* Centred on the first line (13px type on a 1.5 line), so it stays put when
+   the sectors wrap to a second line on a phone. */
+.portal-world .hero .eyebrow::before {
+  content: "";
+  flex-shrink: 0;
+  width: 24px;
+  height: 2px;
+  margin-top: 0.7em;
+  background: var(--red-bright);
+}
+
+.portal-world .hero-title {
+  font-size: clamp(40px, 5vw, 70px);
+  line-height: 1.02;
+  letter-spacing: -0.02em;
   font-weight: 700;
 }
 
-/* ---------------------------------------------------------------------------
- * The viewport lock
- * ---------------------------------------------------------------------------
- *
- * `.portal-hero-fold` USED TO LIVE HERE, and its removal is worth recording.
- * It sized a full-screen hero on a page that scrolled: a min-height floor here,
- * with the ceiling (`lg:h-[calc(100dvh-4rem-1px)]`) applied in the component on
- * the customer host only. The 2026-09-22 rebuild made every portal page exactly
- * one viewport, which means there is no fold to size — the hero is a strip at
- * the top of a screen the grid fills the rest of, and nothing measures itself
- * against the viewport any more.
- *
- * The lock is now structural rather than arithmetic, and is entirely in
- * PortalShell: a flex column `h-dvh` tall, header and footer strip at their
- * natural heights, and one `min-h-0 flex-1` row between them that takes what is
- * left. No `calc()` anywhere, so no number here has to be kept in step with a
- * header height in a component — which is exactly how the old version failed
- * silently (a percentage height against an auto-height parent resolves to
- * `auto`, so the rule did nothing and the fold came in ~230px short).
- *
- * What remains below is the one utility Tailwind does not ship that the lock
- * needs.
- */
-
-/* Never let a clip/visible pair leak out of the viewport lock.
- *
- * GoogleReviewsPanel is shared with the internal console and wraps its grid in
- * `overflow-x-clip`, leaving the vertical axis `visible`. That pair is legal
- * CSS and it is poison for a locked layout: an element clipped on one axis and
- * visible on the other does not establish a scroll container, and its overflow
- * escapes every ancestor scroll container WITHOUT contributing scrollable
- * overflow to them. The symptom is a container that swears it does not
- * overflow — `<main>` reported scrollHeight 669 against clientHeight 669 —
- * while one of its descendants was measurably sticking out to 1232px. Nothing
- * could scroll to those reviews and nothing reported them as hidden.
- *
- * `overflow-x: hidden` looks like a cosmetic change from `clip` and is not: a
- * `hidden`/`visible` pair is NOT legal, so the used value of the visible axis
- * becomes `auto`, the element finally becomes a scroll container, and its
- * content is contained and counted. The panel looks identical either way —
- * `clip` was there to stop a horizontal bleed, which `hidden` also does.
- *
- * Scoped to `.portal-world` so the console's own copy of the panel keeps the
- * `clip` it was authored with. */
-.portal-world [class~="overflow-x-clip"] {
-  overflow-x: hidden;
+.portal-world .hero-copy {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.55;
+  color: var(--on-dark);
+  max-width: 590px;
 }
 
-/* The document itself must not scroll on a locked page.
- *
- * The shell is already `h-dvh` with `overflow: hidden`, every one of its rows
- * is measured, and no element's box extends past the viewport — and the
- * document STILL scrolled 450px on /portal/reviews, in the production build as
- * well as in dev. The reviews panel is shared with the internal console and
- * carries `overflow-x: clip` with the vertical axis left visible; a clip/visible
- * pair does not establish a scroll container, and Chromium propagates the
- * resulting scrollable overflow all the way to the viewport even though every
- * ancestor in between clips it visually. Forcing `overflow-y: hidden` on those
- * ancestors from script did not reclaim the 450px, which is what ruled out
- * fixing this at the element and sent it here.
- *
- * So the viewport is closed directly. This is the one rule that cannot be
- * defeated by a descendant's overflow, whatever the mechanism.
- *
- * SCOPE, and why it is `:has()` rather than a class on <html>. Only the five
- * locked pages carry `.portal-lock` — /portal/terms and /portal/privacy render
- * outside PortalShell and must stay scrollable, since their whole job is to be
- * read end to end. Setting a class on <html> would mean reaching out of the
- * React tree into a document the root layout owns, and remembering to take it
- * off again on every exit path. `:has()` asks the question declaratively and
- * unsets itself the moment the element is gone.
- *
- * DEGRADATION: a browser without `:has()` simply keeps today's behaviour — the
- * page scrolls a little on one of five pages. Nothing breaks, and every
- * browser this portal is opened in has supported it since 2023.
- *
- * `lg` only: below it the portal scrolls on purpose. */
-@media (min-width: 1024px) {
-  html:has(.portal-lock),
-  html:has(.portal-lock) body {
-    overflow: hidden;
-  }
+/* The message-match line for visitors who came from a sector-targeted email. */
+.portal-world .hero-sector {
+  margin: -12px 0 0;
+  padding-left: 16px;
+  border-left: 1px solid var(--red-bright);
+  font-size: 16px;
+  line-height: 1.55;
+  color: var(--on-dark-strong);
+  max-width: 560px;
 }
 
-/* The nav scrolls sideways on phones rather than collapsing behind a menu
- * button. A visible scrollbar under five short words is louder than the words,
- * but hiding it must not disable the scroll — the overflow has to stay
- * swipeable on the narrowest phones, which is why this hides the bar rather
- * than setting `overflow: hidden`. */
-.portal-world .scrollbar-none {
-  scrollbar-width: none;
-  -ms-overflow-style: none;
+.portal-world .hero-actions {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
-.portal-world .scrollbar-none::-webkit-scrollbar {
-  width: 0;
-  height: 0;
+.portal-world .fineprint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--on-dark);
 }
 
-/* ---------------------------------------------------------------------------
- * Scroll reveal
- * ---------------------------------------------------------------------------
- *
- * Every section rises 24px and fades in as it enters the viewport — a block at a
- * time rather than element by element, which on a page this long reads as
- * fidgety by the third screen.
- *
- * NO STYLESHEET EVER HIDES ANYTHING. The hidden start state needs BOTH
- * `data-reveal` (written in the markup) and `data-reveal-armed` (written only by
- * the observer in components/apmg/portal/reveal.tsx, and only after it has
- * confirmed the element is below the fold). So a failed bundle, a missing
- * IntersectionObserver, or the frames before hydration all render the page
- * complete. That is the one rule this must not get wrong: on a surface whose
- * whole job is converting a cold visitor who arrived from an email, a stylesheet
- * that sets `opacity: 0` and waits for JS is a way to lose the page.
- *
- * The reference does the same thing with GSAP ScrollTrigger. This uses an
- * IntersectionObserver and CSS instead, for two reasons: GSAP is not a dependency
- * of this project, and ScrollTrigger would need its `scroller` pointed at <main>
- * because the portal is not the document scroller.
- */
+.portal-world .fill-img {
+  object-fit: cover;
+}
+
+/* The reel: the whole charcoal section's background (HeroReel.tsx). It fades
+   in from the charcoal on its first decoded frame, so there is no pop. */
+/* The clipping lives here, not on .hero: the down button hangs over the
+   hero's bottom edge and must not be cut off with the footage. */
+.portal-world .hero-reel {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--char);
+}
+
+.portal-world .reel-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 1200ms ease-out;
+}
+
+.portal-world .reel-video.is-ready {
+  opacity: 1;
+}
+
+/* The gradient that keeps the hero text readable over every frame: near-
+   solid charcoal behind the copy column, easing off to the right so the
+   footage carries that side of the screen.
+
+   Measured against the brightest frame (the hazy white sky): at 90% the
+   hero's body copy holds 4.8:1 and the fine print the same, where the reel's
+   own 2.5:1 would fail both. This is the portal's one gradient, and it is a
+   legibility device rather than decoration (DESIGN.md, the Scrim Rule). */
+.portal-world .hero-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--char) 92%, transparent) 0,
+    color-mix(in srgb, var(--char) 90%, transparent) var(--copy-end),
+    color-mix(in srgb, var(--char) 55%, transparent) calc(var(--copy-end) + 180px),
+    color-mix(in srgb, var(--char) 22%, transparent) calc(var(--copy-end) + 420px),
+    color-mix(in srgb, var(--char) 12%, transparent) 100%
+  );
+}
+
+/* WCAG 2.2.2: motion past five seconds needs a stop. Square like everything
+   else here, top right and aligned to the content's edge, on its own wash
+   since it sits over the lightest part of the footage. */
+.portal-world .reel-toggle {
+  position: absolute;
+  top: 20px;
+  right: max(var(--pad), calc((100% - var(--measure)) / 2));
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  background: color-mix(in srgb, var(--char) 60%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ivory) 35%, transparent);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.portal-world .reel-toggle:hover {
+  background: color-mix(in srgb, var(--char) 85%, transparent);
+}
+
+.portal-world .reel-toggle:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+/* The down button: the first screen's one hint that the page continues. It
+   hangs on the seam between the charcoal hero and the white trust strip, and
+   says what is below rather than being a bare arrow. */
+.portal-world .scroll-cue {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  height: 52px;
+  padding: 0 8px 0 22px;
+  transform: translate(-50%, 50%);
+  background: var(--char-2);
+  border: 1px solid var(--char-line);
+  color: var(--ivory);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: border-color 160ms ease;
+}
+
+.portal-world .scroll-cue:hover {
+  border-color: var(--on-dark-dim);
+}
+
+.portal-world .scroll-cue:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+.portal-world .scroll-cue-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: var(--red);
+  color: #fff;
+  font-size: 18px;
+  transition: background-color 160ms ease;
+}
+
+.portal-world .scroll-cue:hover .scroll-cue-arrow {
+  background: var(--red-hover);
+}
+
+/* Three small drops once the hero has settled, then still: enough to be
+   noticed, not a permanent fidget beside the headline. */
 @media (prefers-reduced-motion: no-preference) {
-  .portal-world [data-reveal][data-reveal-armed="out"] {
-    opacity: 0;
-    transform: translateY(24px);
+  .portal-world .scroll-cue-arrow {
+    animation: portal-nudge 1400ms ease-in-out 1600ms 3;
   }
+}
 
-  .portal-world [data-reveal][data-reveal-armed="in"] {
+@keyframes portal-nudge {
+  0%,
+  100% {
+    transform: none;
+  }
+  50% {
+    transform: translateY(4px);
+  }
+}
+
+/* The hero's one authored entrance: the copy rises into place line by line
+   while the reel fades up behind it. Motion-safe only, and the resting state
+   is the finished page, so a visitor who asked for less motion simply gets
+   the page. */
+@media (prefers-reduced-motion: no-preference) {
+  .portal-world .rise {
+    animation: portal-rise 700ms var(--ease-out) both;
+    animation-delay: calc(var(--i, 0) * 70ms + 60ms);
+  }
+}
+
+@keyframes portal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+  to {
     opacity: 1;
     transform: none;
-    /* 0.6s on a decelerating curve — the reference's `power2.out` tween, as its
-       CSS equivalent. */
-    transition:
-      opacity 600ms cubic-bezier(0.16, 1, 0.3, 1),
-      transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 }
 
 /* ---------------------------------------------------------------------------
- * The process rail
+ * Trust strip
+ * ------------------------------------------------------------------------- */
+
+.portal-world .trust {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0;
+  background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+.portal-world .trust-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 26px 40px;
+  border-left: 1px solid var(--line);
+}
+
+.portal-world .trust-item:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.portal-world .trust-item dt {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.portal-world .trust-item dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.portal-world .trust-star {
+  color: var(--red);
+}
+
+/* ---------------------------------------------------------------------------
+ * Services
+ * ------------------------------------------------------------------------- */
+
+.portal-world .sec-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px 64px;
+  flex-wrap: wrap;
+}
+
+.portal-world .h2 {
+  font-size: clamp(30px, 3.4vw, 46px);
+  font-weight: 700;
+}
+
+.portal-world .h2-sm {
+  font-size: clamp(28px, 3vw, 40px);
+  font-weight: 700;
+}
+
+.portal-world .sec-lede {
+  max-width: 340px;
+}
+
+.portal-world .tag {
+  align-self: flex-start;
+  padding: 6px 12px;
+  background: var(--char);
+  color: #fff;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* The eight trades as one grid: four across and two down on a laptop. */
+.portal-world .tiles {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 20px;
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.portal-world .tiles > li {
+  display: flex;
+  min-height: 0;
+}
+
+/* A trade tile. The photograph leads, the name and one line follow, and the
+   whole tile is the target: the visible "Tell me more" is a real button whose
+   ::after is stretched over the tile, so the heading stays a heading in the
+   outline instead of being swallowed into a button's accessible name. */
+.portal-world .tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  transition: border-color 200ms ease;
+}
+
+.portal-world .tile:hover {
+  border-color: var(--line-2);
+}
+
+.portal-world .tile:has(.card-cta:focus-visible) {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+.portal-world .tile-photo {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: var(--sand);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.portal-world .tile-photo .fill-img {
+  transition: transform 900ms var(--ease-out);
+}
+
+.portal-world .tile:hover .fill-img {
+  transform: scale(1.035);
+}
+
+/* The featured trade's tag sits on its photograph, top left. */
+.portal-world .tile-tag {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 1;
+}
+
+.portal-world .tile-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 20px 20px;
+}
+
+.portal-world .tile-title {
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.portal-world .tile-copy {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+.portal-world .card-cta {
+  margin-top: auto;
+  padding: 8px 0 0;
+  align-self: flex-start;
+  background: none;
+  border: 0;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--red);
+  cursor: pointer;
+}
+
+.portal-world .card-cta::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+
+.portal-world .card-cta:focus-visible {
+  outline: none;
+}
+
+.portal-world .tile:hover .card-cta {
+  color: var(--red-hover);
+}
+
+.portal-world .card-cta .arrow,
+.portal-world .tile-more .arrow {
+  display: inline-block;
+  transition: transform 220ms var(--ease-out);
+}
+
+.portal-world .tile:hover .card-cta .arrow,
+.portal-world .tile-more:hover .arrow {
+  transform: translateX(3px);
+}
+
+/* Make-safe: the grid's one charcoal tile, with a direct call instead of a
+   stretched "tell me more", because in an emergency the call is the point. */
+.portal-world .tile-dark {
+  background: var(--char);
+  border-color: var(--char);
+  color: var(--ivory);
+}
+
+.portal-world .tile-dark:hover {
+  border-color: var(--char-line);
+}
+
+.portal-world .tile-dark .tile-photo {
+  background: var(--char-2);
+  border-bottom-color: var(--char-line);
+}
+
+.portal-world .tile-eyebrow {
+  color: var(--red-bright);
+}
+
+.portal-world .tile-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+.portal-world .tile-call {
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 700;
+  color: #fff;
+  text-decoration: none;
+}
+
+.portal-world .tile-call:hover {
+  color: var(--red-bright);
+}
+
+.portal-world .tile-more {
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--sans);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--on-dark);
+  cursor: pointer;
+}
+
+.portal-world .tile-more:hover {
+  color: #fff;
+}
+
+.portal-world .tile-call:focus-visible,
+.portal-world .tile-more:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * How we work
+ * ------------------------------------------------------------------------- */
+
+.portal-world .steps {
+  list-style: none;
+  margin: 36px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 28px;
+}
+
+.portal-world .step {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 18px;
+  border-top: 3px solid var(--char);
+}
+
+.portal-world .step-num {
+  font-family: var(--serif);
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--red);
+}
+
+.portal-world .step-title {
+  font-size: 22px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.portal-world .step-copy {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* What a client can hold us to: one hairline row under the steps. Hairlines,
+   not the steps' charcoal rule, because these are standing commitments rather
+   than stages six to eight. */
+.portal-world .hold {
+  display: grid;
+  grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+  gap: 24px 48px;
+  margin-top: 44px;
+  padding-top: 26px;
+  border-top: 1px solid var(--line);
+  scroll-margin-top: calc(var(--hdr-h) + 8px);
+}
+
+.portal-world .hold-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.portal-world .hold-title {
+  font-size: 26px;
+  font-weight: 700;
+}
+
+.portal-world .hold-lede {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.portal-world .hold-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px 32px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.portal-world .hold-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.portal-world .hold-item-title {
+  font-size: 19px;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.portal-world .hold-item p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* ---------------------------------------------------------------------------
+ * Reviews
+ * ------------------------------------------------------------------------- */
+
+/* Every transcribed review in one sideways track, three to a view on a
+   laptop. Native scrolling with snap points, so touch, trackpad, the arrow keys
+   (the track is focusable) and the step buttons all move it the same way. */
+.portal-world .reviews-track {
+  position: relative;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: calc((100% - 2 * 24px) / 3);
+  gap: 24px;
+  margin: 32px 0 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+  scrollbar-width: none;
+}
+
+.portal-world .reviews-track::-webkit-scrollbar {
+  display: none;
+}
+
+.portal-world .reviews-track:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 4px;
+}
+
+.portal-world .reviews-track > li {
+  display: flex;
+  min-width: 0;
+  scroll-snap-align: start;
+}
+
+.portal-world .review {
+  margin: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 28px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.portal-world .stars {
+  font-size: 18px;
+  letter-spacing: 0.1em;
+  color: var(--red);
+  line-height: 1;
+}
+
+.portal-world .review-quote {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.portal-world .review-caption {
+  margin-top: auto;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.portal-world .review-caption b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.portal-world .review-full {
+  font-size: 14px;
+}
+
+.portal-world .reviews-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+.portal-world .reviews-count {
+  margin: 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.portal-world .reviews-steps {
+  display: flex;
+  gap: 8px;
+}
+
+.portal-world .reviews-links {
+  display: flex;
+  align-items: center;
+  gap: 16px 28px;
+  flex-wrap: wrap;
+}
+
+.portal-world .step-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: var(--paper);
+  border: 1px solid var(--line-2);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 18px;
+  cursor: pointer;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+
+.portal-world .step-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.portal-world .step-btn:disabled {
+  color: var(--line-2);
+  border-color: var(--line);
+  cursor: default;
+}
+
+.portal-world .step-btn:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Team
+ * ------------------------------------------------------------------------- */
+
+/* Wider than the photograph itself (1920x762), so object-fit crops off the
+   empty white floor along its bottom fifth rather than the people. */
+.portal-world .team-photo {
+  position: relative;
+  margin-top: 36px;
+  aspect-ratio: 1920 / 620;
+  background: var(--sand);
+  overflow: hidden;
+}
+
+.portal-world .roster {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 24px;
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* Portrait-led, at card width. The headshots were taken in front of the APMG
+   sign; at thumbnail size that backdrop broke into letter fragments, at this
+   size it reads as the company's own signage behind its own people. */
+.portal-world .person {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--paper);
+  border: 1px solid var(--line);
+}
+
+.portal-world .person-photo {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  background: var(--sand);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.portal-world .person-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  padding: 18px 20px 20px;
+}
+
+.portal-world .person-name {
+  font-size: 19px;
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+.portal-world .person-role {
+  margin: 4px 0 0;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.portal-world .person-link {
+  align-self: flex-start;
+  margin-top: auto;
+  padding-top: 10px;
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Enquiry
+ * ------------------------------------------------------------------------- */
+
+.portal-world .enquiry {
+  display: grid;
+  grid-template-columns: minmax(0, 460px) minmax(0, 1fr);
+  gap: 72px;
+  margin-top: 96px;
+  padding-block: 64px;
+  background: var(--char);
+  color: var(--ivory);
+  scroll-margin-top: var(--hdr-h);
+}
+
+.portal-world .enquiry-title {
+  font-size: clamp(28px, 3vw, 38px);
+  font-weight: 700;
+}
+
+.portal-world .enquiry-copy {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--on-dark);
+}
+
+.portal-world .enquiry-side {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.portal-world .enquiry-contact {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 15px;
+  color: var(--on-dark);
+}
+
+.portal-world .enquiry-contact a {
+  color: #fff;
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.portal-world .enquiry-contact a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.portal-world .form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+  align-content: start;
+}
+
+.portal-world .field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.portal-world .field.wide {
+  grid-column: span 2;
+}
+
+.portal-world .field-label {
+  font-size: 13px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--on-dark);
+  font-weight: 600;
+}
+
+.portal-world .field-label .req {
+  color: var(--red-bright);
+}
+
+.portal-world .field-input {
+  min-height: 52px;
+  width: 100%;
+  padding: 14px 16px;
+  background: var(--char-2);
+  border: 1px solid var(--char-line);
+  border-radius: 0;
+  color: var(--ivory);
+  font-family: var(--sans);
+  font-size: 16px;
+  transition: border-color 160ms ease;
+}
+
+.portal-world .field-input:hover {
+  border-color: #6d6760;
+}
+
+.portal-world .field-input:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 0;
+  border-color: var(--char-2);
+}
+
+.portal-world .field-input[aria-invalid="true"] {
+  border-color: var(--red-bright);
+}
+
+.portal-world textarea.field-input {
+  resize: vertical;
+  min-height: 120px;
+}
+
+.portal-world .field-hint {
+  margin: 0;
+  font-size: 14px;
+  color: var(--red-bright);
+}
+
+.portal-world .consent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 20px;
+  border: 1px solid var(--char-line);
+}
+
+.portal-world .consent-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--on-dark);
+  cursor: pointer;
+}
+
+.portal-world .consent-box {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  margin: 1px 0 0;
+  accent-color: var(--red);
+  cursor: pointer;
+}
+
+.portal-world .consent-box:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+.portal-world .consent-docs {
+  margin: 0;
+  padding-left: 32px;
+  font-size: 13px;
+  color: var(--on-dark-dim);
+}
+
+.portal-world .consent-doc-link {
+  color: #fff;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.portal-world .form-foot {
+  grid-column: span 2;
+  display: flex;
+  align-items: center;
+  gap: 16px 24px;
+  flex-wrap: wrap;
+}
+
+.portal-world .form-foot-note {
+  font-size: 14px;
+  color: var(--on-dark-dim);
+}
+
+.portal-world .form-alert {
+  grid-column: span 2;
+  margin: 0;
+  padding: 16px 20px;
+  border: 1px solid var(--red-bright);
+  font-size: 15px;
+  line-height: 1.55;
+  color: #fff;
+}
+
+.portal-world .form-alert a {
+  color: #fff;
+  font-weight: 600;
+}
+
+.portal-world .form-done {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 40px;
+  border: 1px solid var(--char-line);
+}
+
+.portal-world .form-done-title {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.portal-world .form-done:focus {
+  outline: none;
+}
+
+.portal-world .honeypot {
+  position: absolute;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------------------
+ * Footer
+ * ------------------------------------------------------------------------- */
+
+.portal-world .ftr {
+  padding-block: 56px 40px;
+  background: var(--paper);
+  border-top: 1px solid var(--line);
+}
+
+.portal-world .ftr-cols {
+  display: flex;
+  justify-content: space-between;
+  gap: 40px 64px;
+  flex-wrap: wrap;
+}
+
+.portal-world .ftr-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.portal-world .ftr-link {
+  font-family: var(--sans);
+  font-size: 15px;
+  color: var(--ink);
+  text-decoration: none;
+  text-align: left;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.portal-world .ftr-link:hover {
+  color: var(--red);
+}
+
+.portal-world .ftr-link:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+.portal-world .ftr-head {
+  margin: 0 0 2px;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-family: var(--sans);
+  font-weight: 700;
+}
+
+.portal-world .ftr-about {
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.portal-world .ftr-name {
+  font-family: var(--serif);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.portal-world .ftr-about p,
+.portal-world .ftr-about address {
+  margin: 0;
+  font-size: 15px;
+  font-style: normal;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.portal-world .ftr-social {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.portal-world .ftr-social-link {
+  display: inline-flex;
+  padding: 7px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.portal-world .ftr-social-link:hover {
+  color: var(--ink);
+  border-color: var(--line-2);
+}
+
+.portal-world .ftr-base {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px 32px;
+  flex-wrap: wrap;
+  padding-top: 24px;
+  margin-top: 32px;
+  /* Clears the chat launcher (56px square, fixed 20px from the corner): the
+     opt-out is the last thing on the page that may sit under furniture. */
+  padding-right: 72px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.portal-world .ftr-links {
+  display: flex;
+  align-items: center;
+  gap: 12px 24px;
+  flex-wrap: wrap;
+}
+
+.portal-world .ftr-small {
+  font-size: 14px;
+  color: var(--muted);
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--sans);
+}
+
+.portal-world .ftr-small:hover {
+  color: var(--ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.portal-world .ftr-small:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+/* The one-click opt-out (PortalUnsubscribe), expanded in place. */
+.portal-world .unsub-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.portal-world .unsub-row {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  max-width: 340px;
+}
+
+.portal-world .unsub-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+}
+
+.portal-world .unsub-input:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 0;
+}
+
+.portal-world .unsub-btn {
+  height: 40px;
+  padding: 0 14px;
+  border: 0;
+  background: var(--red);
+  color: #fff;
+  font-family: var(--sans);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.portal-world .unsub-btn:hover {
+  background: var(--red-hover);
+}
+
+.portal-world .unsub-btn:focus-visible {
+  outline: 3px solid var(--red-bright);
+  outline-offset: 2px;
+}
+
+.portal-world .unsub-error {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--red);
+}
+
+/* ---------------------------------------------------------------------------
+ * Responsive — the reference's two breakpoints
+ * ------------------------------------------------------------------------- */
+
+@media (max-width: 1180px) {
+  .portal-world {
+    --pad: 40px;
+  }
+
+  .portal-world .hero {
+    grid-template-columns: 1fr;
+  }
+
+  /* One column, so the copy runs the full width over the reel: an even 90%
+     wash instead of the graded one, which is what holds the copy at 4.8:1
+     over the brightest frame. */
+  .portal-world .hero-scrim {
+    background: color-mix(in srgb, var(--char) 90%, transparent);
+  }
+
+  .portal-world .trust {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portal-world .trust-item:nth-child(3) {
+    border-left: 0;
+    padding-left: 0;
+  }
+
+  .portal-world .trust-item:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+
+  .portal-world .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portal-world .steps {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portal-world .hold {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-world .reviews-track {
+    grid-auto-columns: calc((100% - 24px) / 2);
+  }
+
+  .portal-world .roster {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+  }
+
+  .portal-world .enquiry {
+    grid-template-columns: 1fr;
+    gap: 40px;
+    padding-block: 48px;
+  }
+
+  .portal-world .nav {
+    gap: 26px;
+  }
+}
+
+@media (max-width: 900px) {
+  .portal-world .hdr-actions .tel {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .portal-world {
+    --pad: 20px;
+    --hdr-h: 0px;
+  }
+
+  .portal-world .section {
+    padding-top: 56px;
+    scroll-margin-top: 12px;
+  }
+
+  /* Two lines, not three, on a phone. The ABN is in the footer and the
+     service area is in the hero copy, and the remaining items flow as one
+     row: hours and the main website, then the 24/7 number. */
+  .portal-world .util-abn,
+  .portal-world .util-area {
+    display: none;
+  }
+
+  .portal-world .util-right {
+    display: contents;
+  }
+
+  .portal-world .hdr {
+    position: static;
+    padding-block: 12px 0;
+    gap: 12px 16px;
+  }
+
+  .portal-world .brand-logo {
+    height: 40px;
+  }
+
+  .portal-world .brand-sub {
+    display: none;
+  }
+
+  .portal-world .nav {
+    order: 3;
+    width: calc(100% + 2 * var(--pad));
+    margin-inline: calc(-1 * var(--pad));
+    padding: 4px var(--pad) 10px;
+    gap: 22px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    border-top: 1px solid var(--line);
+  }
+
+  .portal-world .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .portal-world .nav-bar {
+    display: none;
+  }
+
+  .portal-world .nav-link {
+    padding-block: 10px 6px;
+    border-bottom: 2px solid transparent;
+  }
+
+  .portal-world .nav-link[aria-current="true"] {
+    border-bottom-color: var(--red);
+  }
+
+  .portal-world .hdr-actions .btn {
+    min-height: 44px;
+    padding: 0 16px;
+    font-size: 15px;
+  }
+
+  .portal-world .hero {
+    padding-block: 40px 48px;
+    gap: 32px;
+  }
+
+  .portal-world .hero-copy {
+    font-size: 18px;
+  }
+
+  .portal-world .hero {
+    min-height: 0;
+  }
+
+  /* Keep the sectors clear of the pause toggle in the top-right corner. */
+  .portal-world .hero .eyebrow {
+    padding-right: 56px;
+  }
+
+  /* A phone scrolls, and on one the hero is taller than the screen, so a cue
+     at its foot would sit below the fold it is meant to point past. */
+  .portal-world .scroll-cue {
+    display: none;
+  }
+
+  .portal-world .trust,
+  .portal-world .tiles,
+  .portal-world .steps,
+  .portal-world .form,
+  .portal-world .hold-list {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-world .reviews-track {
+    grid-auto-columns: 86%;
+    gap: 14px;
+  }
+
+  .portal-world .roster {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .portal-world .person-body {
+    padding: 14px 14px 16px;
+  }
+
+  .portal-world .person-name {
+    font-size: 17px;
+  }
+
+  .portal-world .trust-item,
+  .portal-world .trust-item:nth-child(3) {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding: 20px 0;
+  }
+
+  .portal-world .trust-item:first-child {
+    border-top: 0;
+  }
+
+  .portal-world .hold {
+    margin-top: 40px;
+  }
+
+  /* On a phone the full line-up makes every face a few pixels tall. The frame
+     is narrower than the 2.5:1 photograph, so cropping by ratio alone always
+     keeps the facade above and the floor below; zooming in toward the top
+     edge drops the floor under the boots and spends the crop on facade the
+     frame can spare, clipping as few people at the sides as it can. */
+  .portal-world .team-photo {
+    aspect-ratio: 16 / 7;
+  }
+
+  .portal-world .team-photo .fill-img {
+    transform: scale(1.2);
+    transform-origin: 50% 16%;
+  }
+
+  .portal-world .review {
+    padding: 24px 22px;
+  }
+
+  .portal-world .field.wide,
+  .portal-world .form-foot,
+  .portal-world .form-alert {
+    grid-column: span 1;
+  }
+
+  .portal-world .enquiry {
+    margin-top: 56px;
+    padding-block: 40px;
+  }
+
+  .portal-world .form-done {
+    padding: 28px 22px;
+  }
+
+  .portal-world .btn {
+    width: 100%;
+  }
+
+  .portal-world .hdr-actions .btn {
+    width: auto;
+  }
+
+  .portal-world .hero-actions .btn {
+    width: auto;
+    flex: 1 1 220px;
+  }
+
+  .portal-world .ftr-base {
+    padding-right: 0;
+    padding-bottom: 64px;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * One screen per section (laptops and desktops)
  * ---------------------------------------------------------------------------
  *
- * "What happens after you enquire" is the one section on the portal where the
- * ORDER is the content, so it is drawn rather than tiled: the stages stand on a
- * single rule, and a red line runs the length of it — from the first stage to
- * handover, lighting each stage's glyph as it passes, then clearing off the far
- * end and going again.
+ * From 1181px wide and 700px tall, every section is exactly the screen under
+ * the sticky header, and the customer host snaps section to section. The
+ * first screen is the utility bar, header, hero and trust strip together.
  *
- * It is deliberately the same gesture as the seam under the hero — the cut line
- * every job begins with. Repeating the mark is the point, because it means the
- * same thing in both places.
+ * What gives, so that everything fits: photographs flex to whatever height the
+ * text leaves them (trade tiles, the hero reel, the crew photo), and a few
+ * type steps drop one notch. Text never clips: every screen is
+ * `min-height: fit-content`, so if a very short window or a long sector line
+ * outgrows a screen, that screen just grows and the snap still lands on it.
  *
- * ## Why it loops on wall-clock time rather than on scroll
- *
- * Tying the line to the scrollbar leaves a reader who stops to actually read the
- * stages with a line frozen halfway through, and a reader who flicks past gets
- * the entire sequence in three frames. Neither of those is the sequence. On a
- * timer it plays at its own speed for anyone who looks at it, and the order —
- * the only thing this section is trying to say — is legible however the page is
- * scrolled.
- *
- * `InView` pauses the whole loop whenever the rail is off screen, so it costs
- * nothing for the rest of the page and a reader always meets it at the start of
- * a cycle. The pause is keyed off `data-inview` being *false*; absent means
- * running, so a failed bundle, a missing IntersectionObserver, or the frames
- * before hydration all leave the animation alone rather than freezing it at
- * nothing-drawn.
- *
- * ## What never depends on any of this
- *
- * The rule's default state is FULLY DRAWN, and the glyphs' default state is the
- * same muted grey as the numerals. A reader who asked for less motion, an engine
- * that ignores the keyframes, a script that never loads — all get a finished red
- * rule and a legible set of stages. The motion is the enhancement; the completed
- * line is the baseline.
- *
- * That is also why the animation lives inside `prefers-reduced-motion:
- * no-preference` rather than relying on a global reduce override: such an
- * override clamps duration and iteration count, which here would land the line
- * on its last keyframe — retracted to nothing — and leave it there.
+ * Below 1181px wide, or under 700px tall, the page scrolls naturally: eight
+ * trades cannot be made legible on one phone screen, and pretending otherwise
+ * would mean unreadable type or hidden trades.
  */
-.portal-world .process-rail {
-  /*
-   * One cycle: the line draws across the rail, holds, retracts off the far end,
-   * then rests before going again. Slow on purpose. This is a five-step process
-   * beside body copy, not a loading spinner — anything under about five seconds
-   * reads as agitation in the corner of the eye while someone is trying to read
-   * the stage they are on.
-   */
-  --rail-cycle: 7s;
-  /* Set per instance in ProcessSteps; the fallback keeps this file standalone. */
-  --rail-count: 5;
-}
-
-.portal-world .process-rail__step {
-  /*
-   * When the head of the line arrives at this stage. The draw occupies the first
-   * 60% of the cycle and covers the full width, so a stage sitting at fraction
-   * i/(n-1) along the rail is reached at 60% x that fraction. `max()` keeps a
-   * one-step rail from dividing by zero.
-   */
-  --rail-delay: calc(var(--rail-cycle) * 0.6 * var(--rail-index) / max(var(--rail-count) - 1, 1));
-}
-
-.portal-world .process-rail__progress {
-  transform: scaleY(1);
-  transform-origin: top center;
-}
-
-@media (min-width: 1024px) {
-  .portal-world .process-rail__progress {
-    transform: scaleX(1);
-    transform-origin: left center;
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .portal-world .process-rail__progress {
-    /*
-     * Linear, and deliberately so. The stage stagger below places each glyph's
-     * flare at the moment the head of the line reaches its column, which is
-     * arithmetic done against a constant speed — ease the draw and the highlight
-     * drifts away from the line that is supposed to be causing it.
-     */
-    animation: apmg-rail-run-y var(--rail-cycle) linear infinite;
+@media (min-width: 1181px) and (min-height: 700px) {
+  .portal-world {
+    --util-h: 40px;
+    --screen: calc(100svh - var(--hdr-h));
   }
 
-  .portal-world .process-rail__marker {
-    animation: apmg-rail-marker var(--rail-cycle) ease-out infinite;
-    animation-delay: var(--rail-delay);
+  /* Snapping lives on the document, and only on the customer host: the
+     console preview scrolls inside the dashboard's own pane. */
+  html:has(.portal-snap) {
+    scroll-snap-type: y mandatory;
   }
 
-  .portal-world .process-rail__glyph {
-    animation: apmg-rail-glyph var(--rail-cycle) ease-out infinite;
-    animation-delay: var(--rail-delay);
+  .portal-world .util {
+    scroll-snap-align: start;
   }
 
-  @media (min-width: 1024px) {
-    .portal-world .process-rail__progress {
-      animation-name: apmg-rail-run-x;
-    }
+  .portal-world .first-screen {
+    display: flex;
+    flex-direction: column;
+    height: calc(100svh - var(--util-h) - var(--hdr-h));
+    min-height: fit-content;
   }
 
-  /*
-   * Off screen: frozen where it stands, not reset. Blunt on purpose — the line,
-   * the markers and every moving part inside every glyph have to stop on the
-   * same frame, and nothing inside this rail animates that should not.
-   */
-  .portal-world [data-inview="false"] .process-rail,
-  .portal-world [data-inview="false"] .process-rail * {
-    animation-play-state: paused;
-  }
-}
-
-/*
- * The line's run. It grows from the start of the rail, then leaves from the far
- * end rather than collapsing back the way it came — a process does not
- * un-happen. The origin flips at 60%, while the line is at full length and the
- * swap is therefore invisible; `transform-origin` is not interpolated, so it has
- * to change at a keyframe where nothing is moving.
- *
- * The last stretch is empty on purpose. Without it the line restarts the instant
- * it finishes and the section never stops moving.
- */
-@keyframes apmg-rail-run-y {
-  0% {
-    transform: scaleY(0);
-    transform-origin: top center;
-  }
-  60% {
-    transform: scaleY(1);
-    transform-origin: top center;
-  }
-  68% {
-    transform: scaleY(1);
-    transform-origin: bottom center;
-  }
-  88%,
-  100% {
-    transform: scaleY(0);
-    transform-origin: bottom center;
-  }
-}
-
-@keyframes apmg-rail-run-x {
-  0% {
-    transform: scaleX(0);
-    transform-origin: left center;
-  }
-  60% {
-    transform: scaleX(1);
-    transform-origin: left center;
-  }
-  68% {
-    transform: scaleX(1);
-    transform-origin: right center;
-  }
-  88%,
-  100% {
-    transform: scaleX(0);
-    transform-origin: right center;
-  }
-}
-
-/*
- * A stage being reached. Colour only — the numeral and the glyph go red together
- * as the head of the line arrives at their column, then decay back to grey
- * behind it.
- *
- * The flare is over in 3% of the cycle (about 200ms) because the delay above
- * aims at the ARRIVAL, not at the peak: a slower ramp puts the red where the
- * line was a quarter-column ago. The decay is long by comparison — around two
- * stage-widths — so at any moment two or three stages are lit at different
- * strengths and the highlight reads as one thing travelling rather than as five
- * things blinking in turn.
- *
- * Literal hex rather than `theme()`: this file is plain CSS outside Tailwind's
- * pipeline. The two values are ink.muted and brand.600 from tailwind.config.ts.
- */
-@keyframes apmg-rail-marker {
-  0%,
-  100% {
-    color: #6b7075;
-  }
-  3%,
-  26% {
-    color: #c8102e;
-  }
-  42% {
-    color: #6b7075;
-  }
-}
-
-/*
- * The glyph's own nudge, on the same delay. Only the glyph moves: lifting the
- * numeral too would take it off the rule it is standing on, and that
- * relationship is the whole reason the rail is drawn this way.
- */
-@keyframes apmg-rail-glyph {
-  0%,
-  100% {
-    transform: none;
-  }
-  3% {
-    transform: translateY(-3px) scale(1.12);
-  }
-  15% {
-    transform: none;
-  }
-}
-
-/*
- * The parts inside a glyph.
- *
- * Each stage acts itself out as the line reaches it: the message writes, the pin
- * drops, the quote is set down, the roller runs, the key turns. They all start
- * from `--rail-delay`, so a glyph performs at the moment the red line arrives
- * underneath it, and they run about two and a half seconds — long enough to be
- * watched rather than noticed.
- *
- * ## Every one of them ends where it started
- *
- * This is the rule that makes the whole thing loopable. A draw-on that finishes
- * DRAWN has to snap back to EMPTY at the loop boundary, and because each stage
- * is delayed by a different amount that snap would land at a different point in
- * every column. So nothing here finishes anywhere: the transforms all return to
- * identity, and the writing sweeps by a whole dash period — `1 1` on a path
- * normalised to `pathLength: 1`, moved two units, which is two full periods back
- * to the identical pattern. The stroke is eaten off one end and laid back on
- * from that same end, and the keyframe it lands on is pixel-for-pixel the
- * keyframe it left.
- *
- * It is also why the resting state needs no declaration of its own: at rest the
- * offset is 0 and every path is simply, completely drawn.
- */
-.portal-world .process-rail__glyph .glyph-write {
-  stroke-dasharray: 1 1;
-  stroke-dashoffset: 0;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .portal-world .process-rail__glyph .glyph-write {
-    animation: apmg-glyph-write var(--rail-cycle) cubic-bezier(0.5, 0, 0.5, 1) infinite;
-    /* `--glyph-beat` is set per part, for a second line that follows the first
-       rather than racing it. */
-    animation-delay: calc(var(--rail-delay) + var(--glyph-beat, 0s));
+  .portal-world .hero {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-block: clamp(36px, 6svh, 72px);
   }
 
-  .portal-world .process-rail__glyph .glyph-drop {
-    animation: apmg-glyph-drop var(--rail-cycle) cubic-bezier(0.33, 1, 0.68, 1) infinite;
-    animation-delay: var(--rail-delay);
+  .portal-world .hero-col {
+    gap: clamp(18px, 3svh, 28px);
   }
 
-  .portal-world .process-rail__glyph .glyph-roll {
-    animation: apmg-glyph-roll var(--rail-cycle) cubic-bezier(0.45, 0, 0.55, 1) infinite;
-    animation-delay: var(--rail-delay);
+  .portal-world .hero-title {
+    font-size: clamp(40px, min(5vw, 8.4svh), 70px);
   }
 
-  .portal-world .process-rail__glyph .glyph-turn {
-    /* The centre of the key's bow: it turns the way a key in a lock does, around
-       its handle, not around the corner of the box. */
-    transform-origin: 17px 7px;
-    animation: apmg-glyph-turn var(--rail-cycle) cubic-bezier(0.65, 0, 0.35, 1) infinite;
-    animation-delay: var(--rail-delay);
+  .portal-world .screen {
+    display: flex;
+    flex-direction: column;
+    height: var(--screen);
+    min-height: fit-content;
+    padding-block: 36px 28px;
+    scroll-snap-align: start;
+    scroll-margin-top: var(--hdr-h);
+  }
+
+  /* Services: the grid takes every pixel under the heading in two equal rows,
+     and each tile's photograph takes whatever its text leaves. */
+  .portal-world .tiles {
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-rows: repeat(2, minmax(0, 1fr));
+    margin-top: 24px;
+  }
+
+  .portal-world .tile-photo {
+    flex: 1 1 auto;
+    min-height: 0;
+    aspect-ratio: auto;
+  }
+
+  .portal-world .tile-body {
+    padding: 14px 18px 16px;
+    gap: 4px;
+  }
+
+  .portal-world .tile-title {
+    font-size: 19px;
+  }
+
+  /* How we work: the steps take the middle, the commitments the foot. */
+  .portal-world .steps {
+    margin-top: 28px;
+  }
+
+  .portal-world .step {
+    gap: 8px;
+    padding-top: 16px;
+  }
+
+  .portal-world .step-title {
+    font-size: 19px;
+  }
+
+  .portal-world .step-copy,
+  .portal-world .hold-lede,
+  .portal-world .hold-item p {
+    font-size: 14px;
+    line-height: 1.55;
+  }
+
+  .portal-world .hold {
+    margin-top: clamp(32px, 6svh, 64px);
+    padding-top: 22px;
+  }
+
+  /* Clear of the chat launcher, which is fixed over the bottom-right corner
+     and would otherwise sit on the last column's text on shorter screens. */
+  .portal-world .hold-list {
+    padding-right: 16px;
+  }
+
+  /* Reviews: the track takes the height, and the cards stretch to it. */
+  .portal-world .reviews-track {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-top: 24px;
+  }
+
+  .portal-world .review {
+    padding: 24px;
+    gap: 14px;
+  }
+
+  .portal-world .review-quote {
+    font-size: 16px;
+  }
+
+  /* Team: one row of eight, and the crew photograph takes what is left. */
+  .portal-world .team-photo {
+    flex: 1 1 auto;
+    min-height: 160px;
+    aspect-ratio: auto;
+    margin-top: 24px;
+  }
+
+  .portal-world .roster {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+    gap: 12px;
+    margin-top: 16px;
+  }
+
+  .portal-world .person-body {
+    padding: 10px 12px 12px;
+  }
+
+  .portal-world .person-name {
+    font-size: 16px;
+  }
+
+  .portal-world .person-role {
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .portal-world .person-link {
+    padding-top: 6px;
+    font-size: 13px;
+  }
+
+  /* Enquiry: a grid, not a column, and a little tighter so the whole form and
+     its consent fit one screen. */
+  .portal-world .enquiry.screen {
+    display: grid;
+    align-content: center;
+    margin-top: 0;
+    padding-block: 32px;
+  }
+
+  .portal-world .form {
+    gap: 14px 20px;
+  }
+
+  .portal-world .field-input {
+    min-height: 46px;
+    padding: 11px 14px;
+  }
+
+  .portal-world textarea.field-input {
+    min-height: 88px;
+  }
+
+  .portal-world .consent {
+    padding: 12px 16px;
+  }
+
+  /* The last snap point is the footer's foot, so the opt-out is reachable. */
+  .portal-world .ftr {
+    scroll-snap-align: end;
   }
 }
 
-/*
- * Writing. `-2` is one whole dash period further on: the stroke is eaten away
- * from its start, comes back on from that same start, and lands on a pattern
- * identical to the one it left — so the hold from 40% to 100% is visually the
- * same frame as 0%, and the loop has no seam.
- *
- * The midpoint at 16% rather than half way is what makes it read as writing
- * rather than as a wiper. Clearing takes 0.6s; setting the stroke back down
- * takes nearly 1.7s, and it is the slow half that the eye follows.
- */
-@keyframes apmg-glyph-write {
-  0%,
-  7% {
-    stroke-dashoffset: 0;
-  }
-  16% {
-    stroke-dashoffset: -1;
-  }
-  40%,
-  100% {
-    stroke-dashoffset: -2;
-  }
-}
-
-/*
- * The pin lifts, drops, and settles with one small bounce. Four pixels of lift,
- * not six: the viewBox clips, and the head of the pin is already within a pixel
- * of the top of it.
- */
-@keyframes apmg-glyph-drop {
-  0%,
-  6% {
-    transform: translateY(0);
-  }
-  15% {
-    transform: translateY(-4px);
-  }
-  25% {
-    transform: translateY(0);
-  }
-  29% {
-    transform: translateY(-1.5px);
-  }
-  34%,
-  100% {
-    transform: translateY(0);
-  }
-}
-
-/*
- * One pass of the roller: a short pull back, then a long push forward. Timed
- * against `apmg-glyph-write` on the band above it — the roller is fully drawn
- * back at 16%, the moment the band is at its emptiest, and the two then travel
- * forward together so the paint appears BEHIND the sleeve rather than in front
- * of it.
- */
-@keyframes apmg-glyph-roll {
-  0%,
-  7% {
-    transform: translateX(0);
-  }
-  16% {
-    transform: translateX(-3.5px);
-  }
-  40%,
-  100% {
-    transform: translateX(0);
-  }
-}
-
-/* The key turning, held at the end of its throw before it comes back. */
-@keyframes apmg-glyph-turn {
-  0%,
-  7% {
-    transform: rotate(0deg);
-  }
-  19%,
-  31% {
-    transform: rotate(-24deg);
-  }
-  44%,
-  100% {
-    transform: rotate(0deg);
-  }
+/* Programmatic focus targets (the skip link's <main>, sections reached from
+   the nav) take focus so the next Tab continues from there; the region itself
+   needs no ring. */
+.portal-world .portal-main:focus,
+.portal-world [tabindex="-1"]:focus {
+  outline: none;
 }

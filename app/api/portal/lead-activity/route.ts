@@ -154,6 +154,11 @@ type LeadInfo = {
 const LEAD_COLS = "id,name,category,bing_maps_url,source,contact_name,contact_title";
 const LEAD_COLS_LEGACY = "id,name,category,bing_maps_url";
 
+/** The same fields off saved_hot_leads (supabase/saved-hot-leads.sql) — the
+ *  copy every 60+ lead leaves behind, so a hot lead whose folder was deleted
+ *  still has a name here. */
+const SAVED_COLS = "lead_id,name,category,bing_maps_url,source,contact_name,contact_title";
+
 type SuppressionRow = {
   email?: unknown;
   lead_id?: unknown;
@@ -242,10 +247,21 @@ function totalOf(res: Response): number {
  * through isUuid, so comma-joining them into the in.() filter is both safe
  * (uuids never need PostgREST quoting) and bounded well inside URL limits.
  */
+const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+function toLeadInfo(row: LeadRow): LeadInfo {
+  return {
+    name: text(row.name),
+    category: text(row.category),
+    source: leadSource(text(row.bing_maps_url), text(row.source)),
+    contactName: text(row.contact_name),
+    contactTitle: text(row.contact_title),
+  };
+}
+
 async function lookupLeadNames(base: string, key: string, ids: string[]): Promise<Map<string, LeadInfo>> {
   const out = new Map<string, LeadInfo>();
   if (ids.length === 0) return out;
-  const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
   try {
     const query = (cols: string) => restGet(base, key, `leads?select=${cols}&id=in.(${ids.join(",")})`);
     let res = await query(LEAD_COLS);
@@ -265,16 +281,38 @@ async function lookupLeadNames(base: string, key: string, ids: string[]): Promis
     const rows = (await res.json().catch(() => [])) as LeadRow[];
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!row || !isUuid(row.id)) continue;
-      out.set(row.id, {
-        name: text(row.name),
-        category: text(row.category),
-        source: leadSource(text(row.bing_maps_url), text(row.source)),
-        contactName: text(row.contact_name),
-        contactTitle: text(row.contact_title),
-      });
+      out.set(row.id, toLeadInfo(row));
     }
   } catch (e) {
     console.error("[portal/lead-activity] leads lookup failed:", e);
+  }
+  return out;
+}
+
+/**
+ * The saved copies of these leads, for the ones the leads table no longer
+ * holds. Best-effort like the leads lookup — and quiet when the table is
+ * missing, since that only means saved-hot-leads.sql hasn't been run yet.
+ */
+async function lookupSavedHotLeads(base: string, key: string, ids: string[]): Promise<Map<string, LeadInfo>> {
+  const out = new Map<string, LeadInfo>();
+  if (ids.length === 0) return out;
+  try {
+    const res = await restGet(base, key, `saved_hot_leads?select=${SAVED_COLS}&lead_id=in.(${ids.join(",")})`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      if (!isMissingPortalTable(res.status, detail)) {
+        console.error(`[portal/lead-activity] saved_hot_leads lookup ${res.status}:`, detail.slice(0, 500));
+      }
+      return out;
+    }
+    const rows = (await res.json().catch(() => [])) as (LeadRow & { lead_id?: unknown })[];
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!row || !isUuid(row.lead_id)) continue;
+      out.set(row.lead_id, toLeadInfo(row));
+    }
+  } catch (e) {
+    console.error("[portal/lead-activity] saved_hot_leads lookup failed:", e);
   }
   return out;
 }
@@ -453,11 +491,14 @@ export async function GET(req: Request): Promise<Response> {
         .filter((id): id is string => id !== null && !trailIdSet.has(id)),
     ),
   ];
-  const [trailInfo, unsubInfo] = await Promise.all([
+  // The saved copies are read alongside, not after, so a folder-deleted hot
+  // lead costs no extra round trip; the live leads row wins where both exist.
+  const [trailInfo, unsubInfo, savedInfo] = await Promise.all([
     lookupLeadNames(target.base, target.key, trailIds),
     lookupLeadNames(target.base, target.key, unsubIds),
+    lookupSavedHotLeads(target.base, target.key, trailIds),
   ]);
-  const leadInfo = new Map([...trailInfo, ...unsubInfo]);
+  const leadInfo = new Map([...savedInfo, ...trailInfo, ...unsubInfo]);
 
   const leads: LeadActivity[] = keptLeads.map(([leadId, bucket]) => {
     const info = leadInfo.get(leadId);
