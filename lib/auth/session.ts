@@ -15,7 +15,7 @@ import { isRole, type Role } from "@/lib/rbac/roles";
 export const SESSION_COOKIE = "apmg_session";
 /** Read by the root layout to pick the pre-paint theme for a role. */
 export const THEME_SEED_COOKIE = "apmg-theme-seed";
-export const SESSION_TTL_SECONDS = 60 * 60 * 12; // 12 hours
+export const SESSION_TTL_SECONDS = 60 * 60 * 24 * 30; // 30 days
 
 export interface SessionClaims {
   email: string;

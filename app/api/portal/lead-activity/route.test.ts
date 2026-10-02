@@ -28,8 +28,8 @@ import { GET } from "./route";
 const LEAD_ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_LEAD = "22222222-2222-4222-8222-222222222222";
 
-function req(): Request {
-  return new Request("http://localhost/api/portal/lead-activity", {
+function req(query = ""): Request {
+  return new Request(`http://localhost/api/portal/lead-activity${query}`, {
     headers: {
       origin: "http://localhost",
       host: "localhost",
@@ -456,5 +456,158 @@ describe("GET /api/portal/lead-activity — hot leads whose folder was deleted",
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.leads[0]).toMatchObject({ leadId: LEAD_ID, business: null, category: "Childcare" });
+  });
+});
+
+describe("GET /api/portal/lead-activity — warm false positives", () => {
+  const SCANNER_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.7444.175 Safari/537.36";
+  const REAL_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36";
+  const MAC_UA =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
+  const PDF = "https://db.test/storage/v1/object/public/sector-assets/education.pdf?v=1";
+  const HOT_LEAD = "33333333-3333-4333-8333-333333333333";
+  const MIXED_LEAD = "44444444-4444-4444-8444-444444444444";
+  const BURST_LEAD = "55555555-5555-4555-8555-555555555555";
+
+  type Row = ReturnType<typeof row>;
+  const row = (lead_id: string, event: string, ua: string | null, created_at: string, destination?: string) => ({
+    event,
+    props:
+      event === "portal_service_open"
+        ? { service: "plumbing" }
+        : event === "attribution_click"
+          ? { destination: destination ?? "/portal" }
+          : {},
+    lead_id,
+    campaign: null,
+    category: null,
+    ua,
+    created_at,
+  });
+
+  /** Newest-first, as PostgREST answers the attributed window:
+   *  LEAD_ID    — Warm, forged agent on every row        → false positive
+   *  BURST_LEAD — Warm, normal agent, both links in 40ms → false positive
+   *  OTHER_LEAD — Warm, a real browser                   → real
+   *  HOT_LEAD   — opened a service, forged agent         → real: only Warm is flagged
+   *  MIXED_LEAD — Warm, one forged visit + one real one  → real: not scanner-only */
+  const TRAILS: Row[] = [
+    row(LEAD_ID, "portal_view", SCANNER_UA, "2026-09-30T01:00:05Z"),
+    row(LEAD_ID, "attribution_click", SCANNER_UA, "2026-09-30T01:00:01Z"),
+    row(BURST_LEAD, "portal_view", MAC_UA, "2026-09-29T12:00:08Z"),
+    row(BURST_LEAD, "attribution_click", MAC_UA, "2026-09-29T12:00:00.040Z", PDF),
+    row(BURST_LEAD, "attribution_click", MAC_UA, "2026-09-29T12:00:00Z"),
+    row(OTHER_LEAD, "portal_view", REAL_UA, "2026-09-29T01:00:05Z"),
+    row(OTHER_LEAD, "attribution_click", REAL_UA, "2026-09-29T01:00:01Z"),
+    row(HOT_LEAD, "portal_service_open", SCANNER_UA, "2026-09-28T01:00:09Z"),
+    row(HOT_LEAD, "portal_view", SCANNER_UA, "2026-09-28T01:00:05Z"),
+    row(MIXED_LEAD, "portal_view", REAL_UA, "2026-09-27T09:00:00Z"),
+    row(MIXED_LEAD, "attribution_click", SCANNER_UA, "2026-09-27T01:00:01Z"),
+  ];
+
+  /** The saved tickbox as app_settings answers it: a value, absent, or down. */
+  type Saved = "true" | "false" | "absent" | "error";
+
+  function stubTrails(opts: { saved?: Saved; trails?: Row[] } = {}) {
+    const saved = opts.saved ?? "absent";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        calls.push(url);
+        if (url.includes("app_settings?")) {
+          if (saved === "error") return new Response("boom", { status: 500 });
+          return Response.json(saved === "absent" ? [] : [{ value: saved }]);
+        }
+        if (url.includes("portal_events") && url.includes("lead_id=not.is.null")) {
+          return Response.json(opts.trails ?? TRAILS);
+        }
+        if (url.includes("email_suppression")) {
+          return new Response("[]", { status: 200, headers: { "content-range": "*/0" } });
+        }
+        return Response.json([]);
+      }),
+    );
+  }
+
+  const ALL = [LEAD_ID, BURST_LEAD, OTHER_LEAD, HOT_LEAD, MIXED_LEAD];
+  type Lead = { leadId: string; warmFalsePositive?: boolean };
+  const ids = (body: { leads: Lead[] }) => body.leads.map((l) => l.leadId);
+  const flagged = (body: { leads: Lead[] }) => body.leads.filter((l) => l.warmFalsePositive).map((l) => l.leadId);
+  const settingsReads = () => calls.filter((u) => u.includes("app_settings?")).length;
+
+  it("asks PostgREST for each row's agent", async () => {
+    stubTrails();
+    await GET(req("?view=telemetry"));
+    expect(calls.find((u) => u.includes("lead_id=not.is.null"))).toContain(",ua,");
+  });
+
+  it("flags the false positives and still sends them, so the page can hide them without a fetch", async () => {
+    stubTrails({ saved: "true" });
+    const body = await (await GET(req("?view=telemetry"))).json();
+    expect(ids(body)).toEqual(ALL);
+    expect(flagged(body)).toEqual([LEAD_ID, BURST_LEAD]);
+    expect(body.warmFalsePositives).toBe(2);
+  });
+
+  it("reads the saved tickbox only when the page asks for it", async () => {
+    stubTrails({ saved: "true" });
+    const polled = await (await GET(req("?view=telemetry"))).json();
+    expect(polled).not.toHaveProperty("hideWarmFalsePositives");
+    expect(settingsReads()).toBe(0);
+
+    const first = await (await GET(req("?view=telemetry&settings=1"))).json();
+    expect(first.hideWarmFalsePositives).toBe(true);
+    expect(settingsReads()).toBe(1);
+  });
+
+  it("reads an absent setting as off", async () => {
+    stubTrails({ saved: "absent" });
+    const body = await (await GET(req("?view=telemetry&settings=1"))).json();
+    expect(body.hideWarmFalsePositives).toBe(false);
+  });
+
+  it("says the setting is unknown, rather than off, when it can't be read", async () => {
+    stubTrails({ saved: "error" });
+    const body = await (await GET(req("?view=telemetry&settings=1"))).json();
+    expect(body.hideWarmFalsePositives).toBeNull();
+    expect(ids(body)).toEqual(ALL);
+  });
+
+  it("keeps a full page of real leads however many false positives are newer", async () => {
+    const id = (n: number) => `${n.toString(16).padStart(8, "0")}-0000-4000-8000-000000000000`;
+    const at = (n: number) => new Date(Date.parse("2026-09-30T00:00:00Z") - n * 60_000).toISOString();
+    const trails: Row[] = [];
+    // 150 scanner leads, all newer than 120 real ones.
+    for (let n = 0; n < 150; n++) trails.push(row(id(n), "portal_view", SCANNER_UA, at(n)));
+    for (let n = 150; n < 270; n++) trails.push(row(id(n), "portal_view", REAL_UA, at(n)));
+    stubTrails({ trails });
+    const body = await (await GET(req("?view=telemetry"))).json();
+
+    expect(body.leads).toHaveLength(200);
+    expect(flagged(body)).toHaveLength(100);
+    expect(body.warmFalsePositives).toBe(150);
+    // Unticked, the page shows the first 100 of the merge: the newest 100 overall.
+    expect(ids(body).slice(0, 100)).toEqual(Array.from({ length: 100 }, (_, n) => id(n)));
+    // Ticked, it shows the newest 100 real leads.
+    expect(body.leads.filter((l: Lead) => !l.warmFalsePositive).map((l: Lead) => l.leadId)).toEqual(
+      Array.from({ length: 100 }, (_, n) => id(n + 150)),
+    );
+    // 200 ids go to the leads lookups in chunks, never one oversized in.() filter.
+    const lookups = calls.filter((u) => u.includes("/leads?") || u.includes("saved_hot_leads?"));
+    expect(lookups).toHaveLength(4);
+    for (const u of lookups) expect(decodeURIComponent(u).split(",").length).toBeLessThanOrEqual(110);
+  });
+
+  it("leaves the other readers exactly as they were", async () => {
+    stubTrails({ saved: "true" });
+    const body = await (await GET(req("?settings=1"))).json();
+    expect(ids(body)).toEqual(ALL);
+    expect(flagged(body)).toEqual([]);
+    expect(body).not.toHaveProperty("hideWarmFalsePositives");
+    expect(body).not.toHaveProperty("warmFalsePositives");
+    expect(settingsReads()).toBe(0);
   });
 });

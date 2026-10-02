@@ -1151,18 +1151,25 @@
   overflow: hidden;
 }
 
+/* In CSS rather than inline so the one-screen layout below can move it. */
+.portal-world .team-photo .fill-img {
+  object-position: 50% 62%;
+}
+
+/* Seventeen people: six across leaves a short last row of five rather than a
+   lone orphan, and keeps a wide-but-short window to three rows. */
 .portal-world .roster {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 24px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 20px;
   margin: 24px 0 0;
   padding: 0;
   list-style: none;
 }
 
-/* Portrait-led, at card width. The headshots were taken in front of the APMG
-   sign; at thumbnail size that backdrop broke into letter fragments, at this
-   size it reads as the company's own signage behind its own people. */
+/* Portrait-led, at card width. The headshots are one studio set against the
+   same soft office backdrop, so the row reads as one team even when it gets
+   down to thumbnail size. */
 .portal-world .person {
   display: flex;
   flex-direction: column;
@@ -1679,7 +1686,7 @@
   }
 
   .portal-world .roster {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 16px;
   }
 
@@ -1697,6 +1704,10 @@
 @media (max-width: 900px) {
   .portal-world .hdr-actions .tel {
     display: none;
+  }
+
+  .portal-world .roster {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
 
@@ -2025,22 +2036,41 @@
     font-size: 16px;
   }
 
-  /* Team: one row of eight, and the crew photograph takes what is left. */
+  /* Team: two rows of nine (the second one short), and the crew photograph
+     takes what is left. On a laptop that can be a thin band, so it is
+     anchored on the line of faces (about a third of the way down the
+     photograph) instead of the bodies; a band of shirts and shorts with the
+     heads cropped off is worse than no photograph at all. */
   .portal-world .team-photo {
     flex: 1 1 auto;
-    min-height: 160px;
+    min-height: 96px;
     aspect-ratio: auto;
     margin-top: 24px;
   }
 
+  .portal-world .team-photo .fill-img {
+    object-position: 50% 34%;
+  }
+
   .portal-world .roster {
-    grid-template-columns: repeat(8, minmax(0, 1fr));
+    grid-template-columns: repeat(9, minmax(0, 1fr));
     gap: 12px;
     margin-top: 16px;
   }
 
+  /* 3:2 rather than square: the headshots have their headroom at the top, so
+     this only drops shirt, and over two rows it is what lets 1280x800 hold
+     the whole team on one screen. */
+  .portal-world .person-photo {
+    aspect-ratio: 3 / 2;
+  }
+
+  .portal-world .person-photo .fill-img {
+    object-position: 50% 0%;
+  }
+
   .portal-world .person-body {
-    padding: 10px 12px 12px;
+    padding: 8px 10px 10px;
   }
 
   .portal-world .person-name {

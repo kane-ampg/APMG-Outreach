@@ -1,9 +1,12 @@
+import { LEAD_ACTIVITY_MAX_LEADS } from "@/lib/data/leadActivity";
+import { leadScore, scoreBand } from "@/lib/data/leadScore";
 import {
   isMissingLinkedInColumn,
   isUuid,
   requireLiveSupabase,
   sameOrigin,
   supabaseTarget,
+  SETTING_TELEMETRY_HIDE_WARM_FALSE_POSITIVES,
 } from "@/lib/pipeline/server";
 import { leadSource, type LeadSource } from "@/lib/pipeline/source";
 import {
@@ -19,6 +22,7 @@ import {
   type SourcedVisitorActivity,
   type UnsubscribedPerson,
 } from "@/lib/portal/server";
+import { isScannerOnlyTrail, type ScanRow } from "@/lib/portal/scannerTrail";
 
 // GET /api/portal/lead-activity — the per-lead click stream behind the admin
 // Telemetry tab: for every ATTRIBUTED lead (someone who clicked the tracked
@@ -48,8 +52,9 @@ export const runtime = "nodejs";
 /** Attributed-trail window. PostgREST's max-rows (MAX_ROWS_PER_READ, 1000)
  *  answers this with 1000 rows — the anonymous read below is paged instead. */
 const EVENTS_LIMIT = 2000;
-/** Response caps: the tab is a review surface, not an export. */
-const MAX_LEADS = 100;
+/** Response caps: the tab is a review surface, not an export. The Telemetry
+ *  view sends up to MAX_LEADS of each kind (real and warm false positive). */
+const MAX_LEADS = LEAD_ACTIVITY_MAX_LEADS;
 const MAX_VISITORS = 50;
 const MAX_EVENTS_PER_LEAD = 50;
 /** Opt-out rows returned. The KPI count comes from count=exact, so the cap
@@ -81,7 +86,7 @@ const ANON_PORTAL_EVENT_NAMES = new Set([
  *  summary route so both readers see the same trail. */
 const ATTRIBUTED_EVENT_NAMES = new Set<string>(CUSTOMER_JOURNEY_EVENTS);
 const ATTRIBUTED_QUERY =
-  `portal_events?select=event,props,lead_id,campaign,category,created_at` +
+  `portal_events?select=event,props,lead_id,campaign,category,ua,created_at` +
   `&lead_id=not.is.null&event=in.(${[...ATTRIBUTED_EVENT_NAMES].join(",")})` +
   `&order=created_at.desc&limit=${EVENTS_LIMIT}`;
 
@@ -109,6 +114,7 @@ type AttributedRow = {
   lead_id: string | null;
   campaign: string | null;
   category: string | null;
+  ua?: string | null;
   created_at: string;
 };
 
@@ -177,7 +183,39 @@ type LeadBucket = {
   lastSeen: string;
   newestFirst: LeadActivityEvent[];
   counts: LeadActivityCounts;
+  /** every row in the window (not just the visible 50), for the scanner check */
+  scanRows: ScanRow[];
 };
+
+/**
+ * A WARM FALSE POSITIVE: a lead that scores Warm (reached the portal, opened
+ * no service, sent no enquiry) on a trail where every visit was a scanner —
+ * a forged browser agent, or both email links opened inside two seconds
+ * (lib/portal/scannerTrail). That is the shape a mail-gateway sandbox leaves
+ * when it detonates the tracked links, and it is the bulk of the Warm band.
+ * Hot and enquired leads are never caught here, however they look.
+ */
+function isWarmFalsePositive(bucket: LeadBucket): boolean {
+  return scoreBand(leadScore(bucket)) === "warm" && isScannerOnlyTrail(bucket.scanRows);
+}
+
+/** The saved tickbox, or null when app_settings couldn't be read — "unknown"
+ *  is not "off", so the page keeps asking rather than adopting it. */
+async function readHideWarmSetting(base: string, key: string): Promise<boolean | null> {
+  try {
+    const res = await restGet(
+      base,
+      key,
+      `app_settings?key=eq.${SETTING_TELEMETRY_HIDE_WARM_FALSE_POSITIVES}&select=value&limit=1`,
+    );
+    if (!res.ok) return null;
+    const rows = (await res.json().catch(() => null)) as Array<{ value?: unknown }> | null;
+    if (!Array.isArray(rows)) return null;
+    return rows[0]?.value === "true";
+  } catch {
+    return null;
+  }
+}
 
 /** Empty payload spread into every non-happy-path response so the client
  *  always gets the full shape (never mutated, so sharing it is safe). */
@@ -243,9 +281,10 @@ function totalOf(res: Response): number {
  * `business` stays null — nothing this route renders may depend on the leads
  * table still holding the row.
  *
- * Callers pass at most MAX_LEADS / MAX_UNSUBSCRIBES ids, and each id has been
- * through isUuid, so comma-joining them into the in.() filter is both safe
- * (uuids never need PostgREST quoting) and bounded well inside URL limits.
+ * Callers pass at most MAX_LEADS / MAX_UNSUBSCRIBES ids (inChunks splits
+ * the Telemetry view's longer list), and each id has been through isUuid, so
+ * comma-joining them into the in.() filter is both safe (uuids never need
+ * PostgREST quoting) and bounded well inside URL limits.
  */
 const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
 
@@ -317,6 +356,19 @@ async function lookupSavedHotLeads(base: string, key: string, ids: string[]): Pr
   return out;
 }
 
+/** Run an id lookup in parallel chunks of MAX_LEADS, so the in.() filter
+ *  never outgrows the URL when the Telemetry view sends both kinds of lead. */
+async function inChunks(
+  ids: string[],
+  lookup: (ids: string[]) => Promise<Map<string, LeadInfo>>,
+): Promise<Map<string, LeadInfo>> {
+  if (ids.length <= MAX_LEADS) return lookup(ids);
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += MAX_LEADS) chunks.push(ids.slice(i, i + MAX_LEADS));
+  const maps = await Promise.all(chunks.map(lookup));
+  return new Map(maps.flatMap((m) => [...m]));
+}
+
 /** Lift one string prop out of the raw jsonb (null for absent/non-string). */
 function propStr(props: Record<string, unknown> | null, key: string): string | null {
   const v = props ? props[key] : undefined;
@@ -327,6 +379,16 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, mode: "live", ...EMPTY, error: "Forbidden." }, { status: 403 });
   }
+  // ?view=telemetry = the Telemetry table's read. Warm false positives are
+  // flagged, and the newest MAX_LEADS of them ride along with the newest
+  // MAX_LEADS real leads, so the page can tick "Hide warm false positives"
+  // either way without a round trip — and hiding refills the table instead
+  // of shrinking it. &settings=1 adds the saved tickbox; the page asks only
+  // until it knows it. Every other reader (Hot Leads, Enquiries, the
+  // nav-badge poller) gets the plain newest-MAX_LEADS list, exactly as before.
+  const params = new URL(req.url).searchParams;
+  const telemetryView = params.get("view") === "telemetry";
+  const wantSettings = telemetryView && params.get("settings") === "1";
 
   const target = supabaseTarget();
   const blocked = requireLiveSupabase("portal/lead-activity");
@@ -350,11 +412,13 @@ export async function GET(req: Request): Promise<Response> {
   let attributedRes: Response;
   let anonRead: RowsRead;
   let unsubRes: Response;
+  let savedHideWarm: boolean | null;
   try {
-    [attributedRes, anonRead, unsubRes] = await Promise.all([
+    [attributedRes, anonRead, unsubRes, savedHideWarm] = await Promise.all([
       restGet(target.base, target.key, ATTRIBUTED_QUERY),
       readAllRows(target.base, target.key, ANON_QUERY),
       countingGet(target.base, target.key, UNSUBSCRIBE_QUERY),
+      wantSettings ? readHideWarmSetting(target.base, target.key) : Promise.resolve(null),
     ]);
   } catch (e) {
     console.error("[portal/lead-activity] fetch to Supabase failed:", e);
@@ -442,10 +506,17 @@ export async function GET(req: Request): Promise<Response> {
         lastSeen: row.created_at,
         newestFirst: [],
         counts: { emailClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0, chatPrompts: 0 },
+        scanRows: [],
       };
       byLead.set(row.lead_id, bucket);
     }
     bucket.firstSeen = row.created_at; // desc order ⇒ the last row seen is the oldest
+    bucket.scanRows.push({
+      event: row.event,
+      ua: row.ua,
+      destination: propStr(row.props, "destination"),
+      ts: row.created_at,
+    });
 
     if (bucket.campaign === null && row.campaign) bucket.campaign = row.campaign;
     if (bucket.category === null && row.category) bucket.category = row.category;
@@ -471,12 +542,37 @@ export async function GET(req: Request): Promise<Response> {
     }
   }
 
+  // Counted across the whole window, so the tickbox can say how many rows it
+  // takes out — not just how many of them fitted in the response.
+  const warmFalsePositiveIds = new Set<string>();
+  if (telemetryView) {
+    for (const [leadId, bucket] of byLead) {
+      if (isWarmFalsePositive(bucket)) warmFalsePositiveIds.add(leadId);
+    }
+  }
+
   // Map insertion order is already lastSeen-desc (the source rows are), but
   // sort explicitly so the response contract doesn't hinge on that accident.
   // PostgREST timestamps are uniform ISO-8601 UTC → string compare orders them.
-  const keptLeads = [...byLead.entries()]
-    .sort((a, b) => (a[1].lastSeen < b[1].lastSeen ? 1 : a[1].lastSeen > b[1].lastSeen ? -1 : 0))
-    .slice(0, MAX_LEADS);
+  const byRecency = (a: [string, LeadBucket], b: [string, LeadBucket]) =>
+    a[1].lastSeen < b[1].lastSeen ? 1 : a[1].lastSeen > b[1].lastSeen ? -1 : 0;
+  const sortedLeads = [...byLead.entries()].sort(byRecency);
+  let keptLeads: [string, LeadBucket][];
+  if (telemetryView) {
+    // The newest MAX_LEADS of each kind, merged back into time order. Ticked,
+    // the page shows the real ones; unticked, the first MAX_LEADS of the merge
+    // — which is exactly the newest MAX_LEADS overall.
+    const real: [string, LeadBucket][] = [];
+    const flagged: [string, LeadBucket][] = [];
+    for (const entry of sortedLeads) {
+      const into = warmFalsePositiveIds.has(entry[0]) ? flagged : real;
+      if (into.length < MAX_LEADS) into.push(entry);
+      if (real.length >= MAX_LEADS && flagged.length >= MAX_LEADS) break;
+    }
+    keptLeads = [...real, ...flagged].sort(byRecency);
+  } else {
+    keptLeads = sortedLeads.slice(0, MAX_LEADS);
+  }
 
   // ── leads lookups for business names (+ category fallback) ───────────────
   // Two id sets — the trails and the opt-outs — resolved as two parallel
@@ -494,9 +590,9 @@ export async function GET(req: Request): Promise<Response> {
   // The saved copies are read alongside, not after, so a folder-deleted hot
   // lead costs no extra round trip; the live leads row wins where both exist.
   const [trailInfo, unsubInfo, savedInfo] = await Promise.all([
-    lookupLeadNames(target.base, target.key, trailIds),
+    inChunks(trailIds, (ids) => lookupLeadNames(target.base, target.key, ids)),
     lookupLeadNames(target.base, target.key, unsubIds),
-    lookupSavedHotLeads(target.base, target.key, trailIds),
+    inChunks(trailIds, (ids) => lookupSavedHotLeads(target.base, target.key, ids)),
   ]);
   const leadInfo = new Map([...savedInfo, ...trailInfo, ...unsubInfo]);
 
@@ -516,6 +612,7 @@ export async function GET(req: Request): Promise<Response> {
       lastSeen: bucket.lastSeen,
       events: bucket.newestFirst.reverse(), // → chronological ASC for the timeline
       counts: bucket.counts,
+      ...(warmFalsePositiveIds.has(leadId) ? { warmFalsePositive: true } : {}),
     };
   });
 
@@ -673,6 +770,8 @@ export async function GET(req: Request): Promise<Response> {
     unsubscribes,
     unsubscribesTotal,
     unsubscribesAvailable,
+    ...(telemetryView ? { warmFalsePositives: warmFalsePositiveIds.size } : {}),
+    ...(wantSettings ? { hideWarmFalsePositives: savedHideWarm } : {}),
   });
 }
 

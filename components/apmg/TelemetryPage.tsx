@@ -30,6 +30,7 @@ import {
 import { cn } from "@/lib/cn";
 import {
   isHiddenEvent,
+  LEAD_ACTIVITY_MAX_LEADS,
   serviceName,
   type ActivityTotals,
   type AnonymousActivity,
@@ -67,8 +68,19 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  * then keeps them live with a silent visible-tab poll (POLL_MS) + an instant
  * refetch on window focus; the Refresh button remains as the loud manual pull:
  *
- *   GET /api/portal/lead-activity → per-lead click trails + anonymous rollup
+ *   GET /api/portal/lead-activity?view=telemetry → per-lead click trails +
+ *                                    anonymous rollup, saved list settings applied
  *   GET /api/portal/summary       → funnel totals for the KPI row
+ *
+ * "Hide warm false positives" is the one saved list setting: a tickbox that
+ * takes out Warm leads whose every click came from a forged browser agent
+ * (lib/portal/scannerUa — mail-gateway sandboxes detonating the link). It is
+ * stored in app_settings (POST /api/portal/telemetry-settings), so it holds
+ * for everyone and on every machine. The route flags those leads and sends
+ * the newest of them alongside the newest real leads, so the page does the
+ * hiding itself: the tickbox is instant both ways, ticking it refills the
+ * table rather than emptying it, and no sort, filter or background refresh
+ * can bring the hidden rows back. The save runs behind the click.
  *
  * The main table is tabbed: the lead-activity list, and the opt-out list —
  * everyone who has unsubscribed, which is the one audience the send route will
@@ -108,6 +120,20 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
+
+/** The lead list re-framing — tickbox, sort, filter, page. The new rows fade
+ *  up in a short cascade. Opacity and transform only, so every frame stays on
+ *  the compositor: no layout work, however many rows swap. Background polls
+ *  never re-key the list, so a refresh never replays it. */
+const LIST_VARIANTS = { hidden: {}, show: { transition: { staggerChildren: 0.01 } } };
+const ROW_VARIANTS = {
+  hidden: { opacity: 0, y: 6 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.2, ease: EASE } },
+};
+const ROW_VARIANTS_REDUCED = {
+  hidden: { opacity: 0 },
+  show: { opacity: 1, transition: { duration: 0.12 } },
+};
 
 /** Silent background refetch cadence — the page is "realtime" by short poll
  *  (the app's grammar everywhere else, e.g. useLeadStats; no websocket infra),
@@ -240,6 +266,9 @@ type LoadState =
       /** false = the opt-out list couldn't be read at all (its migration is
        *  separate), so "0" would be a claim we can't make */
       unsubscribesAvailable: boolean;
+      /** scanner-only Warm leads in the route's event window — more than
+       *  the flagged rows in `leads`, which are only the newest of them */
+      warmFalsePositives: number;
     };
 
 /* ─────────────────────  defensive payload normalisers  ───────────────────── */
@@ -293,7 +322,24 @@ function toLead(v: unknown): LeadActivity | null {
     lastSeen: str(o.lastSeen) ?? events[events.length - 1]?.ts ?? "",
     events,
     counts: toCounts(o.counts),
+    ...(o.warmFalsePositive === true ? { warmFalsePositive: true } : {}),
   };
+}
+
+/** Save the "Hide warm false positives" tickbox to app_settings. Resolves
+ *  null once saved, or the reason it wasn't. */
+async function postHideWarmSetting(hide: boolean): Promise<string | null> {
+  try {
+    const res = await fetch("/api/portal/telemetry-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hideWarmFalsePositives: hide }),
+    });
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+    return res.ok && data?.ok ? null : (data?.error ?? `Couldn't save the setting (${res.status}).`);
+  } catch {
+    return "Network error — the setting wasn't saved.";
+  }
 }
 
 /** Rebuild one source-tagged visitor. The id and source are the row's whole
@@ -706,7 +752,10 @@ const LeadRow = memo(function LeadRow({
   const source = rowSource(lead);
 
   return (
-    <li className="border-t border-border/70 first:border-t-0">
+    <motion.li
+      variants={reduce ? ROW_VARIANTS_REDUCED : ROW_VARIANTS}
+      className="border-t border-border/70 first:border-t-0"
+    >
       {/* Row header: the expand toggle and the delete affordance are SIBLING
           buttons (a button can't nest a button), fused by the flex wrapper. */}
       <div className="flex items-stretch">
@@ -930,7 +979,7 @@ const LeadRow = memo(function LeadRow({
           </motion.div>
         )}
       </AnimatePresence>
-    </li>
+    </motion.li>
   );
 });
 
@@ -1390,6 +1439,8 @@ interface ActivityPayload {
   unsubscribes?: unknown;
   unsubscribesTotal?: unknown;
   unsubscribesAvailable?: unknown;
+  hideWarmFalsePositives?: unknown;
+  warmFalsePositives?: unknown;
   error?: string;
 }
 interface SummaryPayload {
@@ -1428,6 +1479,18 @@ export function TelemetryPage() {
   const [refreshing, setRefreshing] = useState(false);
   /** Access-key field shown when the lead-activity API answers 401. */
   const [keyInput, setKeyInput] = useState("");
+  /** The "Hide warm false positives" tickbox as this page shows it — null
+   *  until the route first reports the saved app_settings value. The page
+   *  applies it to the rows it already holds, so it never waits on a fetch.
+   *  The ref is fetchAll's copy (fetchAll is stable, with [] deps). */
+  const [hideWarm, setHideWarm] = useState<boolean | null>(null);
+  const hideWarmRef = useRef<boolean | null>(null);
+  const [hideError, setHideError] = useState<string | null>(null);
+  /** The value app_settings last confirmed — where a failed save goes back to. */
+  const savedHideRef = useRef<boolean | null>(null);
+  /** A tickbox value still to be saved, and whether a save is running. */
+  const queuedHideRef = useRef<boolean | null>(null);
+  const savingHideRef = useRef(false);
   /** At most ONE row's delete flow is open at a time. */
   const [deleteFlow, setDeleteFlow] = useState<{
     id: string;
@@ -1461,9 +1524,14 @@ export function TelemetryPage() {
       setLoad((prev) =>
         prev.status === "ready" && JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
       );
+    // The saved tickbox rides along only until this page knows it — one
+    // settings read on the first load, none on every poll after.
+    const activityUrl = `/api/portal/lead-activity?view=telemetry${
+      hideWarmRef.current === null ? "&settings=1" : ""
+    }`;
     try {
       const [actRes, sumRes] = await Promise.all([
-        fetch("/api/portal/lead-activity", { cache: "no-store", headers: adminHeaders() }),
+        fetch(activityUrl, { cache: "no-store", headers: adminHeaders() }),
         fetch("/api/portal/summary", { cache: "no-store" }),
       ]);
       const act = (await actRes.json().catch(() => null)) as ActivityPayload | null;
@@ -1498,6 +1566,7 @@ export function TelemetryPage() {
           unsubscribesTotal: 0,
           // No database, so the opt-out list is unknown rather than empty.
           unsubscribesAvailable: false,
+          warmFalsePositives: 0,
         });
         return;
       }
@@ -1534,9 +1603,19 @@ export function TelemetryPage() {
       const unsubscribes = (Array.isArray(act.unsubscribes) ? act.unsubscribes : [])
         .map(toUnsubscribed)
         .filter((u): u is UnsubscribedPerson => u !== null);
+      // First read: adopt the saved tickbox, in the same render as the data,
+      // so a ticked box never flashes the hidden rows. An unreadable setting
+      // stays unknown rather than becoming "off", and the next poll asks again.
+      if (hideWarmRef.current === null && typeof act.hideWarmFalsePositives === "boolean") {
+        hideWarmRef.current = act.hideWarmFalsePositives;
+        savedHideRef.current = act.hideWarmFalsePositives;
+        setHideWarm(act.hideWarmFalsePositives);
+      }
       // Feed the notification store the same data this page renders so the
-      // row dots / nav badge never lag behind what's on screen.
-      ingestLeadActivity(leads);
+      // row dots / nav badge never lag behind what's on screen. The route's
+      // newest-N slice is exactly what the store's own poll reads, so the two
+      // never disagree about which leads exist.
+      ingestLeadActivity(leads.slice(0, LEAD_ACTIVITY_MAX_LEADS));
       settle({
         status: "ready",
         mode: "live",
@@ -1562,6 +1641,7 @@ export function TelemetryPage() {
         // read lower than the rows the table is actually showing either.
         unsubscribesTotal: Math.max(num(act.unsubscribesTotal), unsubscribes.length),
         unsubscribesAvailable: act.unsubscribesAvailable === true,
+        warmFalsePositives: num(act.warmFalsePositives),
       });
     } catch {
       if (mountedRef.current) {
@@ -1609,6 +1689,42 @@ export function TelemetryPage() {
       else next.add(leadId);
       return next;
     });
+  }, []);
+
+  /** Flip the tickbox. The table changes in the same frame — the flagged rows
+   *  are already on the page — and the save to app_settings runs behind it.
+   *  Saves go one at a time and always send the latest click, so fast
+   *  toggling ends on the value the box shows; if that last save fails, the
+   *  box goes back to what is actually saved and says why. */
+  const saveHideWarmFalsePositives = useCallback((hide: boolean) => {
+    hideWarmRef.current = hide;
+    setHideWarm(hide);
+    setPage(0);
+    setHideError(null);
+    queuedHideRef.current = hide;
+    if (savingHideRef.current) return; // the running save picks this value up
+    savingHideRef.current = true;
+    void (async () => {
+      try {
+        while (queuedHideRef.current !== null) {
+          const value = queuedHideRef.current;
+          queuedHideRef.current = null;
+          const error = await postHideWarmSetting(value);
+          if (!mountedRef.current) return;
+          if (error === null) {
+            savedHideRef.current = value;
+          } else if (queuedHideRef.current === null) {
+            const saved = savedHideRef.current ?? !value;
+            hideWarmRef.current = saved;
+            setHideWarm(saved);
+            setPage(0);
+            setHideError(error);
+          }
+        }
+      } finally {
+        savingHideRef.current = false;
+      }
+    })();
   }, []);
 
   /* ── per-row delete flow ─────────────────────────────────────────────── */
@@ -1702,12 +1818,21 @@ export function TelemetryPage() {
   }, [fetchAll]);
 
   const ready = load.status === "ready" ? load : null;
-  const leads = ready?.leads ?? [];
+  const allLeads = ready?.leads;
+  /** The leads the table shows. Ticked: every real lead the route sent.
+   *  Unticked: the route's newest-N list, which is the first N of the merge.
+   *  Both come from rows already on the page, so the tickbox costs no fetch. */
+  const leads = useMemo(() => {
+    const all = allLeads ?? [];
+    return hideWarm ? all.filter((l) => !l.warmFalsePositive) : all.slice(0, LEAD_ACTIVITY_MAX_LEADS);
+  }, [allLeads, hideWarm]);
   const visitors = ready?.visitors ?? [];
   /** Newest-first already (the route orders it) — the opt-out tab shows the
    *  list as recorded, with no re-ranking to choose between. */
   const unsubscribes = ready?.unsubscribes ?? [];
   demoRef.current = ready?.mode === "demo";
+  /** Rows the tickbox takes out — only ever non-zero while it is on. */
+  const hiddenWarm = hideWarm && ready ? ready.warmFalsePositives : 0;
 
   // The table's row set: every attributed lead (they all arrived through the
   // outreach email channel) plus every source-tagged visitor trail. Visitor
@@ -1926,10 +2051,19 @@ export function TelemetryPage() {
   );
 
   // Changing the tab, sort, channel or sector re-frames the list — jump back
-  // to its first page so the top of the new ranking is what's on screen.
+  // to its first page so the top of the new ranking is what's on screen. The
+  // controls reset it in the same click (one render, one animation); this
+  // catches the data-driven changes, like a picked sector disappearing.
   useEffect(() => {
     setPage(0);
   }, [tab, sort, activeChannel, activeSector]);
+
+  /** The list's identity: a new key means a new view, and plays the fade-up.
+   *  The first view the page settles on shows without it (the panel's own
+   *  Reveal already brought it in). */
+  const listKey = `${hideWarm === true}|${sort}|${activeChannel}|${activeSector}|${safePage}`;
+  const firstListKeyRef = useRef<string | null>(null);
+  if (ready && firstListKeyRef.current === null) firstListKeyRef.current = listKey;
 
   // "Last signal" is the freshest trail overall, independent of the current
   // ranking/filter, so it stays a true clock even under "Hottest" or a sector.
@@ -2104,7 +2238,10 @@ export function TelemetryPage() {
               <section className="flex min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10">
                 <PanelTabs
                   tab={tab}
-                  onTab={setTab}
+                  onTab={(t) => {
+                    setTab(t);
+                    setPage(0);
+                  }}
                   counts={{
                     activity: ready ? rows.length : null,
                     // The exact total, not the page cap — and nothing at all
@@ -2122,9 +2259,10 @@ export function TelemetryPage() {
                           : activeSector === ALL_SECTORS && activeChannel === ALL_CHANNELS
                             ? // The route sends only the newest leads, so say so
                               // beside the Leads engaged card that counts them all.
-                              leads.length < ready.totals.engagedLeads
-                              ? `newest ${formatInt(leads.length)} of ${formatInt(ready.totals.engagedLeads)} leads · ${formatInt(visitors.length)} ${visitors.length === 1 ? "visitor" : "visitors"}`
-                              : `${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"} · ${formatInt(totalEvents)} events`
+                              (leads.length < ready.totals.engagedLeads
+                                ? `newest ${formatInt(leads.length)} of ${formatInt(ready.totals.engagedLeads)} leads · ${formatInt(visitors.length)} ${visitors.length === 1 ? "visitor" : "visitors"}`
+                                : `${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"} · ${formatInt(totalEvents)} events`) +
+                              (hiddenWarm > 0 ? ` · ${formatInt(hiddenWarm)} hidden` : "")
                             : `${formatInt(sortedRows.length)} of ${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"}`}
                     </span>
                   }
@@ -2142,7 +2280,7 @@ export function TelemetryPage() {
                           Channel and Sort are segmented controls (few, fixed
                           options); Sector is a dropdown (open-ended — grows
                           with the sectors in the data). */}
-                      {ready && rows.length > 0 && (
+                      {ready && (rows.length > 0 || hiddenWarm > 0) && (
                         <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border px-4 py-2.5">
                           <div
                             className="flex flex-wrap items-center gap-1.5"
@@ -2158,7 +2296,10 @@ export function TelemetryPage() {
                                 type="button"
                                 data-track="telemetry_channel"
                                 data-track-channel={c}
-                                onClick={() => setChannel(c)}
+                                onClick={() => {
+                                  setChannel(c);
+                                  setPage(0);
+                                }}
                                 aria-pressed={activeChannel === c}
                                 className={cn(
                                   "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
@@ -2188,7 +2329,10 @@ export function TelemetryPage() {
                                 type="button"
                                 data-track="telemetry_sort"
                                 data-track-sort={s.id}
-                                onClick={() => setSort(s.id)}
+                                onClick={() => {
+                                  setSort(s.id);
+                                  setPage(0);
+                                }}
                                 aria-pressed={sort === s.id}
                                 className={cn(
                                   "rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
@@ -2220,7 +2364,10 @@ export function TelemetryPage() {
                                 <select
                                   id="telemetry-sector"
                                   value={activeSector}
-                                  onChange={(e) => setSector(e.target.value)}
+                                  onChange={(e) => {
+                                    setSector(e.target.value);
+                                    setPage(0);
+                                  }}
                                   data-track="telemetry_sector"
                                   aria-label="Filter lead activity by sector"
                                   className="h-7 max-w-[13rem] cursor-pointer appearance-none truncate bg-transparent py-0 pl-2.5 pr-7 text-[11px] font-medium text-foreground outline-none"
@@ -2239,6 +2386,37 @@ export function TelemetryPage() {
                               </div>
                             </div>
                           )}
+                          {/* Saved to app_settings, not the browser — so it
+                              holds for every operator on every machine. The
+                              count is what it takes out (or would). */}
+                          <div className="flex flex-wrap items-center gap-2">
+                            <label
+                              className="inline-flex cursor-pointer items-center gap-1.5"
+                              title="Warm leads where every click came from a browser signature no real browser sends — mail-gateway scanners opening the link before anyone reads the email. Saved for everyone."
+                            >
+                              <input
+                                type="checkbox"
+                                checked={hideWarm === true}
+                                disabled={ready.mode === "demo"}
+                                onChange={(e) => saveHideWarmFalsePositives(e.target.checked)}
+                                data-track="telemetry_hide_warm_false_positives"
+                                className="h-3.5 w-3.5 cursor-pointer accent-primary"
+                              />
+                              <span className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+                                Hide warm false positives
+                              </span>
+                              {ready.warmFalsePositives > 0 && (
+                                <span className="tnum font-mono text-[10px] text-foreground/80">
+                                  {formatInt(ready.warmFalsePositives)}
+                                </span>
+                              )}
+                            </label>
+                            {hideError && (
+                              <span role="alert" className="font-mono text-[10px] text-destructive">
+                                {hideError}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       )}
                       {!ready ? (
@@ -2246,7 +2424,11 @@ export function TelemetryPage() {
                       ) : rows.length === 0 ? (
                         <PanelEmpty
                           icon={MousePointerClick}
-                          hint="No activity yet — trails appear the moment a lead opens a tracked outreach email or a visitor arrives through a tagged social link."
+                          hint={
+                            hiddenWarm > 0
+                              ? "Every recent trail is a warm false positive — untick Hide warm false positives to see them."
+                              : "No activity yet — trails appear the moment a lead opens a tracked outreach email or a visitor arrives through a tagged social link."
+                          }
                         />
                       ) : sortedRows.length === 0 ? (
                         <PanelEmpty
@@ -2260,7 +2442,12 @@ export function TelemetryPage() {
                       ) : (
                         <>
                           <LeadTableHead />
-                          <ul>
+                          <motion.ul
+                            key={listKey}
+                            variants={LIST_VARIANTS}
+                            initial={listKey === firstListKeyRef.current ? false : "hidden"}
+                            animate="show"
+                          >
                             {pagedRows.map((lead) => (
                               <LeadRow
                                 key={lead.leadId}
@@ -2284,7 +2471,7 @@ export function TelemetryPage() {
                                 onDeleteConfirm={confirmDelete}
                               />
                             ))}
-                          </ul>
+                          </motion.ul>
                         </>
                       )}
                     </>

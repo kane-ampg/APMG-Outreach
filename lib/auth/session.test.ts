@@ -131,6 +131,6 @@ describe("sessionCookieOptions", () => {
     expect(opts.httpOnly).toBe(true);
     expect(opts.sameSite).toBe("lax");
     expect(opts.path).toBe("/");
-    expect(opts.maxAge).toBe(43200);
+    expect(opts.maxAge).toBe(2592000);
   });
 });

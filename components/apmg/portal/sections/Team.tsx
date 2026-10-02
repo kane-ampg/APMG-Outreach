@@ -9,8 +9,8 @@ import crewPhoto from "@/app/apmgteam.jpg";
  * people a client deals with. Faces, names and roles are the whole point;
  * LinkedIn appears where the person lists one, as a checkable identity.
  *
- * On laptops and desktops it is one screen: the crew photograph takes
- * whatever height the single row of eight portraits leaves it.
+ * On laptops and desktops it aims for one screen: the crew photograph takes
+ * whatever height the two rows of portraits leave it.
  *
  * Presentational only. No funnel contract event fires from here: a face is
  * not a service enquiry. LinkedIn clicks carry the plain
@@ -40,7 +40,6 @@ export function TeamSection() {
           placeholder="blur"
           sizes="(min-width: 1440px) 1312px, 100vw"
           className="fill-img"
-          style={{ objectPosition: "50% 62%" }}
         />
       </div>
 
@@ -56,7 +55,7 @@ export function TeamSection() {
                   alt=""
                   fill
                   placeholder="blur"
-                  sizes="(min-width: 1181px) 160px, (min-width: 721px) 25vw, 50vw"
+                  sizes="(min-width: 1181px) and (min-height: 700px) 140px, (min-width: 1181px) 210px, (min-width: 901px) 17vw, (min-width: 721px) 25vw, 50vw"
                   className="fill-img"
                 />
               </div>

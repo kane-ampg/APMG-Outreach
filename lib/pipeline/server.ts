@@ -119,6 +119,11 @@ export const SETTING_SECTOR_PLAYBOOKS = "sector_playbooks";
  *  wording that was live at the time. Managed from the Legal Documents tab. */
 export const SETTING_LEGAL_DOCS = "legal_docs";
 
+/** app_settings key holding the Telemetry tab's "Hide warm false positives"
+ *  tickbox ("true" = hide; absent or anything else = show). Stored here rather
+ *  than in the browser so the choice holds across machines and sign-ins. */
+export const SETTING_TELEMETRY_HIDE_WARM_FALSE_POSITIVES = "telemetry_hide_warm_false_positives";
+
 /** Public Storage bucket holding the per-sector attachment PDFs (managed from
  *  the Sector Playbooks tab; the send flow attaches them by public URL, which
  *  the n8n Gmail node downloads). */

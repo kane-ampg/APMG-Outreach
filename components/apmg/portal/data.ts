@@ -19,14 +19,23 @@ import photoFlooring from "@/app/services/flooring.png";
 import photoGardening from "@/app/services/gardening.png";
 import photoHandyman from "@/app/services/handyman.png";
 import photoMakeSafe from "@/app/services/make-safe.png";
+import fred from "@/app/team/fred-mollaei.jpg";
 import farbod from "@/app/team/farbod-mollaei.jpg";
 import zac from "@/app/team/zac-karannagoda.jpg";
-import fred from "@/app/team/fred-mollaei.jpg";
-import craig from "@/app/team/craig-billing.jpg";
 import ashley from "@/app/team/ashley-rankin.jpg";
-import simon from "@/app/team/simon-taranek.jpg";
 import chamz from "@/app/team/chamz-abeyratne.jpg";
+import simon from "@/app/team/simon-taranek.jpg";
+import jordan from "@/app/team/jordan-james.jpg";
 import jack from "@/app/team/jack-wilson.jpg";
+import grace from "@/app/team/grace-niksic.jpg";
+import reece from "@/app/team/reece-spadaccini.jpg";
+import kit from "@/app/team/kit-cheong.jpg";
+import kyle from "@/app/team/kyle-woodlock.jpg";
+import ali from "@/app/team/ali-utuk.jpg";
+import omid from "@/app/team/omid-rahmani.jpg";
+import mikayla from "@/app/team/mikayla-mortimer.jpg";
+import nicole from "@/app/team/nicole-chin.jpg";
+import amy from "@/app/team/amy-small.jpg";
 
 /**
  * The portal's content. Every section of the one-page portal (and the
@@ -333,9 +342,12 @@ export interface TeamMember {
   linkedin?: string;
 }
 
-/** The customer-facing roster, most senior first. Moved here from the retired
- *  TeamSection component with the 2026-09-29 one-page rebuild. */
+/** The customer-facing roster, in the order, titles and headshots of
+ *  apmgservices.com.au/about/meet-our-team (synced 2026-10-01). LinkedIn is
+ *  carried only where that page links a real profile; its links for Fred,
+ *  Simon and Jack are placeholders pointing at linkedin.com/feed. */
 export const TEAM: readonly TeamMember[] = [
+  { name: "Fred Mollaei", role: "Founder", photo: fred },
   {
     name: "Farbod Mollaei",
     role: "Managing Director",
@@ -348,25 +360,28 @@ export const TEAM: readonly TeamMember[] = [
     photo: zac,
     linkedin: "https://www.linkedin.com/in/zac-karannagoda-ba8a6368/",
   },
-  { name: "Fred Mollaei", role: "Project Manager", photo: fred },
-  {
-    name: "Craig Billing",
-    role: "Head of Projects",
-    photo: craig,
-    linkedin: "https://www.linkedin.com/in/craig-billing-b2583061/",
-  },
   {
     name: "Ash Rankin",
     role: "Service Manager",
     photo: ashley,
     linkedin: "https://www.linkedin.com/in/ashley-rankin-4bb900255/",
   },
-  { name: "Simon Taranek", role: "Senior Business Development Manager", photo: simon },
   {
     name: "Chamz Abeyratne",
     role: "Human Resources Manager",
     photo: chamz,
     linkedin: "https://www.linkedin.com/in/chamika-a-26a56682/",
   },
+  { name: "Simon Taranek", role: "Senior Business Development Manager", photo: simon },
+  { name: "Jordan James", role: "Business Development Manager", photo: jordan },
   { name: "Jack Wilson", role: "Account Manager — Reactive", photo: jack },
+  { name: "Grace Niksic", role: "Account Manager — Reactive", photo: grace },
+  { name: "Reece Spadaccini", role: "Account Manager — Painting", photo: reece },
+  { name: "Kit Cheong", role: "Estimator", photo: kit },
+  { name: "Kyle Woodlock", role: "Project Supervisor — Commercial", photo: kyle },
+  { name: "Ali Utuk", role: "Project Supervisor — Residential", photo: ali },
+  { name: "Omid Rahmani", role: "Site Supervisor — Painting", photo: omid },
+  { name: "Mikayla Mortimer", role: "Customer Services Assistant", photo: mikayla },
+  { name: "Nicole Chin", role: "Digital Content Creator", photo: nicole },
+  { name: "Amy Small", role: "Procurement Coordinator", photo: amy },
 ];

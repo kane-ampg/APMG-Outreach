@@ -22,6 +22,10 @@
 
 import type { LeadSource } from "@/lib/pipeline/source";
 
+/** The lead-activity route's row cap. Shared so the Telemetry page can rebuild
+ *  the route's "newest N" list itself when it shows the flagged rows again. */
+export const LEAD_ACTIVITY_MAX_LEADS = 100;
+
 /* ───────────────────────────  API contract types  ─────────────────────────── */
 
 /** One click in a lead's trail, chronological ASC within LeadActivity.events.
@@ -54,6 +58,9 @@ export interface LeadActivity {
   lastSeen: string;
   /** chronological ASC, capped to the most recent 50 by the route */
   events: LeadActivityEvent[];
+  /** ?view=telemetry only: a Warm lead whose every visit was a scanner
+   *  (lib/portal/scannerTrail) — the rows "Hide warm false positives" hides */
+  warmFalsePositive?: boolean;
   counts: {
     emailClicks: number;
     portalViews: number;
@@ -124,6 +131,13 @@ export interface LeadActivityResponse {
    *  supabase/unsubscribe.sql, is separate from the portal tables). Zero
    *  unsubscribes and an unreadable list are different facts. */
   unsubscribesAvailable: boolean;
+  /** ?view=telemetry&settings=1 only: the saved "Hide warm false positives"
+   *  tickbox; null = it couldn't be read. Never applied by the route — the
+   *  page hides the flagged rows itself, so the tickbox is instant. */
+  hideWarmFalsePositives?: boolean | null;
+  /** ?view=telemetry only: scanner-only Warm leads in the event window,
+   *  counted whether or not they're hidden */
+  warmFalsePositives?: number;
 }
 
 /** The four KPI-row totals the page reads off GET /api/portal/summary. */

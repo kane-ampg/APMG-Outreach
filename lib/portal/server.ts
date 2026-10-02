@@ -117,6 +117,9 @@ export interface LeadActivity {
   /** chronological ASC; capped to the MOST RECENT 50 events */
   events: LeadActivityEvent[];
   counts: LeadActivityCounts;
+  /** ?view=telemetry only: a Warm lead whose every visit was a scanner
+   *  (lib/portal/scannerTrail) — the rows "Hide warm false positives" hides */
+  warmFalsePositive?: boolean;
 }
 
 /** Aggregate block for portal visitors with NO attribution cookie (typed the
@@ -190,6 +193,13 @@ export interface LeadActivityResponse {
    *  (supabase/unsubscribe.sql) is separate from the portal tables, so a
    *  missing table must read as "unknown", never as "nobody opted out" */
   unsubscribesAvailable: boolean;
+  /** ?view=telemetry&settings=1 only: the saved "Hide warm false positives"
+   *  tickbox (app_settings); null = it couldn't be read. Never applied here —
+   *  the page hides the flagged leads itself, so the tickbox is instant. */
+  hideWarmFalsePositives?: boolean | null;
+  /** ?view=telemetry only: Warm leads in the event window whose every visit
+   *  was a scanner (lib/portal/scannerTrail) — counted whether or not hidden */
+  warmFalsePositives?: number;
 }
 
 /**
