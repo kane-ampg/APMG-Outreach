@@ -43,4 +43,21 @@ describe("GET /api/portal/staff", () => {
     expect(html).toContain("https://customers-apmg-services.vercel.app/api/portal/staff");
     expect(html).not.toContain("https://customer.apmgservices.com.au/api/portal/staff");
   });
+
+  it("goes straight on to the portal when asked to, still marked", () => {
+    const res = get("https://customer.apmgservices.com.au/api/portal/staff?next=portal");
+
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("https://customer.apmgservices.com.au/portal");
+    expect(res.headers.get("set-cookie") ?? "").toMatch(/^apmg_internal=1;/);
+    expect(res.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("won't forward anywhere but the portal", () => {
+    for (const next of ["https://evil.example", "//evil.example", "/admin", "portal/../x"]) {
+      const res = get(`https://customer.apmgservices.com.au/api/portal/staff?next=${encodeURIComponent(next)}`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("location")).toBeNull();
+    }
+  });
 });

@@ -8,15 +8,18 @@ import {
   useRef,
   useState,
   type ComponentType,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   AlertTriangle,
+  Check,
   CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Globe,
   Inbox,
   LayoutGrid,
   MailX,
@@ -43,7 +46,7 @@ import { sourceLabel } from "@/lib/data/enquiries";
 import { toServiceClicks, type ServiceClickRow, type ServiceClicks } from "@/lib/data/serviceClicks";
 import { PORTAL_ORIGIN } from "@/lib/hosts";
 import { LEAD_SOURCES, type LeadSource } from "@/lib/pipeline/source";
-import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
+import { DIRECT_SOURCE, isExternalSource, OUTREACH_SOURCE } from "@/lib/portal/source";
 import { EventTrail, TimelineLine, fmtStamp } from "./LeadTrail";
 import { BRAND_LOGO, FacebookLogo, GoogleLogo, isBrand, LinkedInLogo } from "./BrandLogos";
 import { leadScore, scoreTier } from "@/lib/data/leadScore";
@@ -259,6 +262,9 @@ type LoadState =
       /** The linkedin bucket — visitors from a linkedin.com / lnkd.in Referer
        *  or a ?utm_source=linkedin (or li) link. All-zero until the first one. */
       linkedin: SourceBucket;
+      /** Every other tagged source summed — Instagram, TikTok, Bing, any site
+       *  linking to the portal (isExternalSource). All-zero until the first. */
+      external: SourceBucket;
       /** clicks per service, every visitor — the "Services clicked" card */
       services: ServiceClicks;
       /** exact count — the KPI never shows only what fitted in the page cap */
@@ -398,6 +404,21 @@ function toSourceBucket(v: unknown, source: string): SourceBucket {
   return EMPTY_SOURCE;
 }
 
+/** The External gauge's bucket: every bySource row without a gauge of its own,
+ *  summed. Visitors add across sources, so a browser that came back through a
+ *  second site counts once per site. */
+function toExternalBucket(v: unknown): SourceBucket {
+  const out = { ...EMPTY_SOURCE };
+  for (const row of Array.isArray(v) ? v : []) {
+    const o = (row ?? {}) as { source?: unknown } & Partial<SourceBucket>;
+    if (typeof o.source !== "string" || !isExternalSource(o.source)) continue;
+    out.visitors += num(o.visitors);
+    out.views += num(o.views);
+    out.inquiries += num(o.inquiries);
+  }
+  return out;
+}
+
 function toAnonymous(v: unknown): AnonymousActivity {
   const o = (v ?? {}) as Partial<AnonymousActivity>;
   return {
@@ -529,14 +550,16 @@ function StatCard({ stat }: { stat: TelemetryStat }) {
 }
 
 /** The fused KPI panel's grid — one definition, shared by the live row and its
- *  skeleton so they can't drift apart. Eight gauges: two columns on a phone,
- *  four once the sidebar is beside them, eight across only from `wide`
- *  (1700px), where a column is still wide enough for a 40px count-up readout.
- *  Eight divides evenly at every step (4×2, 2×4, 1×8), so the fused panel
- *  never shows an empty cell. */
-const KPI_COUNT = 8;
+ *  skeleton so they can't drift apart. Nine gauges: two columns on a phone
+ *  (the odd last gauge spans both), 3×3 once the sidebar is beside them, and
+ *  nine across only from 1920px — the width where a ninth of the row is as
+ *  wide as an eighth was at `wide` (1700px), still room for a 40px count-up
+ *  readout. No step ever leaves the fused panel an empty cell. (A raw media
+ *  variant, because the config's height-keyed screens switch off Tailwind's
+ *  `min-[…]` shorthand.) */
+const KPI_COUNT = 9;
 const KPI_GRID =
-  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-4 wide:grid-cols-8";
+  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 [&>*:last-child]:col-span-2 lg:grid-cols-3 lg:[&>*:last-child]:col-span-1 [@media(min-width:1920px)]:grid-cols-9";
 
 /** Skeleton mirroring the fused KPI panel while both endpoints are in flight. */
 function KpiPanelSkeleton() {
@@ -642,6 +665,254 @@ function PanelEmpty({ icon: Icon, hint }: { icon: LucideIcon; hint: string }) {
       <p className="max-w-[18rem] font-mono text-[10.5px] leading-relaxed text-muted-foreground">
         {hint}
       </p>
+    </div>
+  );
+}
+
+const SECTOR_LABEL_ID = "telemetry-sector-label";
+const SECTOR_LIST_ID = "telemetry-sector-list";
+const sectorOptionId = (i: number) => `telemetry-sector-opt-${i}`;
+const sectorLabel = (s: string) => (s === ALL_SECTORS ? "All sectors" : s);
+
+/** The Sector filter — a themed listbox, not a native <select>. The OS draws a
+ *  select's open list itself (a stark system menu under the dark chassis, with
+ *  no room for counts), so this rebuilds it as the APG select-only combobox:
+ *  the `.apmg-menu` panel the folder picker and Export menus use, the tiny-caps
+ *  label fused into the trigger as a prefix cell, and the full keyboard model
+ *  of the native control — ↑/↓ Home/End move, Enter/Space pick, Esc/Tab close,
+ *  type a letter to jump. Focus never leaves the trigger (the cursor rides on
+ *  aria-activedescendant), so nothing waits on the panel's fade-in to focus. */
+function SectorSelect({
+  sectors,
+  counts,
+  total,
+  value,
+  onChange,
+}: {
+  /** sectors present in the data, busiest first */
+  sectors: string[];
+  /** trails per sector under the active channel */
+  counts: Map<string, number>;
+  /** trails under the active channel, every sector */
+  total: number;
+  /** a sector, or ALL_SECTORS */
+  value: string;
+  onChange: (sector: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  /** the keyboard/hover cursor — an index into `options` */
+  const [active, setActive] = useState(0);
+  const comboRef = useRef<HTMLDivElement | null>(null);
+  const optionRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const typeahead = useRef({ text: "", at: 0 });
+
+  const options = [ALL_SECTORS, ...sectors];
+  const selectedIndex = Math.max(0, options.indexOf(value));
+  const filtered = value !== ALL_SECTORS;
+
+  // keep the cursor in view as it walks a long list
+  useEffect(() => {
+    if (open) optionRefs.current[active]?.scrollIntoView({ block: "nearest" });
+  }, [open, active]);
+
+  function openAt(index: number) {
+    setActive(index);
+    setOpen(true);
+  }
+
+  function pick(index: number) {
+    onChange(options[index]);
+    setOpen(false);
+  }
+
+  function toggle() {
+    if (open) setOpen(false);
+    else openAt(selectedIndex);
+  }
+
+  function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>) {
+    const last = options.length - 1;
+    if (!open) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp" || e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openAt(selectedIndex);
+        return;
+      }
+      if (e.key === "Home" || e.key === "End") {
+        e.preventDefault();
+        openAt(e.key === "Home" ? 0 : last);
+        return;
+      }
+    } else {
+      switch (e.key) {
+        case "ArrowDown":
+          e.preventDefault();
+          setActive((i) => Math.min(last, i + 1));
+          return;
+        case "ArrowUp":
+          e.preventDefault();
+          setActive((i) => Math.max(0, i - 1));
+          return;
+        case "Home":
+        case "PageUp":
+          e.preventDefault();
+          setActive(0);
+          return;
+        case "End":
+        case "PageDown":
+          e.preventDefault();
+          setActive(last);
+          return;
+        case "Enter":
+        case " ":
+          e.preventDefault();
+          pick(active);
+          return;
+        case "Escape":
+          e.preventDefault();
+          setOpen(false);
+          return;
+        case "Tab":
+          setOpen(false);
+          return;
+      }
+    }
+    // Typeahead, as the native control does it: a letter (or the same letter
+    // again) cycles through the sectors starting with it; different letters
+    // typed in quick succession spell out a prefix.
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const now = Date.now();
+      const t = typeahead.current;
+      t.text = now - t.at > 600 ? e.key.toLowerCase() : t.text + e.key.toLowerCase();
+      t.at = now;
+      const query = /^(.)\1*$/.test(t.text) ? t.text[0] : t.text;
+      const from = open ? active : selectedIndex;
+      const start = query.length > 1 ? from : from + 1;
+      for (let k = 0; k < options.length; k++) {
+        const i = (start + k) % options.length;
+        if (sectorLabel(options[i]).toLowerCase().startsWith(query)) {
+          openAt(i);
+          break;
+        }
+      }
+    }
+  }
+
+  return (
+    <div className="relative">
+      {/* The fused instrument: border, hover and the keyboard ring sit on this
+          shell so the label cell and the value read as ONE control. A filter
+          in force borrows the pressed-chip accent from Channel/Sort. */}
+      <div
+        className={cn(
+          "flex h-7 items-stretch overflow-hidden rounded-md border bg-background transition-colors has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring",
+          filtered || open ? "border-primary/40" : "border-border hover:border-primary/40",
+        )}
+      >
+        <span
+          id={SECTOR_LABEL_ID}
+          // Behaves like a <label>: a click focuses and opens the control.
+          // Mousedown is swallowed so the click doesn't blur it shut first.
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            comboRef.current?.focus();
+            toggle();
+          }}
+          className={cn(
+            "flex cursor-pointer select-none items-center border-r border-inherit px-2 font-mono text-[9.5px] uppercase tracking-[0.14em] transition-colors",
+            filtered ? "bg-primary/10 text-foreground" : "bg-muted/40 text-muted-foreground",
+          )}
+        >
+          Sector
+        </span>
+        <div
+          ref={comboRef}
+          id="telemetry-sector"
+          role="combobox"
+          tabIndex={0}
+          aria-labelledby={SECTOR_LABEL_ID}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={SECTOR_LIST_ID}
+          aria-activedescendant={open ? sectorOptionId(active) : undefined}
+          onClick={toggle}
+          onKeyDown={onKeyDown}
+          onBlur={() => setOpen(false)}
+          data-track="telemetry_sector_menu"
+          className="flex min-w-0 cursor-pointer select-none items-center gap-2 pl-2.5 pr-2 text-[11px] font-medium text-foreground outline-none focus-visible:outline-none"
+        >
+          <span className="max-w-[13rem] truncate">{sectorLabel(value)}</span>
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-200 ease-out motion-reduce:transition-none",
+              open && "rotate-180",
+            )}
+            aria-hidden
+          />
+        </div>
+      </div>
+
+      {/* Kept mounted so the list animates shut as well as open — see
+          `.apmg-menu` in globals.css. Mousedown is swallowed across the whole
+          panel so picking (or missing an option) never blurs the trigger. */}
+      <div
+        id={SECTOR_LIST_ID}
+        role="listbox"
+        aria-labelledby={SECTOR_LABEL_ID}
+        aria-hidden={!open}
+        data-open={open}
+        onMouseDown={(e) => e.preventDefault()}
+        className="apmg-menu absolute left-0 top-full z-30 mt-1.5 w-max min-w-full max-w-[min(20rem,calc(100vw-2rem))] overflow-hidden rounded-lg border border-border bg-card shadow-lg ring-1 ring-foreground/5"
+      >
+        <div className="max-h-72 overflow-y-auto py-1">
+          {options.map((s, i) => {
+            const selected = i === selectedIndex;
+            const count = s === ALL_SECTORS ? total : (counts.get(s) ?? 0);
+            return (
+              <div key={s}>
+                <div
+                  ref={(el) => {
+                    optionRefs.current[i] = el;
+                  }}
+                  id={sectorOptionId(i)}
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => pick(i)}
+                  onMouseMove={() => {
+                    if (active !== i) setActive(i);
+                  }}
+                  data-track="telemetry_sector"
+                  data-track-sector={s}
+                  className={cn(
+                    "flex cursor-pointer items-start gap-2 px-3 py-1.5 text-xs transition-colors",
+                    i === active ? "bg-foreground/[0.06]" : "",
+                    selected || i === active ? "text-foreground" : "text-muted-foreground",
+                  )}
+                >
+                  <Check
+                    className={cn("mt-px h-3.5 w-3.5 shrink-0 text-primary", selected ? "opacity-100" : "opacity-0")}
+                    aria-hidden
+                  />
+                  {/* sector names come from the lead data and can run long —
+                      wrap rather than truncate the thing being chosen */}
+                  <span className="min-w-0 flex-1 break-words font-medium leading-snug">
+                    {sectorLabel(s)}
+                  </span>
+                  <span
+                    className={cn(
+                      "tnum mt-px shrink-0 pl-3 font-mono text-[10px]",
+                      count === 0 ? "text-muted-foreground/50" : "text-muted-foreground",
+                    )}
+                  >
+                    {formatInt(count)}
+                  </span>
+                </div>
+                {s === ALL_SECTORS && <div role="none" className="mx-3 my-1 h-px bg-border/70" />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1562,6 +1833,7 @@ export function TelemetryPage() {
           facebook: EMPTY_SOURCE,
           google: EMPTY_SOURCE,
           linkedin: EMPTY_SOURCE,
+          external: EMPTY_SOURCE,
           services: toServiceClicks([]),
           unsubscribesTotal: 0,
           // No database, so the opt-out list is unknown rather than empty.
@@ -1636,6 +1908,7 @@ export function TelemetryPage() {
         facebook: toSourceBucket(sum.bySource, "facebook"),
         google: toSourceBucket(sum.bySource, "google"),
         linkedin: toSourceBucket(sum.bySource, "linkedin"),
+        external: toExternalBucket(sum.bySource),
         services: toServiceClicks(sum.byService),
         // The exact total can exceed what the route sends; never let the KPI
         // read lower than the rows the table is actually showing either.
@@ -1870,7 +2143,7 @@ export function TelemetryPage() {
     channel !== ALL_CHANNELS && channels.includes(channel) ? channel : ALL_CHANNELS;
 
   // Funnel gauges: engaged leads → clicks → browsing → conversions, then the
-  // channel dials (Facebook, Google, LinkedIn traffic) and opt-outs.
+  // channel dials (Facebook, Google, LinkedIn, everything External) and opt-outs.
   const stats = useMemo<TelemetryStat[]>(() => {
     if (!ready) return [];
     const t = ready.totals;
@@ -1969,6 +2242,23 @@ export function TelemetryPage() {
         },
       },
       {
+        id: "external",
+        label: "External",
+        // Every other tagged source summed: Instagram, TikTok, Bing, ChatGPT,
+        // or any website linking to the portal (named by its host). Same unit
+        // as the channel gauges; the channel chips break it down by source.
+        value: ready.external.views,
+        icon: Globe,
+        caption:
+          ready.external.visitors === 1
+            ? "portal visits · 1 visitor"
+            : `portal visits · ${formatInt(ready.external.visitors)} visitors`,
+        ratio: {
+          value: ratio(ready.external.inquiries, ready.external.views),
+          label: "became enquiries",
+        },
+      },
+      {
         id: "unsubscribed",
         label: "Unsubscribed",
         // Zero and "we couldn't read the list" must not look the same on a
@@ -2009,6 +2299,20 @@ export function TelemetryPage() {
   // list on an empty filter — fall back to "all" when the pick disappears.
   const activeSector = sector !== ALL_SECTORS && sectors.includes(sector) ? sector : ALL_SECTORS;
 
+  const channelRows = useMemo(
+    () => (activeChannel === ALL_CHANNELS ? rows : rows.filter((r) => inChannel(r, activeChannel))),
+    [rows, activeChannel],
+  );
+  // Trails per sector under the active channel — the same rows the list
+  // narrows, so a count in the sector menu is exactly what picking it shows.
+  const sectorCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const r of channelRows) {
+      if (r.category) counts.set(r.category, (counts.get(r.category) ?? 0) + 1);
+    }
+    return counts;
+  }, [channelRows]);
+
   // Filter (by channel, then sector) then rank (by the interest control).
   // Time order is the stable tie-breaker under every sort — uniform ISO-8601
   // UTC stamps make the string compare a correct time order, and the live API
@@ -2017,12 +2321,10 @@ export function TelemetryPage() {
   const sortedRows = useMemo(() => {
     const byRecency = (a: ActivityRow, b: ActivityRow) =>
       a.lastSeen < b.lastSeen ? 1 : a.lastSeen > b.lastSeen ? -1 : 0;
-    let filtered =
-      activeChannel === ALL_CHANNELS ? rows : rows.filter((r) => inChannel(r, activeChannel));
-    if (activeSector !== ALL_SECTORS) {
-      filtered = filtered.filter((r) => r.category === activeSector);
-    }
-    const ranked = [...filtered];
+    const ranked =
+      activeSector === ALL_SECTORS
+        ? [...channelRows]
+        : channelRows.filter((r) => r.category === activeSector);
     if (sort === "engaged") {
       ranked.sort((a, b) => activeEventCount(b) - activeEventCount(a) || byRecency(a, b));
     } else if (sort === "enquired") {
@@ -2034,7 +2336,7 @@ export function TelemetryPage() {
       ranked.sort(byRecency);
     }
     return ranked;
-  }, [rows, activeChannel, activeSector, sort]);
+  }, [channelRows, activeSector, sort]);
   // One pager serves both tabs, so the row count it works off is the ACTIVE
   // tab's — and `page` is re-clamped against it, which is what stops a switch
   // from page 3 of the trails to a two-page opt-out list showing nothing.
@@ -2346,45 +2648,16 @@ export function TelemetryPage() {
                             ))}
                           </div>
                           {sectors.length > 1 && (
-                            /* Fused label + select wrapper: the tiny-caps label
-                               sits inside the control as a prefix cell (the
-                               app's fused-panel grammar), so the pair reads as
-                               ONE instrument — and the focus ring wraps both. */
-                            <div className="flex items-stretch overflow-hidden rounded-md border border-border bg-background transition-colors focus-within:ring-2 focus-within:ring-ring hover:border-primary/40">
-                              <label
-                                htmlFor="telemetry-sector"
-                                className="flex items-center border-r border-border bg-muted/40 px-2 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground"
-                              >
-                                Sector
-                              </label>
-                              {/* Native <select> — a real dropdown that stays tidy no
-                                  matter how many sectors the data grows to; the caret
-                                  is the app's own ChevronDown behind the control. */}
-                              <div className="relative">
-                                <select
-                                  id="telemetry-sector"
-                                  value={activeSector}
-                                  onChange={(e) => {
-                                    setSector(e.target.value);
-                                    setPage(0);
-                                  }}
-                                  data-track="telemetry_sector"
-                                  aria-label="Filter lead activity by sector"
-                                  className="h-7 max-w-[13rem] cursor-pointer appearance-none truncate bg-transparent py-0 pl-2.5 pr-7 text-[11px] font-medium text-foreground outline-none"
-                                >
-                                  <option value={ALL_SECTORS}>All sectors</option>
-                                  {sectors.map((s) => (
-                                    <option key={s} value={s}>
-                                      {s}
-                                    </option>
-                                  ))}
-                                </select>
-                                <ChevronDown
-                                  className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-                                  aria-hidden
-                                />
-                              </div>
-                            </div>
+                            <SectorSelect
+                              sectors={sectors}
+                              counts={sectorCounts}
+                              total={channelRows.length}
+                              value={activeSector}
+                              onChange={(s) => {
+                                setSector(s);
+                                setPage(0);
+                              }}
+                            />
                           )}
                           {/* Saved to app_settings, not the browser — so it
                               holds for every operator on every machine. The

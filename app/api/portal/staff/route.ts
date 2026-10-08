@@ -17,6 +17,12 @@ import { INTERNAL_COOKIE } from "@/lib/portal/server";
 // anonymous path), so a stranger who finds the link can only hide themselves.
 // It lives under /api/portal/ because that is what the customer-host wall
 // lets through.
+//
+// `?next=portal` marks and then goes straight to the portal, with no page in
+// between. The console's Performance tab links to the portal this way, so a
+// manager clicking through to see the page doesn't land in its own figures.
+// Only that one literal is honoured: anything else shows the page as before,
+// so the link can never be used to bounce someone to another site.
 export const runtime = "nodejs";
 
 /** One year — the same lifetime proxy.ts gives the admin-host mark. */
@@ -49,18 +55,22 @@ ${more}
 }
 
 export function GET(req: Request): Response {
-  const host = new URL(req.url).hostname.toLowerCase();
+  const url = new URL(req.url);
+  const host = url.hostname.toLowerCase();
   const others = CUSTOMER_HOSTS.filter((h) => h !== host);
+  const headers = {
+    // Set-Cookie on a cached response would mark every later visitor.
+    "cache-control": "no-store",
+    "x-robots-tag": "noindex",
+  };
 
-  const res = new NextResponse(page(host, others), {
-    status: 200,
-    headers: {
-      "content-type": "text/html; charset=utf-8",
-      // Set-Cookie on a cached response would mark every later visitor.
-      "cache-control": "no-store",
-      "x-robots-tag": "noindex",
-    },
-  });
+  const res =
+    url.searchParams.get("next") === "portal"
+      ? new NextResponse(null, { status: 303, headers: { ...headers, location: new URL("/portal", url).href } })
+      : new NextResponse(page(host, others), {
+          status: 200,
+          headers: { ...headers, "content-type": "text/html; charset=utf-8" },
+        });
   res.cookies.set(INTERNAL_COOKIE, "1", {
     httpOnly: true,
     sameSite: "lax",

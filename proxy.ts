@@ -64,8 +64,9 @@ function isPublicAdminPath(pathname: string): boolean {
 
 /**
  * Traffic-source capture (the social-media promotion loop): a /portal PAGE
- * load carrying `?utm_source=tiktok|facebook|instagram|…` — or arriving with a
- * recognised social Referer when the tag is missing — drops the `apmg_src`
+ * load carrying `?utm_source=tiktok|facebook|instagram|…` — or, when the tag is
+ * missing, arriving from any outside site's Referer (not for a visitor already
+ * attributed to an outreach email: their Referer is the mail client) — drops the `apmg_src`
  * cookie. The telemetry writers (/api/portal/events, /api/portal/inquiries)
  * read it via readAttribution and stamp the source onto every event + enquiry,
  * so the admin Enquiries tab can answer "which platform sent this lead".
@@ -76,7 +77,11 @@ function isPublicAdminPath(pathname: string): boolean {
 function withPortalSource(req: NextRequest, res: NextResponse): NextResponse {
   const { pathname } = req.nextUrl;
   if (pathname !== "/portal" && !pathname.startsWith("/portal/")) return res;
-  const source = resolveSource(req.nextUrl.searchParams, req.headers.get("referer"));
+  const source = resolveSource(req.nextUrl.searchParams, req.headers.get("referer"), {
+    selfHost: req.headers.get("host"),
+    // Set by the /t/[id] outreach redirect (lib/portal/server.ts).
+    outreach: req.cookies.has("apmg_ref"),
+  });
   if (!source || req.cookies.get(SOURCE_COOKIE)?.value === source) return res;
   res.cookies.set(SOURCE_COOKIE, source, {
     httpOnly: true,

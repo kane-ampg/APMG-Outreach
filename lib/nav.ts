@@ -13,6 +13,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  TrendingUp,
   Users,
   Workflow,
   type LucideIcon,
@@ -36,6 +37,7 @@ export type TabId =
   | "composer"
   | "legal"
   | "telemetry"
+  | "performance"
   | "settings";
 
 export interface NavItem {
@@ -76,6 +78,11 @@ export const NAV: NavSection[] = [
       { id: "hot", label: "Hot Leads", icon: Flame, perm: "hotleads.view" },
       { id: "enquiries", label: "Enquiries", icon: Inbox, perm: "enquiries.view" },
       { id: "telemetry", label: "Telemetry", icon: Activity, perm: "telemetry.view" },
+      // Directly under Telemetry: the same portal events, rolled up. Telemetry
+      // answers "who clicked what"; this answers "how is the portal doing",
+      // per day and per service, the way Google Business Profile's
+      // Performance screen does. Same permission, because it is the same data.
+      { id: "performance", label: "Performance", icon: TrendingUp, perm: "telemetry.view" },
     ],
   },
   {
@@ -162,6 +169,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   composer: "Email Composer",
   legal: "Legal Documents",
   telemetry: "Telemetry",
+  performance: "Performance",
   settings: "Settings",
 };
 

@@ -150,7 +150,8 @@ export const DIRECT_CATEGORY = "Direct / unknown";
 
 /** Display names for the traffic-source slugs (bySource rollup + the enquiry
  *  source chip). Slugs come from lib/portal/source.ts — utm_source values on
- *  the promoted portal link, plus the outreach/direct fallback buckets. */
+ *  the promoted portal link, referring platforms and sites, plus the
+ *  outreach/direct fallback buckets. */
 export const SOURCE_LABEL: Record<string, string> = {
   tiktok: "TikTok",
   facebook: "Facebook",
@@ -159,10 +160,22 @@ export const SOURCE_LABEL: Record<string, string> = {
   linkedin: "LinkedIn",
   youtube: "YouTube",
   google: "Google",
+  bing: "Bing",
+  duckduckgo: "DuckDuckGo",
+  yahoo: "Yahoo",
+  ecosia: "Ecosia",
+  brave: "Brave Search",
+  chatgpt: "ChatGPT",
+  perplexity: "Perplexity",
+  "apmgservices.com.au": "APMG website",
   [OUTREACH_SOURCE]: "Outreach email",
   [DIRECT_SOURCE]: DIRECT_CATEGORY,
 };
 
 export function sourceLabel(slug: string): string {
-  return SOURCE_LABEL[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+  const known = SOURCE_LABEL[slug];
+  if (known) return known;
+  // A referring site is named by its hostname, which reads best as-is.
+  if (slug.includes(".")) return slug;
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
 }

@@ -22,6 +22,7 @@ import { OverviewPage } from "./OverviewPage";
 import { HotLeadsPage } from "./HotLeadsPage";
 import { LeadsPage } from "./LeadsPage";
 import { MasterClientListPage } from "./MasterClientListPage";
+import { PerformancePage } from "./PerformancePage";
 import { PipelinePage } from "./PipelinePage";
 import { SalesArrivalsModal } from "./SalesArrivalsModal";
 import { SalesPage } from "./SalesPage";
@@ -166,6 +167,8 @@ export function DashboardShell({ user }: { user?: SessionUser }) {
                     <LegalDocsPage />
                   ) : activeTab === "telemetry" ? (
                     <TelemetryPage />
+                  ) : activeTab === "performance" ? (
+                    <PerformancePage />
                   ) : activeTab === "settings" ? (
                     <SettingsPage />
                   ) : (
