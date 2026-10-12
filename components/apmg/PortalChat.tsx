@@ -6,7 +6,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { MessageCircle, X, Send, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useFocusTrap } from "@/lib/useFocusTrap";
-import { track } from "@/lib/telemetry";
+import { getVisitorId, track } from "@/lib/telemetry";
 import { COMPANY } from "@/lib/legal/company";
 import { MAX_MESSAGE_CHARS, MAX_HISTORY_MESSAGES } from "@/lib/portal/chatLimits";
 // Chathead for assistant turns — same self-hosted headshot the team roster uses
@@ -45,6 +45,10 @@ import simon from "@/app/team/simon-taranek.jpg";
  *  - Talks to /api/portal/chat, which is KB-grounded, rate-limited, and spends a
  *    walled-off key (see the route). The client keeps only the last few turns and
  *    caps input length to match the server's guardrails.
+ *  - RECORDED: the server stores each question and reply (portal_chats) for the
+ *    team's Telemetry → Chats view, so the greeting says chats are saved. Every
+ *    send carries this page load's conversation id (one chat = one page load)
+ *    and the telemetry visitor id, so the transcript lines up with the trail.
  *
  * Theming: uses the portal's LIGHT theme tokens (bg-card, text-foreground,
  * bg-primary, ring-*) so it inherits the surface automatically. Motion follows
@@ -79,8 +83,22 @@ function ChatHeadSpacer() {
 
 const GREETING: Msg = {
   role: "assistant",
-  content: `Hi! I'm APMG's automated assistant 👋 I can answer questions about our property maintenance services. Prefer a person? Call us on ${COMPANY.phone}, or tap “Enquire” on any service and the team will get back to you.`,
+  content: `Hi! I'm APMG's automated assistant 👋 I can answer questions about our property maintenance services. Prefer a person? Call us on ${COMPANY.phone}, or tap “Enquire” on any service and the team will get back to you. Chats are saved so our team can follow up.`,
 };
+
+/** One id per page load — every question in this chat is stored under it. */
+function newConversationId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  // randomUUID needs a secure context; the portal is HTTPS-only in production,
+  // so this is for a plain-http dev host. Same v4 shape the server validates.
+  const b = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = b.map((x) => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
 
 export function PortalChat() {
   const reduce = useReducedMotion();
@@ -101,6 +119,8 @@ export function PortalChat() {
   const inputRef = useRef<HTMLInputElement>(null);
   /** Header Close button — where focus rests when the composer locks. */
   const closeRef = useRef<HTMLButtonElement>(null);
+  /** This chat's id, minted on the first send (never during SSR). */
+  const conversationIdRef = useRef<string | null>(null);
 
   // SC 2.4.11 Focus Not Obscured: the panel is a modal dialog, so keyboard
   // focus stays inside it while open. The hook also takes initial focus and
@@ -185,10 +205,16 @@ export function PortalChat() {
       .slice(-MAX_HISTORY_MESSAGES - 1, -1);
 
     try {
+      conversationIdRef.current ??= newConversationId();
       const res = await fetch("/api/portal/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, history }),
+        body: JSON.stringify({
+          message: text,
+          history,
+          conversationId: conversationIdRef.current,
+          visitorId: getVisitorId() || undefined,
+        }),
       });
       const data = (await res.json().catch(() => null)) as
         | { reply?: string; remaining?: number; limitReached?: boolean }

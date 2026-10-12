@@ -21,13 +21,13 @@ import {
   ChevronRight,
   Globe,
   Inbox,
-  LayoutGrid,
+  Mail,
   MailX,
+  MessagesSquare,
   MousePointerClick,
   RefreshCw,
   Send,
   Trash2,
-  Users,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -43,6 +43,7 @@ import {
   type UnsubscribedPerson,
 } from "@/lib/data/leadActivity";
 import { sourceLabel } from "@/lib/data/enquiries";
+import { toChatConversation, type ChatConversation } from "@/lib/data/chats";
 import { toServiceClicks, type ServiceClickRow, type ServiceClicks } from "@/lib/data/serviceClicks";
 import { PORTAL_ORIGIN } from "@/lib/hosts";
 import { LEAD_SOURCES, type LeadSource } from "@/lib/pipeline/source";
@@ -85,9 +86,13 @@ import { TelemetryReportExport } from "./TelemetryReportExport";
  * table rather than emptying it, and no sort, filter or background refresh
  * can bring the hidden rows back. The save runs behind the click.
  *
- * The main table is tabbed: the lead-activity list, and the opt-out list —
- * everyone who has unsubscribed, which is the one audience the send route will
- * never mail again. Both ride the same lead-activity payload.
+ * The main table is tabbed: the lead-activity list; Chats — what visitors
+ * asked the portal's chat assistant, with who they are (the outreach lead's
+ * school / business) and where they came from (Facebook, Google, LinkedIn,
+ * Outreach email, Direct / unknown, …), read from GET /api/portal/chats and
+ * polled only while that tab is open; and the opt-out list — everyone who has
+ * unsubscribed, which is the one audience the send route will never mail
+ * again. Activity and opt-outs ride the same lead-activity payload.
  *
  * The heart of the page is the lead-activity list: a real seven-column table
  * (Lead · Source · ID · Score · Sector · Events · Last seen) under a shared column
@@ -228,14 +233,46 @@ function toLeadSource(v: unknown): LeadSource | null {
 
 /* ───────────────────────────  main-table tabs  ─────────────────────────── */
 
-/** The two audiences the main table shows: everyone who engaged, and everyone
- *  who asked us to stop. They share one payload, one pager and one panel. */
-type TableTab = "activity" | "unsubscribed";
+/** What the main table shows: everyone who engaged, what visitors asked the
+ *  portal's chat assistant, and everyone who asked us to stop. Activity and
+ *  opt-outs ride the lead-activity payload; chats have their own endpoint
+ *  (/api/portal/chats). All three share one pager and one panel. */
+type TableTab = "activity" | "chats" | "unsubscribed";
 
 const TABS: { id: TableTab; label: string }[] = [
   { id: "activity", label: "Lead activity" },
+  { id: "chats", label: "Chats" },
   { id: "unsubscribed", label: "Unsubscribed" },
 ];
+
+/** Chat channel chips always offered: the three gauged platforms, the
+ *  outreach email, and Direct / unknown (typed or forwarded link). Any other
+ *  source grows a chip once a chat actually comes through it. */
+const CHAT_BASE_CHANNELS = ["facebook", "google", "linkedin", OUTREACH_SOURCE, DIRECT_SOURCE];
+
+/** Chats change far less often than clicks — a slower poll, and only while
+ *  the Chats tab is the one on screen. */
+const CHATS_POLL_MS = 30000;
+
+/** Same LinkedIn rule as the activity table's inChannel: a lead imported from
+ *  a LinkedIn list who chatted after our email shows under both chips. */
+function chatInChannel(chat: ChatConversation, channel: string): boolean {
+  if (chat.channel === channel) return true;
+  return channel === "linkedin" && chat.leadSource === "linkedin";
+}
+
+type ChatsLoad =
+  | { status: "loading" }
+  | { status: "error"; error: string }
+  | {
+      status: "ready";
+      /** demo = no database, or portal_chats not created yet (needsMigration) */
+      mode: "live" | "demo";
+      needsMigration: boolean;
+      conversations: ChatConversation[];
+      /** the route's read window filled — older chats exist beyond it */
+      windowFull: boolean;
+    };
 
 /* ───────────────────────────  load state  ─────────────────────────── */
 
@@ -550,16 +587,13 @@ function StatCard({ stat }: { stat: TelemetryStat }) {
 }
 
 /** The fused KPI panel's grid — one definition, shared by the live row and its
- *  skeleton so they can't drift apart. Nine gauges: two columns on a phone
- *  (the odd last gauge spans both), 3×3 once the sidebar is beside them, and
- *  nine across only from 1920px — the width where a ninth of the row is as
- *  wide as an eighth was at `wide` (1700px), still room for a 40px count-up
- *  readout. No step ever leaves the fused panel an empty cell. (A raw media
- *  variant, because the config's height-keyed screens switch off Tailwind's
- *  `min-[…]` shorthand.) */
-const KPI_COUNT = 9;
+ *  skeleton so they can't drift apart. Six gauges: two columns on a phone,
+ *  3×2 once the sidebar is beside them, and six across from `wide` (1700px),
+ *  still room for a 40px count-up readout. No step ever leaves the fused
+ *  panel an empty cell. */
+const KPI_COUNT = 6;
 const KPI_GRID =
-  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 [&>*:last-child]:col-span-2 lg:grid-cols-3 lg:[&>*:last-child]:col-span-1 [@media(min-width:1920px)]:grid-cols-9";
+  "grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-3 wide:grid-cols-6";
 
 /** Skeleton mirroring the fused KPI panel while both endpoints are in flight. */
 function KpiPanelSkeleton() {
@@ -1312,6 +1346,309 @@ const UnsubscribedRow = memo(function UnsubscribedRow({ person }: { person: Unsu
   );
 });
 
+/* ───────────────────────────  chat rows  ─────────────────────────── */
+
+/** Chat table tracks: Who · Source · Sector · Conversation · Last message.
+ *  Conversation takes the slack — it carries the opening question. */
+const CHAT_COLS =
+  "grid-cols-[minmax(0,10rem)_minmax(0,8rem)_minmax(0,6rem)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,13rem)_minmax(0,9.5rem)_minmax(0,9rem)_minmax(0,1fr)_auto]";
+
+/** Who the chat was with: the lead's school / business when they came through
+ *  an outreach email, else the door they came through. */
+function chatDisplayName(chat: ChatConversation): string {
+  if (chat.business) return chat.business;
+  if (chat.leadId) return "Unattributed lead";
+  if (chat.channel === DIRECT_SOURCE) return "Anonymous visitor";
+  return `${sourceLabel(chat.channel)} visitor`;
+}
+
+/** The channel's mark: a brand logo for the gauged platforms, an envelope for
+ *  the outreach email, a globe for any other site. Direct has none. */
+function ChatSourceMark({ channel }: { channel: string }) {
+  if (isBrand(channel)) return <ChannelMark brand={channel} />;
+  if (channel === DIRECT_SOURCE) return null;
+  const Icon = channel === OUTREACH_SOURCE ? Mail : Globe;
+  return <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />;
+}
+
+function ChatTableHead() {
+  return (
+    <div className="hidden items-stretch border-b border-border bg-muted/25 lg:flex">
+      <div
+        className={cn(
+          "grid min-w-0 flex-1 items-center gap-3 px-4 py-2 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground",
+          CHAT_COLS,
+        )}
+      >
+        <span>Who</span>
+        <span>Source</span>
+        <span>Sector</span>
+        <span>Conversation</span>
+        <span className="pr-7 text-right">Last message</span>
+      </div>
+      <div className={cn("shrink-0 border-l border-border/70", ROW_ACTION_W)} aria-hidden />
+    </div>
+  );
+}
+
+/** Memoised like LeadRow: opening one transcript must not re-render the rest. */
+const ChatRow = memo(function ChatRow({
+  chat,
+  open,
+  onToggle,
+  deletePhase,
+  deleteError,
+  onDeleteRequest,
+  onDeleteCancel,
+  onDeleteConfirm,
+}: {
+  chat: ChatConversation;
+  open: boolean;
+  onToggle: (conversationId: string) => void;
+  deletePhase: DeletePhase;
+  deleteError: string | null;
+  onDeleteRequest: (conversationId: string) => void;
+  onDeleteCancel: () => void;
+  onDeleteConfirm: (conversationId: string) => void;
+}) {
+  const reduce = useReducedMotion();
+  const name = chatDisplayName(chat);
+  const questions = chat.exchanges.length;
+  const unanswered = chat.exchanges.filter((e) => e.outcome === "fallback").length;
+  const hitLimit = chat.exchanges.some((e) => e.outcome === "limit");
+  const opening = chat.exchanges[0]?.question ?? "";
+  const leadFrom = chat.leadSource ? LEAD_SOURCE_NAME[chat.leadSource] : null;
+
+  return (
+    <motion.li
+      variants={reduce ? ROW_VARIANTS_REDUCED : ROW_VARIANTS}
+      className="border-t border-border/70 first:border-t-0"
+    >
+      <div className="flex items-stretch">
+        <button
+          type="button"
+          onClick={() => onToggle(chat.conversationId)}
+          aria-expanded={open}
+          data-track="telemetry_chat_toggle"
+          aria-label={`Chat with ${name}, from ${sourceLabel(chat.channel)}: ${questions} ${questions === 1 ? "question" : "questions"}, last message ${fmtWhen(chat.lastAt)}. ${open ? "Collapse" : "Expand"} transcript`}
+          className={cn(
+            "flex min-w-0 flex-1 flex-col gap-2 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] lg:grid lg:items-center lg:gap-3",
+            CHAT_COLS,
+          )}
+        >
+          {/* ── Who: the school / business, or the visitor's channel ──── */}
+          <span className="block min-w-0">
+            <span
+              className={cn(
+                "block truncate text-[13px] font-medium",
+                chat.business ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {name}
+            </span>
+            {chat.campaign && (
+              <span className="mt-1 flex min-w-0">
+                <span
+                  title={chat.campaign}
+                  className="inline-flex max-w-full items-center rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary"
+                >
+                  <span className="truncate">{chat.campaign}</span>
+                </span>
+              </span>
+            )}
+          </span>
+
+          {/* ── Source: how they reached the portal, and for an outreach
+                 lead, where we got the lead from ──────────────────── */}
+          <span className="flex min-w-0 items-center">
+            <CellLabel>Source</CellLabel>
+            <span className="block min-w-0">
+              <span
+                title={sourceLabel(chat.channel)}
+                className="flex min-w-0 items-center gap-1.5"
+              >
+                <ChatSourceMark channel={chat.channel} />
+                <span className="truncate text-[11.5px] text-foreground">
+                  {sourceLabel(chat.channel)}
+                </span>
+              </span>
+              {leadFrom && (
+                <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+                  lead from {leadFrom}
+                </span>
+              )}
+            </span>
+          </span>
+
+          {/* ── Sector ─────────────────────────────────────────── */}
+          <span className="flex min-w-0 items-center">
+            <CellLabel>Sector</CellLabel>
+            {chat.category ? (
+              <span
+                title={chat.category}
+                className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+              >
+                <span className="truncate">{chat.category}</span>
+              </span>
+            ) : (
+              <span className="font-mono text-[10px] text-muted-foreground/60">—</span>
+            )}
+          </span>
+
+          {/* ── Conversation: what they opened with, and how it went ── */}
+          <span className="block min-w-0">
+            <span title={opening} className="block truncate text-[12px] text-foreground">
+              &ldquo;{opening}&rdquo;
+            </span>
+            <span className="mt-1 flex flex-wrap items-center gap-1.5">
+              <span className="tnum font-mono text-[10px] text-muted-foreground">
+                {formatInt(questions)} {questions === 1 ? "question" : "questions"}
+              </span>
+              {unanswered > 0 && (
+                <span
+                  title="The assistant couldn't answer and pointed them to the enquiry form instead"
+                  className="inline-flex items-center rounded-full border border-amber-500/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-amber-600 dark:text-amber-400"
+                >
+                  {formatInt(unanswered)} unanswered
+                </span>
+              )}
+              {hitLimit && (
+                <span
+                  title="They used every question the chat allows"
+                  className="inline-flex items-center rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary"
+                >
+                  Hit the limit
+                </span>
+              )}
+            </span>
+          </span>
+
+          {/* ── Last message, and the expand cue ───────────────── */}
+          <span className="flex shrink-0 items-center justify-between gap-3 lg:justify-end">
+            <span
+              className="tnum font-mono text-[10.5px] text-muted-foreground"
+              title={fmtStamp(chat.lastAt)}
+            >
+              {fmtWhen(chat.lastAt)}
+            </span>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                open && "rotate-180",
+              )}
+              aria-hidden
+            />
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => (deletePhase ? onDeleteCancel() : onDeleteRequest(chat.conversationId))}
+          disabled={deletePhase === "busy"}
+          aria-label={`Delete the chat with ${name}`}
+          data-track="telemetry_chat_delete"
+          className={cn(
+            "flex shrink-0 items-center justify-center border-l border-border/70 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50",
+            ROW_ACTION_W,
+          )}
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </div>
+
+      {deletePhase && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-destructive/40 bg-destructive/[0.04] px-4 py-2">
+          <Trash2 className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+          <span className="text-[12px] text-foreground">
+            Permanently delete this chat with {name}?
+          </span>
+          {deleteError && (
+            <span role="alert" className="font-mono text-[10.5px] text-destructive">
+              {deleteError}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onDeleteCancel}
+              disabled={deletePhase === "busy"}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => onDeleteConfirm(chat.conversationId)}
+              disabled={deletePhase === "busy"}
+              data-track="telemetry_chat_delete_confirm"
+              className="gap-1.5"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              {deletePhase === "busy" ? "Deleting…" : "Delete"}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* expanded transcript — visitor on the right, assistant on the left,
+          the way the chat bubble itself lays it out */}
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+            animate={reduce ? { opacity: 1 } : { height: "auto", opacity: 1 }}
+            exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
+            transition={{ duration: reduce ? 0.1 : 0.26, ease: EASE }}
+            className="overflow-hidden"
+          >
+            <div className="border-t border-border/70 bg-background/40 px-4 pb-4 pt-3">
+              <ol className="flex flex-col gap-2.5">
+                {chat.exchanges.map((ex, i) => (
+                  <li key={`${ex.ts}-${i}`} className="flex flex-col gap-1.5">
+                    <div className="flex flex-col items-end">
+                      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-primary/10 px-3 py-2 text-[13px] leading-relaxed text-foreground">
+                        {ex.question}
+                      </div>
+                      <span className="mt-0.5 font-mono text-[9.5px] text-muted-foreground">
+                        {name} · {fmtStamp(ex.ts)}
+                      </span>
+                    </div>
+                    <div className="flex flex-col items-start">
+                      <div
+                        className={cn(
+                          "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-bl-sm px-3 py-2 text-[13px] leading-relaxed",
+                          ex.outcome === "answered"
+                            ? "bg-muted text-foreground"
+                            : "border border-dashed border-border text-muted-foreground",
+                        )}
+                      >
+                        {ex.reply}
+                      </div>
+                      <span className="mt-0.5 font-mono text-[9.5px] text-muted-foreground">
+                        {ex.outcome === "answered"
+                          ? "APMG Assistant"
+                          : ex.outcome === "limit"
+                            ? "Automatic reply · question limit reached"
+                            : "Automatic reply · the assistant couldn’t answer"}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/70 pt-2.5 font-mono text-[9.5px] text-muted-foreground">
+                <span>Started {fmtStamp(chat.startedAt)}</span>
+                {chat.leadId && <span title={chat.leadId}>Lead {shortLeadId(chat.leadId)}</span>}
+                {chat.visitorId && <span title={chat.visitorId}>Visitor {shortLeadId(chat.visitorId)}</span>}
+              </p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </motion.li>
+  );
+});
+
 /* ───────────────────────────  shared list foot  ─────────────────────────── */
 
 /** The pager under either tab — it only exists once a list outgrows a page. */
@@ -1771,12 +2108,126 @@ export function TelemetryPage() {
   const mountedRef = useRef(true);
   /** Mirror of `mode` for the delete callback (kept stable with [] deps). */
   const demoRef = useRef(false);
+  /** The Chats tab: its own payload (/api/portal/chats), channel filter,
+   *  open transcripts and delete flow — none of it shared with the trails. */
+  const [chats, setChats] = useState<ChatsLoad>({ status: "loading" });
+  const [chatChannelFilter, setChatChannelFilter] = useState<string>(ALL_CHANNELS);
+  const [chatExpanded, setChatExpanded] = useState<Set<string>>(new Set());
+  const [chatDeleteFlow, setChatDeleteFlow] = useState<{
+    id: string;
+    busy: boolean;
+    error: string | null;
+  } | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
+  }, []);
+
+  /** Load the chat transcripts. Same silent contract as fetchAll: a poll
+   *  never knocks a ready list back to a skeleton or an error. */
+  const fetchChats = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
+    const fail = (error: string) =>
+      setChats((prev) => (silent && prev.status === "ready" ? prev : { status: "error", error }));
+    try {
+      const res = await fetch("/api/portal/chats", { cache: "no-store", headers: adminHeaders() });
+      const data = (await res.json().catch(() => null)) as {
+        mode?: string;
+        needsMigration?: boolean;
+        conversations?: unknown;
+        windowFull?: unknown;
+        error?: string;
+      } | null;
+      if (!mountedRef.current) return;
+      if (!res.ok || !data) {
+        fail(data?.error ?? `Couldn't load chats (${res.status}).`);
+        return;
+      }
+      const next: ChatsLoad = {
+        status: "ready",
+        mode: data.mode === "demo" ? "demo" : "live",
+        needsMigration: data.needsMigration === true,
+        conversations: (Array.isArray(data.conversations) ? data.conversations : [])
+          .map(toChatConversation)
+          .filter((c): c is ChatConversation => c !== null),
+        windowFull: data.windowFull === true,
+      };
+      setChats((prev) =>
+        prev.status === "ready" && JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
+      );
+    } catch {
+      if (mountedRef.current) fail("Network error loading chats.");
+    }
+  }, []);
+
+  // One read on arrival, so the Chats tab's count chip is there before anyone
+  // opens it; after that it only polls while it's the tab on screen.
+  useEffect(() => {
+    fetchChats();
+  }, [fetchChats]);
+
+  useEffect(() => {
+    if (tab !== "chats") return;
+    const tick = () => {
+      if (document.visibilityState === "visible") fetchChats({ silent: true });
+    };
+    tick();
+    const id = setInterval(tick, CHATS_POLL_MS);
+    window.addEventListener("focus", tick);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", tick);
+    };
+  }, [tab, fetchChats]);
+
+  const toggleChat = useCallback((conversationId: string) => {
+    setChatExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(conversationId)) next.delete(conversationId);
+      else next.add(conversationId);
+      return next;
+    });
+  }, []);
+
+  const requestChatDelete = useCallback((conversationId: string) => {
+    setChatDeleteFlow({ id: conversationId, busy: false, error: null });
+  }, []);
+
+  const cancelChatDelete = useCallback(() => {
+    setChatDeleteFlow((prev) => (prev?.busy ? prev : null));
+  }, []);
+
+  const confirmChatDelete = useCallback(async (conversationId: string) => {
+    setChatDeleteFlow({ id: conversationId, busy: true, error: null });
+    try {
+      const res = await fetch(`/api/portal/chats?conversationId=${encodeURIComponent(conversationId)}`, {
+        method: "DELETE",
+        headers: adminHeaders(),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!mountedRef.current) return;
+      if (!res.ok || !data?.ok) {
+        setChatDeleteFlow({
+          id: conversationId,
+          busy: false,
+          error: data?.error ?? `Delete failed (${res.status}).`,
+        });
+        return;
+      }
+      setChatDeleteFlow(null);
+      setChats((prev) =>
+        prev.status === "ready"
+          ? { ...prev, conversations: prev.conversations.filter((c) => c.conversationId !== conversationId) }
+          : prev,
+      );
+    } catch {
+      if (mountedRef.current) {
+        setChatDeleteFlow({ id: conversationId, busy: false, error: "Network error during delete." });
+      }
+    }
   }, []);
 
   /** Refetch both endpoints. `silent` marks the background/realtime polls:
@@ -1927,15 +2378,16 @@ export function TelemetryPage() {
     fetchAll();
   }, [fetchAll]);
 
-  /** The Refresh button's loud pull — spins the icon for the whole round trip. */
+  /** The Refresh button's loud pull — spins the icon for the whole round trip.
+   *  Chats come along too, so the tab chip never lags a manual refresh. */
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      await fetchAll();
+      await Promise.all([fetchAll(), fetchChats()]);
     } finally {
       if (mountedRef.current) setRefreshing(false);
     }
-  }, [fetchAll]);
+  }, [fetchAll, fetchChats]);
 
   // Realtime: silent background poll while the tab is visible, plus an
   // immediate pull the moment the window regains focus/visibility. Silent so
@@ -2142,8 +2594,9 @@ export function TelemetryPage() {
   const activeChannel =
     channel !== ALL_CHANNELS && channels.includes(channel) ? channel : ALL_CHANNELS;
 
-  // Funnel gauges: engaged leads → clicks → browsing → conversions, then the
-  // channel dials (Facebook, Google, LinkedIn, everything External) and opt-outs.
+  // Gauges: conversions, then the channel dials (Facebook, Google, LinkedIn,
+  // everything External) and opt-outs. Leads engaged, Email clicks and
+  // Services viewed were taken off the row on Kane's call (2026-10-11).
   const stats = useMemo<TelemetryStat[]>(() => {
     if (!ready) return [];
     const t = ready.totals;
@@ -2153,33 +2606,6 @@ export function TelemetryPage() {
     // link rather than of people leaving).
     const matchedOptOuts = ready.unsubscribes.filter((u) => u.leadId !== null).length;
     return [
-      {
-        id: "engaged",
-        label: "Leads engaged",
-        // Every lead that ever clicked, counted by the summary route — NOT the
-        // table's row count, which is capped at the newest 100 leads (this
-        // card read 100 for weeks while 1,238 had clicked).
-        value: t.engagedLeads,
-        icon: Users,
-        caption: "clicked through from outreach",
-        ratio: { value: ratio(t.enquiredLeads, t.engagedLeads), label: "went on to enquire" },
-      },
-      {
-        id: "clicks",
-        label: "Email clicks",
-        value: t.attributionClicks,
-        icon: MousePointerClick,
-        caption: "tracked outreach links opened",
-        ratio: { value: ratio(t.portalViews, t.attributionClicks), label: "reached the portal" },
-      },
-      {
-        id: "opens",
-        label: "Services viewed",
-        value: t.serviceOpens,
-        icon: LayoutGrid,
-        caption: "service cards opened",
-        ratio: { value: ratio(t.inquiries, t.serviceOpens), label: "became enquiries" },
-      },
       {
         id: "enquiries",
         label: "Enquiries",
@@ -2196,7 +2622,7 @@ export function TelemetryPage() {
         label: "Facebook",
         // Engagements through the promoted link: portal visits stamped
         // source=facebook (?utm_source= on the post's URL, or a facebook.com
-        // Referer). Views, not uniques — same unit as the Email clicks gauge.
+        // Referer). Views, not uniques.
         value: ready.facebook.views,
         icon: FacebookLogo,
         caption:
@@ -2229,7 +2655,7 @@ export function TelemetryPage() {
         label: "LinkedIn",
         // Portal visits stamped source=linkedin — a linkedin.com / lnkd.in
         // Referer or ?utm_source=linkedin. Same unit as Facebook and Google.
-        // (LinkedIn-sourced LEADS who click an email count under Email clicks.)
+        // (LinkedIn-sourced LEADS who click an email are outreach clicks, not these.)
         value: ready.linkedin.views,
         icon: LinkedInLogo,
         caption:
@@ -2337,10 +2763,35 @@ export function TelemetryPage() {
     }
     return ranked;
   }, [channelRows, activeSector, sort]);
-  // One pager serves both tabs, so the row count it works off is the ACTIVE
+  // Chats: newest-active first (the route orders them), narrowed by channel.
+  const chatsReady = chats.status === "ready" ? chats : null;
+  const allChats = useMemo(() => chatsReady?.conversations ?? [], [chatsReady]);
+  const chatChannels = useMemo(() => {
+    const set = new Set<string>(CHAT_BASE_CHANNELS);
+    for (const c of allChats) set.add(c.channel);
+    return [...set];
+  }, [allChats]);
+  const activeChatChannel =
+    chatChannelFilter !== ALL_CHANNELS && chatChannels.includes(chatChannelFilter)
+      ? chatChannelFilter
+      : ALL_CHANNELS;
+  const filteredChats = useMemo(
+    () =>
+      activeChatChannel === ALL_CHANNELS
+        ? allChats
+        : allChats.filter((c) => chatInChannel(c, activeChatChannel)),
+    [allChats, activeChatChannel],
+  );
+  const chatQuestions = useMemo(
+    () => filteredChats.reduce((n, c) => n + c.exchanges.length, 0),
+    [filteredChats],
+  );
+
+  // One pager serves every tab, so the row count it works off is the ACTIVE
   // tab's — and `page` is re-clamped against it, which is what stops a switch
   // from page 3 of the trails to a two-page opt-out list showing nothing.
-  const rowCount = tab === "activity" ? sortedRows.length : unsubscribes.length;
+  const rowCount =
+    tab === "activity" ? sortedRows.length : tab === "chats" ? filteredChats.length : unsubscribes.length;
   const pageCount = Math.max(1, Math.ceil(rowCount / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pagedRows = useMemo(
@@ -2351,6 +2802,10 @@ export function TelemetryPage() {
     () => unsubscribes.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
     [unsubscribes, safePage],
   );
+  const pagedChats = useMemo(
+    () => filteredChats.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
+    [filteredChats, safePage],
+  );
 
   // Changing the tab, sort, channel or sector re-frames the list — jump back
   // to its first page so the top of the new ranking is what's on screen. The
@@ -2358,7 +2813,7 @@ export function TelemetryPage() {
   // catches the data-driven changes, like a picked sector disappearing.
   useEffect(() => {
     setPage(0);
-  }, [tab, sort, activeChannel, activeSector]);
+  }, [tab, sort, activeChannel, activeSector, activeChatChannel]);
 
   /** The list's identity: a new key means a new view, and plays the fade-up.
    *  The first view the page settles on shows without it (the panel's own
@@ -2477,6 +2932,7 @@ export function TelemetryPage() {
                   saveAdminKey(keyInput.trim());
                   setKeyInput("");
                   fetchAll();
+                  fetchChats();
                 }}
               >
                 <label htmlFor="telemetry-access-key" className="sr-only">
@@ -2546,13 +3002,23 @@ export function TelemetryPage() {
                   }}
                   counts={{
                     activity: ready ? rows.length : null,
+                    // No chip until chats are actually being recorded.
+                    chats: chatsReady && !chatsReady.needsMigration ? allChats.length : null,
                     // The exact total, not the page cap — and nothing at all
                     // when the opt-out list couldn't be read.
                     unsubscribed: ready?.unsubscribesAvailable ? ready.unsubscribesTotal : null,
                   }}
                   meta={
                     <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                      {!ready
+                      {tab === "chats"
+                        ? !chatsReady
+                          ? chats.status === "error"
+                            ? "unavailable"
+                            : "loading"
+                          : chatsReady.needsMigration
+                            ? "not recording yet"
+                            : `${chatsReady.windowFull ? "newest " : ""}${formatInt(filteredChats.length)} ${filteredChats.length === 1 ? "chat" : "chats"} · ${formatInt(chatQuestions)} ${chatQuestions === 1 ? "question" : "questions"}`
+                        : !ready
                         ? "loading"
                         : tab === "unsubscribed"
                           ? ready.unsubscribesAvailable
@@ -2560,7 +3026,7 @@ export function TelemetryPage() {
                             : "list unavailable"
                           : activeSector === ALL_SECTORS && activeChannel === ALL_CHANNELS
                             ? // The route sends only the newest leads, so say so
-                              // beside the Leads engaged card that counts them all.
+                              // against the total that clicked.
                               (leads.length < ready.totals.engagedLeads
                                 ? `newest ${formatInt(leads.length)} of ${formatInt(ready.totals.engagedLeads)} leads · ${formatInt(visitors.length)} ${visitors.length === 1 ? "visitor" : "visitors"}`
                                 : `${formatInt(rows.length)} ${rows.length === 1 ? "trail" : "trails"} · ${formatInt(totalEvents)} events`) +
@@ -2748,6 +3214,103 @@ export function TelemetryPage() {
                         </>
                       )}
                     </>
+                  ) : tab === "chats" ? (
+                    chats.status === "loading" ? (
+                      <LeadListSkeleton />
+                    ) : chats.status === "error" ? (
+                      <PanelEmpty icon={AlertTriangle} hint={chats.error} />
+                    ) : chats.needsMigration ? (
+                      /* The table doesn't exist yet, so nothing is being saved —
+                         say that, rather than "nobody has chatted". */
+                      <PanelEmpty
+                        icon={MessagesSquare}
+                        hint="Chats aren’t being recorded yet. Run supabase/portal-chats.sql in the Supabase SQL editor — every chat from then on lands here."
+                      />
+                    ) : chats.mode === "demo" ? (
+                      <PanelEmpty
+                        icon={MessagesSquare}
+                        hint="Not connected — configure Supabase to see what visitors ask the chat assistant."
+                      />
+                    ) : (
+                      <>
+                        {allChats.length > 0 && (
+                          <div
+                            className="flex flex-wrap items-center gap-1.5 border-b border-border px-4 py-2.5"
+                            role="group"
+                            aria-label="Filter chats by source"
+                          >
+                            <span className="mr-0.5 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+                              Source
+                            </span>
+                            {[ALL_CHANNELS, ...chatChannels].map((c) => (
+                              <button
+                                key={c}
+                                type="button"
+                                data-track="telemetry_chat_channel"
+                                data-track-channel={c}
+                                onClick={() => {
+                                  setChatChannelFilter(c);
+                                  setPage(0);
+                                }}
+                                aria-pressed={activeChatChannel === c}
+                                className={cn(
+                                  "inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
+                                  activeChatChannel === c
+                                    ? "border-primary/40 bg-primary/10 text-foreground"
+                                    : "border-border bg-background text-muted-foreground hover:text-foreground",
+                                )}
+                              >
+                                {c !== ALL_CHANNELS && <ChatSourceMark channel={c} />}
+                                {c === ALL_CHANNELS ? "All" : sourceLabel(c)}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        {allChats.length === 0 ? (
+                          <PanelEmpty
+                            icon={MessagesSquare}
+                            hint="No chats yet — conversations land here the moment a visitor asks the portal’s chat assistant a question. Staff browsers aren’t recorded; test from a private window."
+                          />
+                        ) : filteredChats.length === 0 ? (
+                          <PanelEmpty
+                            icon={MessagesSquare}
+                            hint={`No chats from ${sourceLabel(activeChatChannel)} yet.`}
+                          />
+                        ) : (
+                          <>
+                            <ChatTableHead />
+                            <motion.ul
+                              key={`chats|${activeChatChannel}|${safePage}`}
+                              variants={LIST_VARIANTS}
+                              initial="hidden"
+                              animate="show"
+                            >
+                              {pagedChats.map((chat) => (
+                                <ChatRow
+                                  key={chat.conversationId}
+                                  chat={chat}
+                                  open={chatExpanded.has(chat.conversationId)}
+                                  onToggle={toggleChat}
+                                  deletePhase={
+                                    chatDeleteFlow?.id === chat.conversationId
+                                      ? chatDeleteFlow.busy
+                                        ? "busy"
+                                        : "confirm"
+                                      : null
+                                  }
+                                  deleteError={
+                                    chatDeleteFlow?.id === chat.conversationId ? chatDeleteFlow.error : null
+                                  }
+                                  onDeleteRequest={requestChatDelete}
+                                  onDeleteCancel={cancelChatDelete}
+                                  onDeleteConfirm={confirmChatDelete}
+                                />
+                              ))}
+                            </motion.ul>
+                          </>
+                        )}
+                      </>
+                    )
                   ) : !ready ? (
                     <LeadListSkeleton />
                   ) : !ready.unsubscribesAvailable ? (

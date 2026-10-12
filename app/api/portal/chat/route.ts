@@ -2,12 +2,15 @@ import { sameOrigin } from "@/lib/pipeline/server";
 import { draftPortalChatReply, isChatConfigured, type ChatTurn } from "@/lib/ai/portalChat";
 import { clientIp, rateLimit } from "@/lib/portal/chatRateLimit";
 import { MAX_HISTORY_MESSAGES, MAX_MESSAGE_CHARS, PROMPT_LIMIT } from "@/lib/portal/chatLimits";
+import { chatConversationId, chatVisitorId, recordChatExchange } from "@/lib/portal/chatLog";
+import { type ChatOutcome } from "@/lib/data/chats";
 import {
   dailyBudgetExhausted,
   openChatSlot,
   recordChatPrompt,
   releaseChatSlot,
   takeDailySlot,
+  type ChatSlot,
 } from "@/lib/portal/chatQuota";
 import { isBotRequest, isInternalRequest } from "@/lib/portal/server";
 
@@ -51,6 +54,11 @@ import { isBotRequest, isInternalRequest } from "@/lib/portal/server";
  * Degrades gracefully: with no key configured or on any API error it returns a
  * friendly fallback (200, `fallback: true`) nudging the visitor to the enquiry
  * form, so the bubble is never a dead end.
+ *
+ * TRANSCRIPTS: every question that gets past the input caps is stored with the
+ * reply it got — answered, fallback or limit — in portal_chats (lib/portal/
+ * chatLog), for the Telemetry tab's Chats view. Bots and rate-limited
+ * requests never get that far; staff browsers are skipped by the writer.
  *
  * NOTE: the window limiter and the daily breaker are in-memory / per-instance.
  * The lifetime quota for attributed leads is Supabase-backed and durable.
@@ -128,10 +136,18 @@ export async function POST(req: Request): Promise<Response> {
   // that would burn the visitor's quota slot for nothing.
   const history: ChatTurn[] = rawHistoryToTurns(b.history);
 
+  // Every exit from here on answers a real question, so each one stores the
+  // exchange — the visitor's question matters even when the model didn't answer.
+  const conversationId = chatConversationId(b.conversationId, req);
+  const visitorId = chatVisitorId(b.visitorId);
+  const logExchange = (reply: string, outcome: ChatOutcome, slot?: ChatSlot) =>
+    recordChatExchange(req, { conversationId, visitorId, question: message, reply, outcome }, slot);
+
   // (5) Never consume anyone's allowance for a call that cannot succeed —
   // an unset/removed key would otherwise permanently drain durable lead
   // quotas on guaranteed-failure calls.
   if (!isChatConfigured()) {
+    await logExchange(FALLBACK, "fallback");
     return Response.json({ ok: true, fallback: true, reply: FALLBACK });
   }
 
@@ -141,6 +157,7 @@ export async function POST(req: Request): Promise<Response> {
   // `remaining` in this response: the prompt was NOT consumed, so reporting
   // the post-consumption number would understate their real allowance.
   if (dailyBudgetExhausted()) {
+    await logExchange(FALLBACK, "fallback");
     return Response.json({ ok: true, fallback: true, reply: FALLBACK });
   }
 
@@ -150,6 +167,7 @@ export async function POST(req: Request): Promise<Response> {
   const internal = isInternalRequest(req);
   const slot = await openChatSlot(req, { ignoreAttribution: internal });
   if (!slot.allowed) {
+    await logExchange(LIMIT_REACHED, "limit", slot);
     return Response.json({ ok: true, limitReached: true, remaining: 0, reply: LIMIT_REACHED });
   }
 
@@ -157,6 +175,7 @@ export async function POST(req: Request): Promise<Response> {
   // here — give the visitor their reservation back; nothing was spent.
   if (!takeDailySlot()) {
     releaseChatSlot(slot.identity);
+    await logExchange(FALLBACK, "fallback", slot);
     return Response.json({ ok: true, fallback: true, reply: FALLBACK });
   }
 
@@ -173,6 +192,7 @@ export async function POST(req: Request): Promise<Response> {
     userRef: slot.identity.userRef,
   });
   if (!reply) {
+    await logExchange(FALLBACK, "fallback", slot);
     return Response.json({
       ok: true,
       fallback: true,
@@ -182,6 +202,7 @@ export async function POST(req: Request): Promise<Response> {
     });
   }
 
+  await logExchange(reply, "answered", slot);
   return Response.json({
     ok: true,
     reply,
