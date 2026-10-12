@@ -14,14 +14,16 @@ import {
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   AlertTriangle,
+  ArrowRight,
   Check,
   CheckCheck,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Eye,
   Globe,
   Inbox,
-  Mail,
   MailX,
   MessagesSquare,
   MousePointerClick,
@@ -43,7 +45,14 @@ import {
   type UnsubscribedPerson,
 } from "@/lib/data/leadActivity";
 import { sourceLabel } from "@/lib/data/enquiries";
-import { toChatConversation, type ChatConversation } from "@/lib/data/chats";
+import {
+  chatDisplayName,
+  LEAD_ORIGIN_NAME,
+  toChatConversation,
+  type ChatConversation,
+} from "@/lib/data/chats";
+import { handOffToSales, useHandedOffToSales } from "@/lib/data/hotLeads";
+import { useRbac } from "@/lib/rbac/RbacProvider";
 import { toServiceClicks, type ServiceClickRow, type ServiceClicks } from "@/lib/data/serviceClicks";
 import { PORTAL_ORIGIN } from "@/lib/hosts";
 import { LEAD_SOURCES, type LeadSource } from "@/lib/pipeline/source";
@@ -66,6 +75,12 @@ import { Button } from "@/components/ui/button";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
 import { TelemetryReportExport } from "./TelemetryReportExport";
+import {
+  ChatDetailModal,
+  ChatSourceMark,
+  type ChatSalesState,
+  type ChatTrail,
+} from "./ChatDetailModal";
 
 /**
  * System → Telemetry tab — WHO clicked WHAT. Reads two endpoints on mount,
@@ -1348,54 +1363,37 @@ const UnsubscribedRow = memo(function UnsubscribedRow({ person }: { person: Unsu
 
 /* ───────────────────────────  chat rows  ─────────────────────────── */
 
-/** Chat table tracks: Who · Source · Sector · Conversation · Last message.
- *  Conversation takes the slack — it carries the opening question. */
+/** Chat table tracks: Who · Source · Sector · Conversation · Last message ·
+ *  Actions. Conversation takes the slack — it carries the opening question. */
 const CHAT_COLS =
-  "grid-cols-[minmax(0,10rem)_minmax(0,8rem)_minmax(0,6rem)_minmax(0,1fr)_auto] xl:grid-cols-[minmax(0,13rem)_minmax(0,9.5rem)_minmax(0,9rem)_minmax(0,1fr)_auto]";
-
-/** Who the chat was with: the lead's school / business when they came through
- *  an outreach email, else the door they came through. */
-function chatDisplayName(chat: ChatConversation): string {
-  if (chat.business) return chat.business;
-  if (chat.leadId) return "Unattributed lead";
-  if (chat.channel === DIRECT_SOURCE) return "Anonymous visitor";
-  return `${sourceLabel(chat.channel)} visitor`;
-}
-
-/** The channel's mark: a brand logo for the gauged platforms, an envelope for
- *  the outreach email, a globe for any other site. Direct has none. */
-function ChatSourceMark({ channel }: { channel: string }) {
-  if (isBrand(channel)) return <ChannelMark brand={channel} />;
-  if (channel === DIRECT_SOURCE) return null;
-  const Icon = channel === OUTREACH_SOURCE ? Mail : Globe;
-  return <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />;
-}
+  "grid-cols-[minmax(0,10rem)_minmax(0,8rem)_minmax(0,6rem)_minmax(0,1fr)_5rem_auto] xl:grid-cols-[minmax(0,13rem)_minmax(0,9.5rem)_minmax(0,8rem)_minmax(0,1fr)_5.5rem_auto]";
 
 function ChatTableHead() {
   return (
-    <div className="hidden items-stretch border-b border-border bg-muted/25 lg:flex">
-      <div
-        className={cn(
-          "grid min-w-0 flex-1 items-center gap-3 px-4 py-2 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground",
-          CHAT_COLS,
-        )}
-      >
-        <span>Who</span>
-        <span>Source</span>
-        <span>Sector</span>
-        <span>Conversation</span>
-        <span className="pr-7 text-right">Last message</span>
-      </div>
-      <div className={cn("shrink-0 border-l border-border/70", ROW_ACTION_W)} aria-hidden />
+    <div
+      className={cn(
+        "hidden items-center gap-3 border-b border-border bg-muted/25 px-4 py-2 font-mono text-[9px] uppercase tracking-[0.14em] text-muted-foreground lg:grid",
+        CHAT_COLS,
+      )}
+    >
+      <span>Who</span>
+      <span>Source</span>
+      <span>Sector</span>
+      <span>Conversation</span>
+      <span className="text-right">Last message</span>
+      <span className="text-right">Actions</span>
     </div>
   );
 }
 
-/** Memoised like LeadRow: opening one transcript must not re-render the rest. */
+/** One chat as a line item. Memoised like LeadRow: a poll that changes one
+ *  chat must not re-render the rest. View opens the full-detail modal. */
 const ChatRow = memo(function ChatRow({
   chat,
-  open,
-  onToggle,
+  sales,
+  sending,
+  onView,
+  onSend,
   deletePhase,
   deleteError,
   onDeleteRequest,
@@ -1403,8 +1401,12 @@ const ChatRow = memo(function ChatRow({
   onDeleteConfirm,
 }: {
   chat: ChatConversation;
-  open: boolean;
-  onToggle: (conversationId: string) => void;
+  /** where this person stands with Sales — see ChatSalesState */
+  sales: ChatSalesState;
+  /** this row's hand-off is in flight */
+  sending: boolean;
+  onView: (conversationId: string) => void;
+  onSend: (leadId: string) => void;
   deletePhase: DeletePhase;
   deleteError: string | null;
   onDeleteRequest: (conversationId: string) => void;
@@ -1417,163 +1419,174 @@ const ChatRow = memo(function ChatRow({
   const unanswered = chat.exchanges.filter((e) => e.outcome === "fallback").length;
   const hitLimit = chat.exchanges.some((e) => e.outcome === "limit");
   const opening = chat.exchanges[0]?.question ?? "";
-  const leadFrom = chat.leadSource ? LEAD_SOURCE_NAME[chat.leadSource] : null;
+  const leadFrom = chat.leadSource ? LEAD_ORIGIN_NAME[chat.leadSource] : null;
 
   return (
     <motion.li
       variants={reduce ? ROW_VARIANTS_REDUCED : ROW_VARIANTS}
       className="border-t border-border/70 first:border-t-0"
     >
-      <div className="flex items-stretch">
-        <button
-          type="button"
-          onClick={() => onToggle(chat.conversationId)}
-          aria-expanded={open}
-          data-track="telemetry_chat_toggle"
-          aria-label={`Chat with ${name}, from ${sourceLabel(chat.channel)}: ${questions} ${questions === 1 ? "question" : "questions"}, last message ${fmtWhen(chat.lastAt)}. ${open ? "Collapse" : "Expand"} transcript`}
-          className={cn(
-            "flex min-w-0 flex-1 flex-col gap-2 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] lg:grid lg:items-center lg:gap-3",
-            CHAT_COLS,
-          )}
-        >
-          {/* ── Who: the school / business, or the visitor's channel ──── */}
-          <span className="block min-w-0">
-            <span
-              className={cn(
-                "block truncate text-[13px] font-medium",
-                chat.business ? "text-foreground" : "text-muted-foreground",
-              )}
-            >
-              {name}
+      <div
+        className={cn(
+          "flex min-w-0 flex-col gap-2 px-4 py-3 lg:grid lg:items-center lg:gap-3",
+          CHAT_COLS,
+        )}
+      >
+        {/* ── Who: the school / business, or the visitor's channel ──── */}
+        <span className="block min-w-0">
+          <span
+            className={cn(
+              "block truncate text-[13px] font-medium",
+              chat.business ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {name}
+          </span>
+          {chat.contact?.contactName && (
+            <span className="mt-0.5 block truncate text-[11.5px] text-muted-foreground">
+              {chat.contact.contactName}
             </span>
-            {chat.campaign && (
-              <span className="mt-1 flex min-w-0">
-                <span
-                  title={chat.campaign}
-                  className="inline-flex max-w-full items-center rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary"
-                >
-                  <span className="truncate">{chat.campaign}</span>
-                </span>
+          )}
+          {chat.campaign && (
+            <span className="mt-1 flex min-w-0">
+              <span
+                title={chat.campaign}
+                className="inline-flex max-w-full items-center rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary"
+              >
+                <span className="truncate">{chat.campaign}</span>
+              </span>
+            </span>
+          )}
+        </span>
+
+        {/* ── Source: how they reached the portal, and for an outreach
+               lead, where we got the lead from ──────────────────── */}
+        <span className="flex min-w-0 items-center">
+          <CellLabel>Source</CellLabel>
+          <span className="block min-w-0">
+            <span title={sourceLabel(chat.channel)} className="flex min-w-0 items-center gap-1.5">
+              <ChatSourceMark channel={chat.channel} />
+              <span className="truncate text-[11.5px] text-foreground">{sourceLabel(chat.channel)}</span>
+            </span>
+            {leadFrom && (
+              <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
+                lead from {leadFrom}
               </span>
             )}
           </span>
+        </span>
 
-          {/* ── Source: how they reached the portal, and for an outreach
-                 lead, where we got the lead from ──────────────────── */}
-          <span className="flex min-w-0 items-center">
-            <CellLabel>Source</CellLabel>
-            <span className="block min-w-0">
-              <span
-                title={sourceLabel(chat.channel)}
-                className="flex min-w-0 items-center gap-1.5"
-              >
-                <ChatSourceMark channel={chat.channel} />
-                <span className="truncate text-[11.5px] text-foreground">
-                  {sourceLabel(chat.channel)}
-                </span>
-              </span>
-              {leadFrom && (
-                <span className="mt-0.5 block truncate text-[10.5px] text-muted-foreground">
-                  lead from {leadFrom}
-                </span>
-              )}
+        {/* ── Sector ─────────────────────────────────────────── */}
+        <span className="flex min-w-0 items-center">
+          <CellLabel>Sector</CellLabel>
+          {chat.category ? (
+            <span
+              title={chat.category}
+              className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+            >
+              <span className="truncate">{chat.category}</span>
             </span>
-          </span>
+          ) : (
+            <span className="font-mono text-[10px] text-muted-foreground/60">—</span>
+          )}
+        </span>
 
-          {/* ── Sector ─────────────────────────────────────────── */}
-          <span className="flex min-w-0 items-center">
-            <CellLabel>Sector</CellLabel>
-            {chat.category ? (
+        {/* ── Conversation: what they opened with, and how it went ── */}
+        <span className="block min-w-0">
+          <span title={opening} className="block truncate text-[12px] text-foreground">
+            &ldquo;{opening}&rdquo;
+          </span>
+          <span className="mt-1 flex flex-wrap items-center gap-1.5">
+            <span className="tnum font-mono text-[10px] text-muted-foreground">
+              {formatInt(questions)} {questions === 1 ? "question" : "questions"}
+            </span>
+            {unanswered > 0 && (
               <span
-                title={chat.category}
-                className="inline-flex max-w-full items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground"
+                title="The assistant couldn't answer and pointed them to the enquiry form instead"
+                className="inline-flex items-center rounded-full border border-amber-500/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-amber-600 dark:text-amber-400"
               >
-                <span className="truncate">{chat.category}</span>
+                {formatInt(unanswered)} unanswered
               </span>
-            ) : (
-              <span className="font-mono text-[10px] text-muted-foreground/60">—</span>
+            )}
+            {hitLimit && (
+              <span
+                title="They used every question the chat allows"
+                className="inline-flex items-center rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary"
+              >
+                Hit the limit
+              </span>
             )}
           </span>
+        </span>
 
-          {/* ── Conversation: what they opened with, and how it went ── */}
-          <span className="block min-w-0">
-            <span title={opening} className="block truncate text-[12px] text-foreground">
-              &ldquo;{opening}&rdquo;
-            </span>
-            <span className="mt-1 flex flex-wrap items-center gap-1.5">
-              <span className="tnum font-mono text-[10px] text-muted-foreground">
-                {formatInt(questions)} {questions === 1 ? "question" : "questions"}
-              </span>
-              {unanswered > 0 && (
-                <span
-                  title="The assistant couldn't answer and pointed them to the enquiry form instead"
-                  className="inline-flex items-center rounded-full border border-amber-500/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-amber-600 dark:text-amber-400"
-                >
-                  {formatInt(unanswered)} unanswered
-                </span>
-              )}
-              {hitLimit && (
-                <span
-                  title="They used every question the chat allows"
-                  className="inline-flex items-center rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary"
-                >
-                  Hit the limit
-                </span>
-              )}
-            </span>
+        {/* ── Last message ───────────────────────────────────── */}
+        <span className="flex min-w-0 items-center lg:justify-end">
+          <CellLabel>Last message</CellLabel>
+          <span className="tnum font-mono text-[10.5px] text-muted-foreground" title={fmtStamp(chat.lastAt)}>
+            {fmtWhen(chat.lastAt)}
           </span>
+        </span>
 
-          {/* ── Last message, and the expand cue ───────────────── */}
-          <span className="flex shrink-0 items-center justify-between gap-3 lg:justify-end">
+        {/* ── Actions: view everything, hand to Sales, delete ────── */}
+        <span className="flex flex-wrap items-center gap-1.5 lg:flex-nowrap lg:justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onView(chat.conversationId)}
+            aria-label={`View the chat with ${name}`}
+            data-track="telemetry_chat_view"
+            className="gap-1.5"
+          >
+            <Eye className="h-3.5 w-3.5" aria-hidden />
+            View
+          </Button>
+          {sales.state === "sent" ? (
             <span
-              className="tnum font-mono text-[10.5px] text-muted-foreground"
-              title={fmtStamp(chat.lastAt)}
+              title={`Handed to Sales ${fmtStamp(sales.at)}`}
+              className="inline-flex h-8 items-center gap-1 whitespace-nowrap rounded-md border border-border px-2.5 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground"
             >
-              {fmtWhen(chat.lastAt)}
+              <CheckCircle2 className="h-3.5 w-3.5 text-primary" aria-hidden />
+              In Sales
             </span>
-            <ChevronDown
-              className={cn(
-                "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
-                open && "rotate-180",
-              )}
-              aria-hidden
-            />
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => (deletePhase ? onDeleteCancel() : onDeleteRequest(chat.conversationId))}
-          disabled={deletePhase === "busy"}
-          aria-label={`Delete the chat with ${name}`}
-          data-track="telemetry_chat_delete"
-          className={cn(
-            "flex shrink-0 items-center justify-center border-l border-border/70 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50",
-            ROW_ACTION_W,
+          ) : (
+            <Button
+              size="sm"
+              disabled={sales.state === "blocked" || sending || !chat.leadId}
+              title={sales.state === "blocked" ? sales.reason : "Add them to the Sales queue and email the sales desk"}
+              onClick={() => chat.leadId && onSend(chat.leadId)}
+              aria-label={`Send ${name} to Sales`}
+              data-track="telemetry_chat_send_to_sales"
+              className="gap-1.5 whitespace-nowrap bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
+            >
+              <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+              {sending ? "Sending…" : "Send to Sales"}
+            </Button>
           )}
-        >
-          <Trash2 className="h-3.5 w-3.5" aria-hidden />
-        </button>
+          <button
+            type="button"
+            onClick={() => (deletePhase ? onDeleteCancel() : onDeleteRequest(chat.conversationId))}
+            disabled={deletePhase === "busy"}
+            aria-label={`Delete the chat with ${name}`}
+            title="Delete this chat"
+            data-track="telemetry_chat_delete"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50"
+          >
+            <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        </span>
       </div>
 
       {deletePhase && (
         <div className="flex flex-wrap items-center gap-2 border-t border-destructive/40 bg-destructive/[0.04] px-4 py-2">
           <Trash2 className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
-          <span className="text-[12px] text-foreground">
-            Permanently delete this chat with {name}?
-          </span>
+          <span className="text-[12px] text-foreground">Permanently delete this chat with {name}?</span>
           {deleteError && (
             <span role="alert" className="font-mono text-[10.5px] text-destructive">
               {deleteError}
             </span>
           )}
           <div className="ml-auto flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={onDeleteCancel}
-              disabled={deletePhase === "busy"}
-            >
+            <Button variant="outline" size="sm" onClick={onDeleteCancel} disabled={deletePhase === "busy"}>
               Cancel
             </Button>
             <Button
@@ -1590,61 +1603,6 @@ const ChatRow = memo(function ChatRow({
           </div>
         </div>
       )}
-
-      {/* expanded transcript — visitor on the right, assistant on the left,
-          the way the chat bubble itself lays it out */}
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
-            animate={reduce ? { opacity: 1 } : { height: "auto", opacity: 1 }}
-            exit={reduce ? { opacity: 0 } : { height: 0, opacity: 0 }}
-            transition={{ duration: reduce ? 0.1 : 0.26, ease: EASE }}
-            className="overflow-hidden"
-          >
-            <div className="border-t border-border/70 bg-background/40 px-4 pb-4 pt-3">
-              <ol className="flex flex-col gap-2.5">
-                {chat.exchanges.map((ex, i) => (
-                  <li key={`${ex.ts}-${i}`} className="flex flex-col gap-1.5">
-                    <div className="flex flex-col items-end">
-                      <div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-sm bg-primary/10 px-3 py-2 text-[13px] leading-relaxed text-foreground">
-                        {ex.question}
-                      </div>
-                      <span className="mt-0.5 font-mono text-[9.5px] text-muted-foreground">
-                        {name} · {fmtStamp(ex.ts)}
-                      </span>
-                    </div>
-                    <div className="flex flex-col items-start">
-                      <div
-                        className={cn(
-                          "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-bl-sm px-3 py-2 text-[13px] leading-relaxed",
-                          ex.outcome === "answered"
-                            ? "bg-muted text-foreground"
-                            : "border border-dashed border-border text-muted-foreground",
-                        )}
-                      >
-                        {ex.reply}
-                      </div>
-                      <span className="mt-0.5 font-mono text-[9.5px] text-muted-foreground">
-                        {ex.outcome === "answered"
-                          ? "APMG Assistant"
-                          : ex.outcome === "limit"
-                            ? "Automatic reply · question limit reached"
-                            : "Automatic reply · the assistant couldn’t answer"}
-                      </span>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-              <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 border-t border-border/70 pt-2.5 font-mono text-[9.5px] text-muted-foreground">
-                <span>Started {fmtStamp(chat.startedAt)}</span>
-                {chat.leadId && <span title={chat.leadId}>Lead {shortLeadId(chat.leadId)}</span>}
-                {chat.visitorId && <span title={chat.visitorId}>Visitor {shortLeadId(chat.visitorId)}</span>}
-              </p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </motion.li>
   );
 });
@@ -2112,7 +2070,17 @@ export function TelemetryPage() {
    *  open transcripts and delete flow — none of it shared with the trails. */
   const [chats, setChats] = useState<ChatsLoad>({ status: "loading" });
   const [chatChannelFilter, setChatChannelFilter] = useState<string>(ALL_CHANNELS);
-  const [chatExpanded, setChatExpanded] = useState<Set<string>>(new Set());
+  /** The chat whose View modal is open (null = closed). */
+  const [viewChatId, setViewChatId] = useState<string | null>(null);
+  /** The one hand-off in flight, and the last one that failed. */
+  const [chatSend, setChatSend] = useState<{ leadId: string; busy: boolean; error: string | null } | null>(
+    null,
+  );
+  /** Send to Sales is the Hot Leads hand-off, so it needs that permission;
+   *  without it the Sales state isn't read at all (the route would 403). */
+  const { can } = useRbac();
+  const canHandOff = can("hotleads.handoff");
+  const handedOff = useHandedOffToSales(canHandOff);
   const [chatDeleteFlow, setChatDeleteFlow] = useState<{
     id: string;
     busy: boolean;
@@ -2183,13 +2151,20 @@ export function TelemetryPage() {
     };
   }, [tab, fetchChats]);
 
-  const toggleChat = useCallback((conversationId: string) => {
-    setChatExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(conversationId)) next.delete(conversationId);
-      else next.add(conversationId);
-      return next;
-    });
+  const openChat = useCallback((conversationId: string) => {
+    setViewChatId(conversationId);
+    setChatSend((prev) => (prev?.busy ? prev : null));
+  }, []);
+  const closeChat = useCallback(() => setViewChatId(null), []);
+
+  /** Hand the lead behind a chat to Sales — the same one-way step as Hot
+   *  Leads' button (queue + desk email), idempotent server-side, so a stale
+   *  tab or double-click can't send anyone twice. */
+  const sendChatToSales = useCallback(async (leadId: string) => {
+    setChatSend({ leadId, busy: true, error: null });
+    const error = await handOffToSales([leadId]);
+    if (!mountedRef.current) return;
+    setChatSend(error ? { leadId, busy: false, error } : null);
   }, []);
 
   const requestChatDelete = useCallback((conversationId: string) => {
@@ -2807,6 +2782,53 @@ export function TelemetryPage() {
     [filteredChats, safePage],
   );
 
+  /** Where a chat's person stands with Sales. Only a chat with a lead behind
+   *  it can be handed over — an anonymous visitor has no record to call. */
+  const chatSalesState = useCallback(
+    (chat: ChatConversation): ChatSalesState => {
+      if (!chat.leadId) {
+        return {
+          state: "blocked",
+          reason:
+            "No lead behind this chat — they didn't come through an outreach email, so Sales has nobody to call. Copy the transcript from View instead.",
+        };
+      }
+      const at = handedOff.get(chat.leadId);
+      if (at) return { state: "sent", at };
+      if (!canHandOff) return { state: "blocked", reason: "Your role can't hand leads to Sales." };
+      return { state: "ready" };
+    },
+    [handedOff, canHandOff],
+  );
+
+  // The View modal: the chat, every other chat by the same person (same lead,
+  // else same browser), and the click trail the page already holds for them.
+  const viewChat = useMemo(
+    () => (viewChatId ? allChats.find((c) => c.conversationId === viewChatId) ?? null : null),
+    [allChats, viewChatId],
+  );
+  const viewRelated = useMemo(() => {
+    if (!viewChat) return [];
+    return allChats.filter(
+      (c) =>
+        c.conversationId === viewChat.conversationId ||
+        (viewChat.leadId
+          ? c.leadId === viewChat.leadId
+          : viewChat.visitorId !== null && c.leadId === null && c.visitorId === viewChat.visitorId),
+    );
+  }, [allChats, viewChat]);
+  const viewTrail = useMemo<ChatTrail | null>(() => {
+    if (!viewChat || !ready) return null;
+    const found = viewChat.leadId
+      ? ready.leads.find((l) => l.leadId === viewChat.leadId)
+      : viewChat.visitorId
+        ? ready.visitors.find((v) => v.visitorId === viewChat.visitorId)
+        : undefined;
+    return found
+      ? { events: found.events, counts: found.counts, firstSeen: found.firstSeen, lastSeen: found.lastSeen }
+      : null;
+  }, [viewChat, ready]);
+
   // Changing the tab, sort, channel or sector re-frames the list — jump back
   // to its first page so the top of the new ranking is what's on screen. The
   // controls reset it in the same click (one render, one animation); this
@@ -3289,8 +3311,10 @@ export function TelemetryPage() {
                                 <ChatRow
                                   key={chat.conversationId}
                                   chat={chat}
-                                  open={chatExpanded.has(chat.conversationId)}
-                                  onToggle={toggleChat}
+                                  sales={chatSalesState(chat)}
+                                  sending={chatSend?.busy === true && chatSend.leadId === chat.leadId}
+                                  onView={openChat}
+                                  onSend={sendChatToSales}
                                   deletePhase={
                                     chatDeleteFlow?.id === chat.conversationId
                                       ? chatDeleteFlow.busy
@@ -3391,6 +3415,17 @@ export function TelemetryPage() {
           </Reveal>
         </>
       )}
+
+      <ChatDetailModal
+        chat={viewChat}
+        related={viewRelated}
+        trail={viewTrail}
+        sales={viewChat ? chatSalesState(viewChat) : { state: "ready" }}
+        sending={chatSend?.busy === true && chatSend.leadId === viewChat?.leadId}
+        sendError={chatSend && !chatSend.busy && chatSend.leadId === viewChat?.leadId ? chatSend.error : null}
+        onSend={sendChatToSales}
+        onClose={closeChat}
+      />
 
       <Footer />
     </div>

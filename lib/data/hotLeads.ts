@@ -529,6 +529,22 @@ export function useHotLeadsWaiting(enabled: boolean): number {
   );
 }
 
+/** leadId → when it was handed to Sales — for surfaces outside Hot Leads that
+ *  offer their own "Send to Sales" (Telemetry → Chats), so they show "In
+ *  Sales" instead of a button. Same `enabled` contract as useHotLeadsWaiting:
+ *  pass `can("hotleads.handoff")`, or a caller without it 403s every poll. */
+export function useHandedOffToSales(enabled: boolean): ReadonlyMap<string, string> {
+  const sub = useCallback(
+    (cb: () => void) => (enabled ? subscribe(cb) : () => {}),
+    [enabled],
+  );
+  return useSyncExternalStore(
+    sub,
+    () => (enabled ? snapshot.handedOff : EMPTY_MARKERS),
+    () => EMPTY_MARKERS,
+  );
+}
+
 let waitingCache = { sig: "", n: 0 };
 
 /** Derived from the live snapshot, memoised on its signature so

@@ -1,4 +1,5 @@
 import { bestEmail, isEmail, MAX_DRAFT_EMAILS, MAX_FIND_LEADS } from "@/lib/pipeline/campaign";
+import { usableWebsite } from "@/lib/pipeline/findEmailsRun";
 import {
   emailFinderWebhook,
   isUuid,
@@ -18,6 +19,10 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 //
 // Webhook payload:  { leads: [{ id, website }] }  (≤ CHUNK_SIZE per call)
 // Webhook response: { ok, results: [{ id, website, emails, best_email }] }
+//
+// The Leads tab's progress modal calls this once per FIND_CHUNK_SIZE leads
+// (lib/pipeline/findEmailsRun.ts) so it can show per-site progress; the
+// internal chunking below still guards any caller that sends a full batch.
 export const runtime = "nodejs";
 // The finder fetches two pages per lead sequentially in n8n; a full batch can
 // take minutes — give serverless deploys the platform max.
@@ -58,17 +63,8 @@ function sanitizeLead(input: unknown): { id: string; website: string } | null {
   const o = input as Record<string, unknown>;
   const id = typeof o.id === "string" ? o.id.trim() : "";
   if (!isUuid(id)) return null;
-  let site = typeof o.website === "string" ? o.website.trim() : "";
-  if (!site) return null;
-  if (!/^https?:\/\//i.test(site)) site = `https://${site}`;
-  try {
-    const u = new URL(site);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-    if (!u.hostname.includes(".")) return null;
-    return { id, website: u.toString() };
-  } catch {
-    return null;
-  }
+  const website = usableWebsite(o.website);
+  return website ? { id, website } : null;
 }
 
 /** Coerce one webhook result → FindResult, or null. Only ids we actually asked

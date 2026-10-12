@@ -10,6 +10,7 @@ import {
   CHATS_MAX_CONVERSATIONS,
   groupChatRows,
   type ChatConversation,
+  type ChatLeadContact,
   type ChatLeadInfo,
   type ChatRow,
 } from "@/lib/data/chats";
@@ -40,12 +41,18 @@ export const runtime = "nodejs";
 const WINDOW_ROWS = MAX_ROWS_PER_READ;
 
 const CHAT_COLS =
-  "id,conversation_id,visitor_id,lead_id,business,category,campaign,source,question,reply,outcome,created_at";
+  "id,conversation_id,visitor_id,lead_id,business,category,campaign,source,question,reply,outcome,ua,created_at";
 
-const LEAD_COLS = "id,name,category,bing_maps_url,source";
-/** Before supabase/linkedin-source.sql: no `source` column, so LinkedIn leads
- *  can't be told apart — Google / Bing still resolve off the maps URL. */
-const LEAD_COLS_LEGACY = "id,name,category,bing_maps_url";
+/** Name, origin and every way to reach them — the View modal is where an
+ *  admin decides whether to hand the lead to Sales. */
+const CONTACT_COLS = "address,website,phone,emails";
+const LEAD_COLS = `id,name,category,bing_maps_url,source,contact_name,contact_title,${CONTACT_COLS}`;
+/** Before supabase/linkedin-source.sql: no source/contact columns, so LinkedIn
+ *  leads can't be told apart — Google / Bing still resolve off the maps URL. */
+const LEAD_COLS_LEGACY = `id,name,category,bing_maps_url,${CONTACT_COLS}`;
+/** The same fields off saved_hot_leads (supabase/saved-hot-leads.sql) — the
+ *  copy a 60+ lead leaves behind when its folder is deleted. */
+const SAVED_COLS = `lead_id,name,category,bing_maps_url,source,contact_name,contact_title,${CONTACT_COLS}`;
 
 const UNAUTHORIZED = {
   ok: false as const,
@@ -91,7 +98,27 @@ function toRow(v: unknown): ChatRow | null {
     question: o.question,
     reply: typeof o.reply === "string" ? o.reply : "",
     outcome: text(o.outcome) ?? "answered",
+    ua: text(o.ua),
     created_at: createdAt,
+  };
+}
+
+function toLeadInfo(row: Record<string, unknown>): ChatLeadInfo {
+  const contact: ChatLeadContact = {
+    contactName: text(row.contact_name),
+    contactTitle: text(row.contact_title),
+    emails: (Array.isArray(row.emails) ? row.emails : []).filter(
+      (e): e is string => typeof e === "string" && e.length > 0,
+    ),
+    phone: text(row.phone),
+    website: text(row.website),
+    address: text(row.address),
+  };
+  return {
+    name: text(row.name),
+    category: text(row.category),
+    source: leadSource(text(row.bing_maps_url), text(row.source)),
+    contact,
   };
 }
 
@@ -117,14 +144,35 @@ async function lookupLeads(base: string, key: string, ids: string[]): Promise<Ma
     const rows = (await res.json().catch(() => [])) as Array<Record<string, unknown>>;
     for (const row of Array.isArray(rows) ? rows : []) {
       if (!row || !isUuid(row.id)) continue;
-      out.set(row.id, {
-        name: text(row.name),
-        category: text(row.category),
-        source: leadSource(text(row.bing_maps_url), text(row.source)),
-      });
+      out.set(row.id, toLeadInfo(row));
     }
   } catch (e) {
     console.error("[portal/chats] leads lookup failed:", e);
+  }
+  return out;
+}
+
+/** The saved copies of leads the leads table no longer holds. Quiet when the
+ *  table is missing — that only means saved-hot-leads.sql hasn't been run. */
+async function lookupSavedLeads(base: string, key: string, ids: string[]): Promise<Map<string, ChatLeadInfo>> {
+  const out = new Map<string, ChatLeadInfo>();
+  if (ids.length === 0) return out;
+  try {
+    const res = await restGet(base, key, `saved_hot_leads?select=${SAVED_COLS}&lead_id=in.(${ids.join(",")})`);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      if (!isMissingPortalTable(res.status, detail)) {
+        console.error(`[portal/chats] saved_hot_leads lookup ${res.status}:`, detail.slice(0, 500));
+      }
+      return out;
+    }
+    const rows = (await res.json().catch(() => [])) as Array<Record<string, unknown>>;
+    for (const row of Array.isArray(rows) ? rows : []) {
+      if (!row || !isUuid(row.lead_id)) continue;
+      out.set(row.lead_id, toLeadInfo(row));
+    }
+  } catch (e) {
+    console.error("[portal/chats] saved_hot_leads lookup failed:", e);
   }
   return out;
 }
@@ -171,6 +219,8 @@ export async function GET(req: Request): Promise<Response> {
     const rows = (Array.isArray(raw) ? raw : []).map(toRow).filter((r): r is ChatRow => r !== null);
     const leadIds = [...new Set(rows.map((r) => r.lead_id).filter((id): id is string => id !== null))];
     const leads = await lookupLeads(target.base, target.key, leadIds);
+    const gone = leadIds.filter((id) => !leads.has(id));
+    for (const [id, info] of await lookupSavedLeads(target.base, target.key, gone)) leads.set(id, info);
     return Response.json({
       ok: true,
       mode: "live",

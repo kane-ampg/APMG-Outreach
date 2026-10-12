@@ -1,3 +1,4 @@
+import { sourceLabel } from "@/lib/data/enquiries";
 import { LEAD_SOURCES, type LeadSource } from "@/lib/pipeline/source";
 import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
 
@@ -34,6 +35,18 @@ function knownLeadSource(v: unknown): KnownLeadSource | null {
     : null;
 }
 
+/** How to reach the lead behind a chat, off its leads row (or the saved copy
+ *  once the row is gone). Every field is optional — scraped rows are patchy. */
+export interface ChatLeadContact {
+  /** the named person — LinkedIn leads only */
+  contactName: string | null;
+  contactTitle: string | null;
+  emails: string[];
+  phone: string | null;
+  website: string | null;
+  address: string | null;
+}
+
 /** One question and the reply it got. */
 export interface ChatExchange {
   question: string;
@@ -61,10 +74,31 @@ export interface ChatConversation {
   /** how they reached the portal: a traffic slug (facebook, google, linkedin,
    *  instagram, a referring site…), OUTREACH_SOURCE, or DIRECT_SOURCE */
   channel: string;
+  /** contact details when there's a lead behind the chat; null otherwise */
+  contact: ChatLeadContact | null;
+  /** "Chrome on Windows" — what they chatted from, off the User-Agent */
+  device: string | null;
   startedAt: string;
   lastAt: string;
   /** chronological, oldest first */
   exchanges: ChatExchange[];
+}
+
+/** Where we got a lead, in words. Maps leads say Maps: "Google" alone would
+ *  read as search traffic, which is the Source column's job. */
+export const LEAD_ORIGIN_NAME: Record<KnownLeadSource, string> = {
+  google: "Google Maps",
+  bing: "Bing Maps",
+  linkedin: "LinkedIn",
+};
+
+/** Who a chat was with: the lead's school / business when they came through
+ *  an outreach email, else the door they came through. */
+export function chatDisplayName(chat: Pick<ChatConversation, "business" | "leadId" | "channel">): string {
+  if (chat.business) return chat.business;
+  if (chat.leadId) return "Unattributed lead";
+  if (chat.channel === DIRECT_SOURCE) return "Anonymous visitor";
+  return `${sourceLabel(chat.channel)} visitor`;
 }
 
 /** Conversations the route sends — a review surface, not an export. */
@@ -94,6 +128,7 @@ export interface ChatRow {
   question: string;
   reply: string;
   outcome: string;
+  ua: string | null;
   created_at: string;
 }
 
@@ -102,6 +137,44 @@ export interface ChatLeadInfo {
   name: string | null;
   category: string | null;
   source: LeadSource;
+  contact: ChatLeadContact;
+}
+
+/** Browser and platform off a User-Agent, in words — "Safari on iPhone".
+ *  Order matters: Edge and Opera carry "Chrome", and Chrome carries "Safari".
+ *  Null when neither half is recognisable. */
+export function describeDevice(ua: string | null | undefined): string | null {
+  if (!ua) return null;
+  const browser = /Edg\//.test(ua)
+    ? "Edge"
+    : /OPR\/|Opera/.test(ua)
+      ? "Opera"
+      : /SamsungBrowser/.test(ua)
+        ? "Samsung Internet"
+        : /Firefox\/|FxiOS/.test(ua)
+          ? "Firefox"
+          : /Chrome\/|CriOS/.test(ua)
+            ? "Chrome"
+            : /Safari\//.test(ua)
+              ? "Safari"
+              : null;
+  const platform = /iPhone/.test(ua)
+    ? "iPhone"
+    : /iPad/.test(ua)
+      ? "iPad"
+      : /Android/.test(ua)
+        ? "Android"
+        : /Windows/.test(ua)
+          ? "Windows"
+          : /Mac OS X|Macintosh/.test(ua)
+            ? "Mac"
+            : /CrOS/.test(ua)
+              ? "ChromeOS"
+              : /Linux/.test(ua)
+                ? "Linux"
+                : null;
+  if (browser && platform) return `${browser} on ${platform}`;
+  return browser ?? platform;
 }
 
 /**
@@ -142,6 +215,8 @@ export function groupChatRows(
       campaign: first("campaign"),
       leadSource: knownLeadSource(live?.source),
       channel: chatChannel(first("source"), leadId),
+      contact: live?.contact ?? null,
+      device: describeDevice(first("ua")),
       startedAt: list[0].created_at,
       lastAt: list[list.length - 1].created_at,
       exchanges: list.map((r) => ({
@@ -160,6 +235,21 @@ export function groupChatRows(
 /* ───────────────────────  client-side payload normaliser  ─────────────────────── */
 
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+function toContact(v: unknown): ChatLeadContact | null {
+  if (!v || typeof v !== "object") return null;
+  const o = v as Partial<ChatLeadContact>;
+  return {
+    contactName: str(o.contactName),
+    contactTitle: str(o.contactTitle),
+    emails: (Array.isArray(o.emails) ? o.emails : []).filter(
+      (e): e is string => typeof e === "string" && e.length > 0,
+    ),
+    phone: str(o.phone),
+    website: str(o.website),
+    address: str(o.address),
+  };
+}
 
 function toExchange(v: unknown): ChatExchange | null {
   const o = (v ?? {}) as Partial<ChatExchange>;
@@ -191,6 +281,8 @@ export function toChatConversation(v: unknown): ChatConversation | null {
     campaign: str(o.campaign),
     leadSource: knownLeadSource(o.leadSource),
     channel: str(o.channel) ?? DIRECT_SOURCE,
+    contact: toContact(o.contact),
+    device: str(o.device),
     startedAt: str(o.startedAt) ?? exchanges[0].ts,
     lastAt: str(o.lastAt) ?? exchanges[exchanges.length - 1].ts,
     exchanges,

@@ -22,11 +22,12 @@ import {
 import { cn } from "@/lib/cn";
 import { useCan } from "@/lib/rbac/RbacProvider";
 import { MAX_FIND_LEADS } from "@/lib/pipeline/campaign";
+import { usableWebsite } from "@/lib/pipeline/findEmailsRun";
 import { Button } from "@/components/ui/button";
 import { ErrorInline, LeadsTableView, TableSkeleton, type LeadView } from "./LeadsTable";
 import { LeadDetail } from "./LeadDetail";
 import { LeadsExportMenu } from "./LeadsExport";
-import { FindEmailsResult, type FindEmailsOutcome } from "./FindEmailsResult";
+import { FindEmailsModal, useFindEmailsRun } from "./FindEmailsModal";
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -473,12 +474,11 @@ function SelectableLeads({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<LeadView | null>(null);
-  // Find emails run over the No email section (n8n Email Finder). The outcome
-  // surfaces in a result modal; `findOpen` drives its enter/exit animation and
-  // outlives `findResult` briefly so the exit can play on close.
-  const [finding, setFinding] = useState(false);
-  const [findResult, setFindResult] = useState<FindEmailsOutcome | null>(null);
-  const [findOpen, setFindOpen] = useState(false);
+  // Find emails run over the No email section (n8n Email Finder), shown live
+  // in a progress modal. Hiding the modal doesn't stop the run — the button
+  // shows its progress and reopens it. onChanged refetches once it ends.
+  const find = useFindEmailsRun(onChanged);
+  const finding = find.run?.phase === "running";
   // With email / No email tabs (§11.1 sliding-pill). useId keeps the indicator's
   // layoutId unique if two lead tables ever mount at once.
   const [tab, setTab] = useState<"with" | "no">("with");
@@ -519,10 +519,11 @@ function SelectableLeads({
   // Tabs appear whenever the (unfiltered) list has a no-email lead, so a search
   // term can't collapse the tab row out from under the user mid-typing.
   const split = rows.some((r) => (r.emails?.length ?? 0) === 0);
-  // no-email leads the Email Finder can work on: it scrapes the lead's website.
+  // no-email leads the Email Finder can work on: it scrapes the lead's website,
+  // so a blank or junk one (the route would refuse it) doesn't count.
   // A multi-selection narrows the run to just the checked leads; with nothing
   // checked in this section, the whole section is tried.
-  const findable = noEmail.filter((r) => r.id && r.website);
+  const findable = noEmail.filter((r) => r.id && usableWebsite(r.website));
   const selectedFindable = findable.filter((r) => selected.has(r.id!));
   const findTargets = selectedFindable.length > 0 ? selectedFindable : findable;
 
@@ -556,57 +557,17 @@ function SelectableLeads({
     onSelectMany: setSelected,
   });
 
-  // "Find emails" — POST the no-email leads that have a website (the checked
-  // ones if any, else the whole tab) to the n8n Email Finder (same route
-  // Send Campaigns used to call). Found addresses are persisted onto the lead
-  // rows server-side; onChanged() refetches, so the newly-addressed leads
-  // transfer to the With email tab.
-  async function findEmails() {
-    const batch = findTargets
-      .slice(0, MAX_FIND_LEADS)
-      .map((r) => ({ id: r.id!, website: r.website! }));
-    if (batch.length === 0 || finding) return;
-    setFinding(true);
-    const show = (outcome: FindEmailsOutcome) => {
-      setFindResult(outcome);
-      setFindOpen(true);
-    };
-    try {
-      const res = await fetch("/api/pipeline/campaigns/find-emails", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ leads: batch }),
-      });
-      const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; mode?: "live" | "unconfigured" | "paused" | "noop"; found?: number; error?: string }
-        | null;
-      // Checked BEFORE the generic transport-error guard below: the route
-      // answers an unconfigured/paused webhook with a 503 (ok:false), so
-      // testing res.ok first would swallow this into the red error dialog
-      // before we ever looked at which mode it was. Either config state gets
-      // the blue "not connected" info modal instead, using the route's own
-      // message — it already distinguishes paused from never-configured, so
-      // there's no need to re-derive that here.
-      if (data?.mode === "unconfigured" || data?.mode === "paused") {
-        show({
-          kind: "not-connected",
-          message:
-            data.error ??
-            "The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again.",
-        });
-        return;
-      }
-      if (!res.ok || !data?.ok) {
-        show({ kind: "error", message: data?.error ?? `The email finder responded ${res.status}.` });
-        return;
-      }
-      show({ kind: "success", found: data.found ?? 0, total: batch.length });
-      onChanged();
-    } catch {
-      show({ kind: "error", message: "Network error reaching the email finder." });
-    } finally {
-      setFinding(false);
-    }
+  // "Find emails" — the no-email leads that have a website (the checked ones
+  // if any, else the whole tab) go to the n8n Email Finder, a few at a time,
+  // with the modal tracking each one. Found addresses are persisted onto the
+  // lead rows server-side; the refetch at the end moves those leads to the
+  // With email tab.
+  function findEmails() {
+    void find.start(
+      findTargets
+        .slice(0, MAX_FIND_LEADS)
+        .map((r) => ({ id: r.id!, website: r.website!, name: r.name })),
+    );
   }
 
   async function deleteSelected() {
@@ -784,8 +745,7 @@ function SelectableLeads({
                           variant="outline"
                           size="sm"
                           data-track="leads_find_emails"
-                          disabled={finding}
-                          onClick={() => void findEmails()}
+                          onClick={finding ? find.show : findEmails}
                           className="ml-auto gap-1.5"
                         >
                           {finding ? (
@@ -793,8 +753,8 @@ function SelectableLeads({
                           ) : (
                             <Globe className="h-3.5 w-3.5" aria-hidden />
                           )}
-                          {finding
-                            ? "Finding emails…"
+                          {finding && find.run
+                            ? `Finding emails… ${find.run.processed.toLocaleString("en-US")}/${find.run.total.toLocaleString("en-US")}`
                             : `Find emails (${Math.min(findTargets.length, MAX_FIND_LEADS).toLocaleString("en-US")}${
                                 selectedFindable.length > 0 ? " selected" : ""
                               })`}
@@ -821,11 +781,7 @@ function SelectableLeads({
 
       {viewing && <LeadDetail lead={viewing} onClose={() => setViewing(null)} />}
 
-      <FindEmailsResult
-        open={findOpen}
-        outcome={findResult}
-        onClose={() => setFindOpen(false)}
-      />
+      <FindEmailsModal open={find.open} run={find.run} onHide={find.hide} onStop={find.stop} />
     </div>
   );
 }

@@ -93,6 +93,12 @@ describe("GET /api/portal/chats", () => {
               category: "Schools",
               bing_maps_url: "https://www.google.com/maps/place/x",
               source: null,
+              contact_name: null,
+              contact_title: null,
+              address: "1 Church St, Kew VIC 3101",
+              website: "https://stmarys.vic.edu.au/",
+              phone: "03 9000 0000",
+              emails: ["office@stmarys.vic.edu.au"],
             },
           ],
         }).handler,
@@ -108,9 +114,59 @@ describe("GET /api/portal/chats", () => {
       channel: "outreach",
       leadSource: "google",
       category: "Schools",
+      device: null,
+      contact: {
+        emails: ["office@stmarys.vic.edu.au"],
+        phone: "03 9000 0000",
+        address: "1 Church St, Kew VIC 3101",
+      },
     });
     expect(lead.exchanges.map((e: { question: string }) => e.question)).toEqual(["question 1", "question 2"]);
     expect(lead.exchanges[1].outcome).toBe("limit");
+  });
+});
+
+describe("GET /api/portal/chats — a lead whose folder was deleted", () => {
+  it("names and contacts it from the saved hot-lead copy", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        fakePostgrest({
+          portal_chats: [chatRow({ lead_id: LEAD, business: "Old snapshot" })],
+          leads: [],
+          saved_hot_leads: [
+            {
+              lead_id: LEAD,
+              name: "Kew Childcare",
+              category: "Childcare",
+              bing_maps_url: null,
+              source: "linkedin",
+              contact_name: "Sam Lee",
+              contact_title: "Centre Director",
+              address: null,
+              website: null,
+              phone: "0400 000 000",
+              emails: [],
+            },
+          ],
+        }).handler,
+      ),
+    );
+    const body = await (await GET(req())).json();
+    expect(body.conversations[0]).toMatchObject({
+      business: "Kew Childcare",
+      leadSource: "linkedin",
+      contact: { contactName: "Sam Lee", contactTitle: "Centre Director", phone: "0400 000 000" },
+    });
+  });
+
+  it("falls back to the chat-time name when there's no saved copy either", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(fakePostgrest({ portal_chats: [chatRow({ lead_id: LEAD, business: "Old snapshot" })], leads: [] }).handler),
+    );
+    const body = await (await GET(req())).json();
+    expect(body.conversations[0]).toMatchObject({ business: "Old snapshot", contact: null });
   });
 });
 

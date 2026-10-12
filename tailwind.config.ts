@@ -183,12 +183,19 @@ const config: Config = {
           "60%": { transform: "translateY(0)", opacity: "1" },
           "100%": { transform: "translateY(0)", opacity: "1" },
         },
+        // A sheen crossing a progress fill (Find emails modal) — the element is
+        // a third of its parent's width, so -100% → 300% spans it edge to edge.
+        sweep: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(300%)" },
+        },
       },
       animation: {
         "signal-ping": "signal-ping 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite",
         "bar-rise": "bar-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
         "notify-blink": "notify-blink 1.1s cubic-bezier(0.4, 0, 0.6, 1) infinite",
         arrival: "arrival 0.7s cubic-bezier(0.16, 1, 0.3, 1) both",
+        sweep: "sweep 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite",
       },
     },
   },
