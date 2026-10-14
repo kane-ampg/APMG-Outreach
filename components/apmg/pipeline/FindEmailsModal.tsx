@@ -58,6 +58,8 @@ interface RowState {
   email: string | null;
   /** further addresses found beyond `email` */
   extra: number;
+  /** nothing found, so the lead was deleted from the leads table */
+  removed?: boolean;
 }
 
 /** Live state of one Find emails run. Extends FindPace so the progress bar and
@@ -107,6 +109,7 @@ function applyEvent(run: FindRun, e: FindRunEvent, now: number): FindRun {
     return { ...settled, failed: run.failed + e.ids.length };
   }
   const byId = new Map(e.results.map((r) => [r.id, r]));
+  const removed = new Set(e.removed);
   let found = 0;
   for (const id of e.ids) {
     const r = byId.get(id);
@@ -115,7 +118,7 @@ function applyEvent(run: FindRun, e: FindRunEvent, now: number): FindRun {
       const best = r.best_email && r.emails.includes(r.best_email) ? r.best_email : r.emails[0];
       rows[id] = { status: "found", email: best, extra: r.emails.length - 1 };
     } else {
-      rows[id] = { status: "none", email: null, extra: 0 };
+      rows[id] = { status: "none", email: null, extra: 0, removed: removed.has(id) };
     }
   }
   return { ...settled, scanned: run.scanned + e.ids.length, found: run.found + found };
@@ -676,20 +679,24 @@ function Summary({ run }: { run: FindRun }) {
     end.found > 0
       ? ` ${end.found === 1 ? "It has" : "They have"} moved to the With email tab.`
       : "";
+  const dropped =
+    end.removed > 0
+      ? ` ${plural(end.removed, "lead")} with no email ${end.removed === 1 ? "was" : "were"} removed from your leads.`
+      : "";
   const skipped =
     end.failed > 0 ? ` ${plural(end.failed, "lead")} couldn’t be reached and were skipped.` : "";
 
   let text: string;
   if (end.kind === "stopped") {
-    text = `Stopped after checking ${end.scanned.toLocaleString("en-US")} of ${plural(end.total, "lead")} — ${plural(end.found, "address", "addresses")} found.${moved} The batch that was mid-scan may still save; refresh in a minute to pick it up.`;
+    text = `Stopped after checking ${end.scanned.toLocaleString("en-US")} of ${plural(end.total, "lead")} — ${plural(end.found, "address", "addresses")} found.${moved}${dropped} The batch that was mid-scan may still save; refresh in a minute to pick it up.`;
   } else if (end.kind === "error") {
-    text = `The finder stopped answering after ${end.scanned.toLocaleString("en-US")} of ${plural(end.total, "lead")} (${end.message ?? "unknown error"}). ${plural(end.found, "address", "addresses")} found before that.${moved}`;
+    text = `The finder stopped answering after ${end.scanned.toLocaleString("en-US")} of ${plural(end.total, "lead")} (${end.message ?? "unknown error"}). ${plural(end.found, "address", "addresses")} found before that.${moved}${dropped}`;
   } else if (end.found === 0) {
-    text = `None of the ${plural(end.scanned, "lead")} had a scrapable address on its website.${skipped}`;
+    text = `None of the ${plural(end.scanned, "lead")} had a scrapable address on its website.${dropped}${skipped}`;
   } else {
     text = `Found an email for ${end.found.toLocaleString("en-US")} of ${plural(end.total, "lead")}${
       nothing > 0 ? ` — the other ${nothing.toLocaleString("en-US")} had nothing scrapable` : ""
-    }.${skipped}${moved}`;
+    }.${dropped}${skipped}${moved}`;
   }
   return <p className="text-[12.5px] leading-relaxed text-muted-foreground">{text}</p>;
 }
@@ -773,7 +780,9 @@ const LeadRow = memo(function LeadRow({
     s === "found"
       ? `${row.email ?? ""}${row.extra > 0 ? ` +${row.extra}` : ""}`
       : s === "none"
-        ? "nothing found"
+        ? row.removed
+          ? "nothing found · removed"
+          : "nothing found"
         : s === "failed"
           ? "couldn’t reach"
           : s === "scanning"

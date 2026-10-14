@@ -71,6 +71,7 @@ describe("classifyReply", () => {
     expect(reply).toEqual({
       kind: "ok",
       results: [{ id: ID(1), emails: ["a@x.com"], best_email: "a@x.com" }],
+      removed: [],
     });
   });
 
@@ -106,7 +107,7 @@ describe("runFindEmails", () => {
     });
 
     expect(calls.map((c) => c.length)).toEqual([3, 3, 1]);
-    expect(end).toEqual({ kind: "done", found: 5, scanned: 7, failed: 0, total: 7 });
+    expect(end).toEqual({ kind: "done", found: 5, scanned: 7, failed: 0, removed: 0, total: 7 });
     expect(events.map((e) => e.type)).toEqual([
       "chunk-start",
       "chunk-done",
@@ -126,7 +127,25 @@ describe("runFindEmails", () => {
       onEvent: () => {},
       signal: new AbortController().signal,
     });
-    expect(end).toEqual({ kind: "done", found: 0, scanned: 2, failed: 0, total: 2 });
+    expect(end).toEqual({ kind: "done", found: 0, scanned: 2, failed: 0, removed: 0, total: 2 });
+  });
+
+  it("tallies the no-email leads the route removed, ignoring ids outside the chunk", async () => {
+    const { postChunk } = scripted([
+      { kind: "ok", results: [], removed: [ID(1), ID(2), ID(99)] },
+      { kind: "ok", results: [], removed: [ID(3)] },
+    ]);
+    const events: FindRunEvent[] = [];
+    const end = await runFindEmails({
+      leads: leads(4),
+      chunkSize: 2,
+      postChunk,
+      onEvent: (e) => events.push(e),
+      signal: new AbortController().signal,
+    });
+    expect(end.removed).toBe(3);
+    const done = events.filter((e) => e.type === "chunk-done");
+    expect(done.map((e) => (e.type === "chunk-done" ? e.removed : null))).toEqual([[ID(1), ID(2)], [ID(3)]]);
   });
 
   it("ignores results for leads that weren't in the chunk", async () => {
@@ -186,7 +205,7 @@ describe("runFindEmails", () => {
       onEvent: (e) => events.push(e),
       signal: new AbortController().signal,
     });
-    expect(end).toEqual({ kind: "done", found: 4, scanned: 4, failed: 2, total: 6, message: "timeout" });
+    expect(end).toEqual({ kind: "done", found: 4, scanned: 4, failed: 2, removed: 0, total: 6, message: "timeout" });
     expect(events.filter((e) => e.type === "chunk-failed")).toHaveLength(1);
   });
 
@@ -240,7 +259,7 @@ describe("runFindEmails", () => {
       signal: ctrl.signal,
     });
     expect(calls).toHaveLength(1);
-    expect(end).toEqual({ kind: "stopped", found: 0, scanned: 0, failed: 0, total: 6 });
+    expect(end).toEqual({ kind: "stopped", found: 0, scanned: 0, failed: 0, removed: 0, total: 6 });
     expect(events.map((e) => e.type)).toEqual(["chunk-start"]);
   });
 });

@@ -17,6 +17,13 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // CSV import fills) and returned to the client, which mirrors them into the
 // audience table — so the lead becomes sendable without a re-fetch.
 //
+// Leads the finder actually scanned (their chunk answered with a results
+// array) but came back with no address are DELETED — there is nothing to send
+// them, so they shouldn't sit in the leads table. Leads in a chunk that failed
+// or never answered are left alone; they weren't scanned. The delete also
+// filters on an empty `emails` column, so a lead that holds an address is never
+// removed whatever the finder said.
+//
 // Webhook payload:  { leads: [{ id, website }] }  (≤ CHUNK_SIZE per call)
 // Webhook response: { ok, results: [{ id, website, emails, best_email }] }
 //
@@ -52,6 +59,8 @@ interface FindResponse {
   found?: number;
   /** leads whose addresses were persisted onto their Supabase row */
   saved?: number;
+  /** ids of scanned leads that had no address and were deleted */
+  removed?: string[];
   error?: string;
 }
 
@@ -124,6 +133,38 @@ async function persistFoundEmails(results: FindResult[]): Promise<number> {
   return saved;
 }
 
+/** Delete scanned leads that came back with no address. The `emails=eq.{}`
+ *  filter is the safety net: a row that holds any address (CSV import, an
+ *  earlier find, a manual edit) never matches. Returns the ids actually
+ *  deleted; a failure is logged and the leads simply stay. */
+async function removeEmptyLeads(ids: string[]): Promise<string[]> {
+  const target = supabaseTarget();
+  if (target.state !== "ok" || ids.length === 0) return [];
+  try {
+    const res = await fetch(
+      `${target.base}/rest/v1/leads?id=in.(${ids.join(",")})&emails=eq.%7B%7D&select=id`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: target.key,
+          Authorization: `Bearer ${target.key}`,
+          Prefer: "return=representation",
+        },
+      },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[pipeline/find-emails] Supabase DELETE ${res.status}:`, detail.slice(0, 500));
+      return [];
+    }
+    const rows = (await res.json().catch(() => [])) as Array<{ id?: unknown }>;
+    return Array.isArray(rows) ? rows.map((r) => r.id).filter((id): id is string => typeof id === "string") : [];
+  } catch (e) {
+    console.error("[pipeline/find-emails] removing no-email leads failed:", e);
+    return [];
+  }
+}
+
 export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, mode: "noop", error: "Forbidden." }, 403);
@@ -180,6 +221,7 @@ export async function POST(req: Request): Promise<Response> {
   // one slow/broken site cluster can't sink the whole run; `reached`/`answered`
   // distinguish "n8n unreachable" from "n8n replied but not with results".
   const results: FindResult[] = [];
+  const scannedIds: string[] = []; // leads in chunks that answered with results
   let reached = 0; // chunks that got any HTTP 200 back
   let answered = 0; // chunks whose reply carried a results array
   for (let at = 0; at < leads.length; at += CHUNK_SIZE) {
@@ -215,6 +257,7 @@ export async function POST(req: Request): Promise<Response> {
       continue;
     }
     answered++;
+    for (const l of chunk) scannedIds.push(l.id);
     for (const raw of data.results) {
       const clean = sanitizeResult(raw, seen);
       if (clean) results.push(clean);
@@ -237,7 +280,11 @@ export async function POST(req: Request): Promise<Response> {
 
   const found = results.filter((r) => r.emails.length > 0).length;
   const saved = await persistFoundEmails(results);
-  return json({ ok: true, mode: "live", results, found, saved });
+  // n8n may leave a lead out of its results entirely (e.g. its own SSRF guard
+  // dropped the site) — that's still a scan with nothing found.
+  const withEmail = new Set(results.filter((r) => r.emails.length > 0).map((r) => r.id));
+  const removed = await removeEmptyLeads(scannedIds.filter((id) => !withEmail.has(id)));
+  return json({ ok: true, mode: "live", results, found, saved, removed });
 }
 
 function json(result: FindResponse, status = 200): Response {

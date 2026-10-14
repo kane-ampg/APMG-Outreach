@@ -738,7 +738,7 @@ function SelectableLeads({
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <span className="font-mono text-[10px] text-muted-foreground">
                         left out of campaigns until an address is found — found leads move to
-                        the With email tab
+                        the With email tab; leads still without one after a scan are removed
                       </span>
                       {findable.length > 0 && (
                         <Button

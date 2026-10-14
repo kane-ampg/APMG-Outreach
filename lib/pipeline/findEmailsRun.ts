@@ -30,7 +30,8 @@ export interface FoundResult {
 
 /** What one find-emails request came back as. */
 export type ChunkReply =
-  | { kind: "ok"; results: FoundResult[] }
+  /** removed: ids of scanned leads that had no address and were deleted */
+  | { kind: "ok"; results: FoundResult[]; removed?: string[] }
   | { kind: "not-connected"; message: string }
   /** retryable: a 5xx / network blip that the next chunk may not hit. A 4xx
    *  (session expired, forbidden, bad input) won't fix itself mid-run. */
@@ -40,7 +41,7 @@ export type FindRunEvent =
   | { type: "chunk-start"; ids: string[] }
   /** results holds only leads that came back with something to say; any
    *  requested id missing from it was scanned with nothing found. */
-  | { type: "chunk-done"; ids: string[]; results: FoundResult[] }
+  | { type: "chunk-done"; ids: string[]; results: FoundResult[]; removed: string[] }
   | { type: "chunk-failed"; ids: string[]; message: string };
 
 export interface FindRunEnd {
@@ -53,6 +54,8 @@ export interface FindRunEnd {
   scanned: number;
   /** leads in chunks that errored */
   failed: number;
+  /** scanned leads that had no address and were deleted from the leads table */
+  removed: number;
   total: number;
   /** why the run ended early, or the last skipped chunk's error on a done run */
   message?: string;
@@ -167,7 +170,10 @@ export function classifyReply(status: number, data: unknown): ChunkReply {
       const best = typeof r.best_email === "string" ? r.best_email : null;
       results.push({ id: r.id, emails, best_email: best });
     }
-    return { kind: "ok", results };
+    const removed = Array.isArray(d.removed)
+      ? d.removed.filter((id): id is string => typeof id === "string")
+      : [];
+    return { kind: "ok", results, removed };
   }
 
   return {
@@ -206,9 +212,10 @@ export async function runFindEmails({
   let found = 0;
   let scanned = 0;
   let failed = 0;
+  let removed = 0;
   let streak = 0;
   let lastError: string | undefined;
-  const tally = () => ({ found, scanned, failed, total });
+  const tally = () => ({ found, scanned, failed, removed, total });
 
   for (const chunk of chunkLeads(leads, chunkSize)) {
     if (signal.aborted) return { kind: "stopped", ...tally() };
@@ -243,7 +250,9 @@ export async function runFindEmails({
     const results = reply.results.filter((r) => asked.has(r.id));
     scanned += ids.length;
     found += results.filter((r) => r.emails.length > 0).length;
-    onEvent({ type: "chunk-done", ids, results });
+    const gone = (reply.removed ?? []).filter((id) => asked.has(id));
+    removed += gone.length;
+    onEvent({ type: "chunk-done", ids, results, removed: gone });
   }
 
   return lastError ? { kind: "done", ...tally(), message: lastError } : { kind: "done", ...tally() };
